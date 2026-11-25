@@ -21,12 +21,14 @@ bool has(const std::string& s, const char* frag) { return s.find(frag) != std::s
 // The V10's direct-link frame outside with a fix, field for field as the OC
 // builds it (TR_BLE_To_APP::buildTelemetryJSON, Tier 1 to Tier 3): the frame
 // captured over BLE on 2026-11-22 (board 2 on 8b2e11f5, 435 B with no fix yet)
-// with the position, the accuracy and a live attitude that a fix adds.
+// with the position, the accuracy and a live attitude that a fix adds, and
+// (#1755) the AUTO mounting's pad confirmation a later image adds beside "h".
 void packV10WithFix(TelemetryJsonPacker& pk)
 {
     pk.addString("st", "READY");
     pk.addInt("fs", 16);
     pk.addInt("h", 1091445);
+    pk.addUint("mo", 1);
     pk.addDouble("lat", 34.12345, 5);
     pk.addDouble("lon", -117.12345, 5);
     pk.addInt("nsat", 15);
@@ -73,7 +75,7 @@ void packV10WithFix(TelemetryJsonPacker& pk)
 
 }  // namespace
 
-// The V10's direct frame with a fix: ~483 B of a 509 B window (MTU 512), all of
+// The V10's direct frame with a fix: ~490 B of a 509 B window (MTU 512), all of
 // it in (at 24 B a number its last one had ~5 B to spare).
 TEST(TelemetryJsonPacker, V10FrameWithFixFitsMtu512Whole)
 {
@@ -86,6 +88,7 @@ TEST(TelemetryJsonPacker, V10FrameWithFixFitsMtu512Whole)
     EXPECT_FALSE(pk.dropped());
     EXPECT_FALSE(has(s, "\"tr\""));
     EXPECT_LE(s.size(), 509u);
+    EXPECT_TRUE(has(s, "\"h\":1091445,\"mo\":1,"));
     EXPECT_TRUE(has(s, ",\"hx\":-0.5,\"hy\":-1.9,\"hz\":10.3,\"af\":\"\"}"));
     EXPECT_EQ(s.front(), '{');
     EXPECT_EQ(s.back(), '}');

@@ -72,6 +72,12 @@ public:
         // emitted), 1 fully aiding, 2 not fully aiding (the vertical only
         // until it knows its heading, or off), 3 refused or dropped. Advisory.
         uint8_t gnss_imu = 0;
+        // #1755: on AUTO mounting, whether a still pad window confirmed the
+        // frame lately, as the flight computer reports it (FC_STATUS_MSG,
+        // FCS_MOUNT_*): a SensorHealthState, 0 = a manual code, off the pad
+        // or no recent report (not emitted), 1 confirmed in the last 30 s,
+        // 2 not (the apps hold "Ready to fly" to amber).
+        uint8_t mount = 0;
         // #1553: the pyro fault-current trip. Trips this boot ("pft"; 0 = none,
         // not emitted), the last trip's peak pack current in amps ("pfa"; NaN
         // = no trip; 40.9 = the INA230 clipped), and the most channels the

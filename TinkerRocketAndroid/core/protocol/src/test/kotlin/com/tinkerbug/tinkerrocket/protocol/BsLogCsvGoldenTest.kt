@@ -103,10 +103,13 @@ class BsLogCsvGoldenTest {
             assertEquals(side["slow_frames"]!!.jsonPrimitive.int, rows.count { it.frame == "slow" }, rel)
             val firstSlow = rows.indexOfFirst { it.frame == "slow" }
             assertTrue(firstSlow > 0, "$rel: a fast frame must lead the slow one")
-            assertTrue(rows.take(firstSlow).all { it.gnssImu == 0 }, "$rel: nothing before the first slow frame")
+            assertTrue(rows.take(firstSlow).all { it.gnssImu == 0 && it.mount == 0 }, "$rel: nothing before the first slow frame")
             // Set by the slow frame and forward-filled onto the fast rows after it.
             val want = side["gnss_imu"]!!.jsonPrimitive.int
             assertTrue(rows.drop(firstSlow).all { it.gnssImu == want }, "$rel: gnss_imu $want from the slow frame on")
+            // #1755: bits 2-3 of the same byte, each read apart from the other.
+            val wantMount = side["mount"]!!.jsonPrimitive.int
+            assertTrue(rows.drop(firstSlow).all { it.mount == wantMount }, "$rel: mount $wantMount from the slow frame on")
         }
     }
 
@@ -129,7 +132,7 @@ class BsLogCsvGoldenTest {
             assertEquals(10, rows.size, "$rel: only the ten fast frames survive")
             assertTrue(rows.all { it.frame == "fast" }, rel)
             // Nothing from a skipped frame leaks into the forward-fill.
-            assertTrue(rows.all { it.camA == 0.0 && it.maxAlt == 0.0 && it.gnssImu == 0 }, rel)
+            assertTrue(rows.all { it.camA == 0.0 && it.maxAlt == 0.0 && it.gnssImu == 0 && it.mount == 0 }, rel)
             assertEquals(1, events.size, rel)
             // The CSV still renders, header plus 10 rows plus the event.
             assertEquals(12, BsLogCsvGenerator().writeCsv(bin).trim().split("\n").size, rel)

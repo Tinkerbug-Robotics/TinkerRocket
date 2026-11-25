@@ -438,6 +438,7 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_PROTO_VERSION_V5` | `0x05` (5) | still read: see v6 above |
 | `LORA_SIM_BIT` | `0x40` (64) |  |
 | `LORA_SLOT_CYCLE` | `0x06` (6) |  |
+| `LORA_SLOW_MOUNT_SHIFT` | `0x02` (2) | LoRaSlowData.status bits 2-3 (#1755) |
 | `LORA_SLOW_SLOT` | `0x05` (5) | 0-based index within the cycle |
 | `LORA_STATE_SHIFT` | `0x04` (4) | bits 4-6: rocket state |
 | `LORA_TX_SLOT_COUNT` | `0x03` (3) | slot = (rid - 1) % 3 unless that slot is taken |

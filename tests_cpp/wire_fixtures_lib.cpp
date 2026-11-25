@@ -1425,6 +1425,7 @@ std::vector<uint8_t> bsLogGoldenStream(bool v5) {
     si.imu_orient_code = 0;
     si.imu_orient_mode = 1;
     si.gnss_imu = 1;                // v6: the board's IMU aiding (SH_OK)
+    si.mount = 2;                   // #1755: AUTO, not confirmed lately (SH_DEGRADED): status 0x09
 
     uint32_t frames = 0;
     // seq 3 is skipped on purpose so a reader has a gap to compute.
@@ -1482,16 +1483,17 @@ void buildBsLogGolden(Builder& b) {
           Json().u("rx_records", 12).u("event_records", 1)
               .u("fast_frames", 10).u("slow_frames", 2)
               .u("skipped_seq", 3).u("lora_proto", LORA_PROTO_VERSION)
-              .u("slow_frame_len", SIZE_OF_LORA_SLOW).u("gnss_imu", 1)
+              .u("slow_frame_len", SIZE_OF_LORA_SLOW).u("gnss_imu", 1).u("mount", 2)
               .done(),
           "base-station binary log built with the real packers; the CSV golden "
           "generated from it lives in tests_cpp/fixtures/csv_golden/ (app "
-          "output, not emitter output)");
+          "output, not emitter output); slow-frame status 0x09: GNSS IMU 1 "
+          "(bits 0-1), mounting 2 (bits 2-3, #1755)");
     b.add("csv", "bs_tiny_v5.bin", bsLogGoldenStream(true),
           Json().u("rx_records", 12).u("event_records", 1)
               .u("fast_frames", 10).u("slow_frames", 2)
               .u("skipped_seq", 3).u("lora_proto", LORA_PROTO_VERSION_V5)
-              .u("slow_frame_len", SIZE_OF_LORA_SLOW_V5).u("gnss_imu", 0)
+              .u("slow_frame_len", SIZE_OF_LORA_SLOW_V5).u("gnss_imu", 0).u("mount", 0)
               .done(),
           "bs_tiny.bin as a v5 rocket sent it (version 5, 22-byte slow frames "
           "with no status byte); a v6 reader must render the same CSV, "

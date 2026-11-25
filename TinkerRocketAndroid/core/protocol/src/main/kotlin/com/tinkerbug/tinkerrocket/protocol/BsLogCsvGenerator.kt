@@ -27,10 +27,11 @@ import kotlin.math.withSign
  *
  * TWO LORA PROTOCOL VERSIONS are read, as the v6 base station reads them
  * (`loraTelemetryLenOk`): v6, whose SLOW frame is 23 bytes (v5's 22 plus a
- * `status` byte at offset 22: bits 0-1 the gnss-sdr-dev board's IMU aiding),
- * and v5, whose SLOW frame is 22 bytes with no status (read as 0).  The FAST
- * frame is 55 bytes in both.  The status byte reaches [Row.gnssImu] only; the
- * CSV layout is the same for both versions.
+ * `status` byte at offset 22: bits 0-1 the gnss-sdr-dev board's IMU aiding,
+ * bits 2-3 an AUTO mounting's pad confirmation, #1755), and v5, whose SLOW
+ * frame is 22 bytes with no status (read as 0).  The FAST frame is 55 bytes in
+ * both.  The status byte reaches [Row.gnssImu] and [Row.mount] only; the CSV
+ * layout is the same for both versions.
  *
  * Ports of [ecefToGeodetic] and [eulerFromQuat] are deliberately literal
  * transcriptions of `TR_Coordinates::ecefToGeodetic` and
@@ -65,6 +66,8 @@ public class BsLogCsvGenerator {
         internal const val LORA_FRAME_FAST = 0x0
         internal const val LORA_FRAME_SLOW = 0x1
         internal const val LORA_SLOW_GNSS_IMU_MASK = 0x03   // status bits 0-1
+        internal const val LORA_SLOW_MOUNT_SHIFT = 2        // status bits 2-3 (#1755)
+        internal const val LORA_SLOW_MOUNT_MASK = 0x0C
 
         internal const val LORA_HDR_LEN = 7
         internal const val BS_RX_HDR_LEN = 12
@@ -180,6 +183,8 @@ public class BsLogCsvGenerator {
         var servoA = 0.0
         /** v6 status bits 0-1, a SensorHealthState (0 from a v5 rocket).  No CSV column. */
         var gnssImu = 0
+        /** #1755: status bits 2-3, an AUTO mounting's pad confirmation (0 from a v5 rocket or one from before it).  No CSV column. */
+        var mount = 0
 
         var gap = -1
 
@@ -196,7 +201,7 @@ public class BsLogCsvGenerator {
             r.pressureAlt = pressureAlt; r.altRate = altRate; r.speed = speed
             r.maxAlt = maxAlt; r.maxSpeed = maxSpeed
             r.voltage = voltage; r.current = current; r.soc = soc
-            r.camA = camA; r.servoA = servoA; r.gnssImu = gnssImu
+            r.camA = camA; r.servoA = servoA; r.gnssImu = gnssImu; r.mount = mount
             return r
         }
     }
@@ -273,7 +278,7 @@ public class BsLogCsvGenerator {
     /**
      * Writes ONLY what the slow frame carries.  [f] is a v6 frame (23 bytes) or
      * a v5 one (22, no status byte): the status then reads as 0, no board
-     * reported, as the firmware's unpackLoRaSlowV5Bytes does.
+     * and no mounting state reported, as the firmware's unpackLoRaSlowV5Bytes does.
      */
     private fun unpackSlow(f: ByteArray, r: Row) {
         val o = LORA_HDR_LEN
@@ -285,6 +290,7 @@ public class BsLogCsvGenerator {
         r.camA = u16(f, o + 11) / 1000.0
         r.servoA = u16(f, o + 13) / 1000.0
         r.gnssImu = if (f.size == SIZE_OF_LORA_SLOW) u8(f, o + 15) and LORA_SLOW_GNSS_IMU_MASK else 0
+        r.mount = if (f.size == SIZE_OF_LORA_SLOW) (u8(f, o + 15) and LORA_SLOW_MOUNT_MASK) shr LORA_SLOW_MOUNT_SHIFT else 0
     }
 
     // ---- geodesy / attitude ----------------------------------------------

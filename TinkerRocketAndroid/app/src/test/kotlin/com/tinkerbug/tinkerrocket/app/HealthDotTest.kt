@@ -10,25 +10,28 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
 import com.tinkerbug.tinkerrocket.protocol.gnssImuHealthDetail
+import com.tinkerbug.tinkerrocket.protocol.mountHealthDetail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * The GNSS board's IMU dot ("gi") is the one health dot with a plain-language
- * line, and TalkBack reads it as the dot's state. The other dots must stay as
- * they were: name only, no state description.
+ * The GNSS board's IMU dot ("gi") and the Mounting dot ("mo", #1755) are the
+ * health dots with a plain-language line, and TalkBack reads it as the dot's
+ * state. The other dots must stay as they were: name only, no state
+ * description.
  */
 @RunWith(AndroidJUnit4::class)
 class HealthDotTest {
 
     @get:Rule val compose = createComposeRule()
 
-    private fun telemetry(gi: Int?): TelemetryData {
+    private fun telemetry(gi: Int?, mo: Int? = null): TelemetryData {
         // Baro, IMU, EKF, Mag, GNSS, battery and storage OK.
         val h = 1 or (1 shl 2) or (1 shl 4) or (1 shl 6) or (1 shl 8) or (1 shl 10) or (1 shl 20)
-        val json = if (gi == null) """{"h":$h}""" else """{"h":$h,"gi":$gi}"""
-        return requireNotNull(TelemetryData.decode(json))
+        val giPart = if (gi == null) "" else ""","gi":$gi"""
+        val moPart = if (mo == null) "" else ""","mo":$mo"""
+        return requireNotNull(TelemetryData.decode("""{"h":$h$giPart$moPart}"""))
     }
 
     @Test
@@ -53,5 +56,39 @@ class HealthDotTest {
         }
         compose.onNodeWithText("Storage").assertIsDisplayed()
         compose.onNodeWithText("GNSS IMU").assertDoesNotExist()
+    }
+
+    @Test
+    fun mounting_dot_reads_out_its_line_beside_the_gnss_imu() {
+        // Nine dots stacked run past the test screen's height: draw the three
+        // this test reads, in the card's order.
+        val rows = telemetry(gi = 1, mo = 2).sensorHealthRows
+            .filter { it.name in setOf("GNSS IMU", "Mounting", "Storage") }
+        compose.setContent {
+            Column { rows.forEach { HealthDot(it.name, it.state, it.detail) } }
+        }
+        val detail = requireNotNull(mountHealthDetail(TelemetryData.SensorHealth.DEGRADED))
+        compose.onNodeWithText("Mounting")
+            .assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, detail))
+        compose.onNodeWithText("GNSS IMU")
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.StateDescription,
+                    requireNotNull(gnssImuHealthDetail(TelemetryData.SensorHealth.OK)),
+                ),
+            )
+        compose.onNodeWithText("Storage")
+            .assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription))
+    }
+
+    @Test
+    fun no_mounting_dot_without_the_key() {
+        val rows = telemetry(gi = null, mo = null).sensorHealthRows
+        compose.setContent {
+            Column { rows.forEach { HealthDot(it.name, it.state, it.detail) } }
+        }
+        compose.onNodeWithText("Storage").assertIsDisplayed()
+        compose.onNodeWithText("Mounting").assertDoesNotExist()
     }
 }

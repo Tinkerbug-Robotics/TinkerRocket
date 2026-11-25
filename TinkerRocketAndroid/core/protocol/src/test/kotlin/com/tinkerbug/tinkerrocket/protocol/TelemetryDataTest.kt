@@ -512,6 +512,109 @@ class TelemetryDataTest {
         }
     }
 
+    // ── AUTO mounting confirmed on the pad ("mo", #1755) ─────────────────
+
+    /**
+     * "h" plus optional "gi" and "mo"; null leaves a key out, as older firmware,
+     * a manual code, a rocket off the pad and an older base station do.
+     */
+    private fun decodeMount(health: Int, mo: String?, gi: String? = null): TelemetryData {
+        val giPart = if (gi == null) "" else ""","gi":$gi"""
+        val moPart = if (mo == null) "" else ""","mo":$mo"""
+        return decodeOk("""{"h":$health$giPart$moPart}""")
+    }
+
+    private val mountOkDetail =
+        "The board found which way its nose points from a still moment on the pad in the last 30 s."
+    private val mountDegradedDetail =
+        "The AUTO mounting has not been confirmed by a still moment on the pad in the last 30 s:" +
+            " let the rocket sit still on the rail, or set a manual mounting code."
+
+    @Test
+    fun `mount key decodes and absent or unknown is NA`() {
+        // A plain integer with the SensorHealth values, not a bitfield.
+        val absent = decodeMount(1, null)
+        assertNull(absent.mountState)
+        assertEquals(SH.NA, absent.mountHealth)
+        assertEquals(SH.NA, decodeMount(1, "0").mountHealth)
+        assertEquals(SH.OK, decodeMount(1, "1").mountHealth)
+        assertEquals(SH.DEGRADED, decodeMount(1, "2").mountHealth)
+        assertEquals(2, decodeMount(1, "2").mountState)
+        // Out of range reads as NA (hidden), not as a state it isn't.
+        assertEquals(SH.NA, decodeMount(1, "4").mountHealth)
+        assertEquals(SH.NA, decodeMount(1, "-1").mountHealth)
+        // #571 tolerance: a float or string on the wire still decodes, and
+        // never costs the rest of the frame.
+        assertEquals(SH.DEGRADED, decodeMount(1, "2.0").mountHealth)
+        val str = decodeMount(1, "\"1\"")
+        assertEquals(SH.OK, str.mountHealth)
+        assertEquals(SH.OK, str.baroHealth)
+        // "mo" lives outside "h" and apart from "gi": neither leaks into the other.
+        val both = decodeMount(0, "1", gi = "3")
+        assertEquals(0, both.sensorHealth)
+        assertEquals(SH.BAD, both.gnssImuHealth)
+        assertEquals(SH.OK, both.mountHealth)
+        assertFalse(both.hasSensorHealth)
+        assertEquals(SH.NA, decodeMount(1, null, gi = "2").mountHealth)
+        assertEquals(SH.NA, decodeMount(1, "2").gnssImuHealth)
+    }
+
+    @Test
+    fun `mount row appears only when present and not 0`() {
+        val h = pack(baro = SH.OK, imu = SH.OK, ekf = SH.OK, mag = SH.OK, gnss = SH.OK, batt = SH.OK, storage = SH.OK)
+        for (mo in listOf(null, "0")) {
+            val t = decodeMount(h, mo)
+            assertFalse(t.sensorHealthRows.any { it.name == "Mounting" }, "mo ${mo ?: "absent"}")
+            assertEquals(7, t.sensorHealthRows.size)              // 6 core + Storage
+        }
+        for ((mo, state, detail) in listOf(
+            Triple("1", SH.OK, mountOkDetail),
+            Triple("2", SH.DEGRADED, mountDegradedDetail),
+        )) {
+            val t = decodeMount(h, mo)
+            // After the GNSS board's IMU, before Storage.
+            assertEquals(
+                listOf("Baro", "IMU", "EKF", "GNSS", "Battery", "Mag", "Mounting", "Storage"),
+                t.sensorHealthRows.map { it.name },
+            )
+            val row = t.sensorHealthRows.single { it.name == "Mounting" }
+            assertEquals(state, row.state)
+            assertEquals(detail, row.detail)
+            assertEquals(
+                listOf("Baro", "IMU", "EKF", "GNSS", "Battery", "Mag", "GNSS IMU", "Mounting", "Storage"),
+                decodeMount(h, mo, gi = "1").sensorHealthRows.map { it.name },
+            )
+        }
+        assertEquals(mountOkDetail, mountHealthDetail(SH.OK))
+        assertEquals(mountDegradedDetail, mountHealthDetail(SH.DEGRADED))
+        assertNull(mountHealthDetail(SH.NA))
+    }
+
+    @Test
+    fun `mount degraded gates green to amber and never red`() {
+        val allOk = pack(baro = SH.OK, imu = SH.OK, ekf = SH.OK, mag = SH.OK, gnss = SH.OK, batt = SH.OK, storage = SH.OK)
+        assertEquals(TelemetryData.FlightReadiness.READY, decodeMount(allOk, null).flightReadiness)
+        assertEquals(TelemetryData.FlightReadiness.READY, decodeMount(allOk, "0").flightReadiness)
+        assertEquals(TelemetryData.FlightReadiness.READY, decodeMount(allOk, "1").flightReadiness)
+        assertEquals(TelemetryData.FlightReadiness.CAUTION, decodeMount(allOk, "2").flightReadiness)
+        // An unknown value reads NA: ignored, not amber.
+        assertEquals(TelemetryData.FlightReadiness.READY, decodeMount(allOk, "4").flightReadiness)
+        // Never red: even 3, a state the flight computer does not send, stays amber.
+        assertEquals(TelemetryData.FlightReadiness.CAUTION, decodeMount(allOk, "3").flightReadiness)
+        // It does not lift a verdict either: red stays red, amber stays amber,
+        // and no scorecard stays unknown.
+        val red = pack(baro = SH.OK, imu = SH.BAD, ekf = SH.OK, mag = SH.OK, gnss = SH.OK, batt = SH.OK)
+        val amber = pack(baro = SH.OK, imu = SH.OK, ekf = SH.DEGRADED, mag = SH.OK, gnss = SH.OK, batt = SH.OK)
+        for (mo in listOf(null, "0", "1", "2", "3")) {
+            val tag = "mo ${mo ?: "absent"}"
+            assertEquals(TelemetryData.FlightReadiness.NOT_READY, decodeMount(red, mo).flightReadiness, tag)
+            assertEquals(TelemetryData.FlightReadiness.CAUTION, decodeMount(amber, mo).flightReadiness, tag)
+            assertEquals(TelemetryData.FlightReadiness.UNKNOWN, decodeMount(0, mo).flightReadiness, tag)
+        }
+        // The GNSS board's IMU stays advisory beside it.
+        assertEquals(TelemetryData.FlightReadiness.READY, decodeMount(allOk, "1", gi = "3").flightReadiness)
+    }
+
     @Test
     fun `health rows include only configured pyros`() {
         val none = decodeHealth(pack(baro = SH.OK, imu = SH.OK))

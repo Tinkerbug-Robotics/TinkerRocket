@@ -224,6 +224,49 @@ TEST(FcStatusGnssImu, AnOlderImageOrNoFrameSaysNoBoard) {
     EXPECT_EQ(fcStatusGnssImu(nullptr, sizeof(FcStatusData)), SH_NA);
 }
 
+// #1755: an AUTO mounting's pad confirmation (FCS_MOUNT_*, a SensorHealthState
+// in bits 5-6), the apps' "Mounting" dot.
+TEST(FcStatusMount, BitsSitAboveTheOthers) {
+    EXPECT_EQ(FCS_MOUNT_SHIFT, 5);
+    EXPECT_EQ(FCS_MOUNT_MASK, 0x60);
+    EXPECT_EQ(FCS_MOUNT_MASK & (FCS_CAMERA_ENGAGED | FCS_RAW_VOTES_WITHHELD | FCS_SCAP_SENSE
+                                | FCS_GNSS_IMU_MASK), 0);
+}
+
+TEST(FcStatusMount, SetLeavesTheOtherFlagsAndTheGnssImu) {
+    // every other bit set, bit 7 (spare) included
+    const uint8_t others = (uint8_t)(FCS_CAMERA_ENGAGED | FCS_RAW_VOTES_WITHHELD | FCS_SCAP_SENSE
+                                     | FCS_GNSS_IMU_MASK | 0x80);
+    for (uint8_t gi : {SH_NA, SH_OK, SH_DEGRADED, SH_BAD})
+    {
+        for (uint8_t st : {SH_NA, SH_OK, SH_DEGRADED, SH_BAD})
+        {
+            const uint8_t base = fcStatusWithGnssImu(others, gi);
+            const uint8_t f = fcStatusWithMount(base, st);
+            EXPECT_EQ(f & (uint8_t)~FCS_MOUNT_MASK, base);
+            const auto b = fcStatusBytes(f, 2500);
+            EXPECT_EQ(fcStatusMount(b.data(), b.size()), st);
+            EXPECT_EQ(fcStatusMount(b.data(), FC_STATUS_V1_SIZE), st);   // in v1's flags too
+            EXPECT_EQ(fcStatusGnssImu(b.data(), b.size()), gi);         // gi bits untouched
+            // and the other way round: setting gi leaves the mounting
+            EXPECT_EQ(fcStatusMount(fcStatusBytes(fcStatusWithGnssImu(f, (uint8_t)(3 - gi)), 0).data(),
+                                    sizeof(FcStatusData)), st);
+        }
+    }
+    // a new state replaces the old, and only two bits are taken
+    EXPECT_EQ(fcStatusWithMount(fcStatusWithMount(0, SH_BAD), SH_OK), (uint8_t)(SH_OK << FCS_MOUNT_SHIFT));
+    EXPECT_EQ(fcStatusWithMount(0, 0xFF), FCS_MOUNT_MASK);
+}
+
+TEST(FcStatusMount, AnOlderImageOrNoFrameSaysNotApplicable) {
+    // An FC image from before this leaves the bits 0: SH_NA, not sent to the
+    // apps -- never a false OK or a false amber.
+    const auto old = fcStatusBytes((uint8_t)(FCS_CAMERA_ENGAGED | FCS_SCAP_SENSE | (SH_BAD << FCS_GNSS_IMU_SHIFT)), 2500);
+    EXPECT_EQ(fcStatusMount(old.data(), old.size()), SH_NA);
+    EXPECT_EQ(fcStatusMount(old.data(), FC_STATUS_V1_SIZE - 1), SH_NA);
+    EXPECT_EQ(fcStatusMount(nullptr, sizeof(FcStatusData)), SH_NA);
+}
+
 TEST(FcStatusScap1409, FieldRoundTripsThroughTheReport) {
     for (float v : {0.05f, 1.0f, 2.2f, 2.5f, 2.7f})
     {
@@ -2987,6 +3030,16 @@ TEST(LoraTelemetryLenOk, AV5RocketsLongNameBeaconIsNotTelemetry) {
 TEST(LoraSlowStatus, TheGnssImuBitsOnly) {
     EXPECT_EQ(LORA_SLOW_GNSS_IMU_MASK, 0x03u);
     EXPECT_EQ(SIZE_OF_LORA_SLOW_V5, offsetof(LoRaSlowData, status));
+}
+
+// #1755: bits 2-3 the mounting's pad confirmation, beside the GNSS IMU's and
+// without a version change (the frame size is v6's).
+TEST(LoraSlowStatus, TheMountBitsSitAboveTheGnssImu) {
+    EXPECT_EQ(LORA_SLOW_MOUNT_SHIFT, 2u);
+    EXPECT_EQ(LORA_SLOW_MOUNT_MASK, 0x0Cu);
+    EXPECT_EQ(LORA_SLOW_MOUNT_MASK & LORA_SLOW_GNSS_IMU_MASK, 0u);
+    EXPECT_EQ(LORA_PROTO_VERSION, 6u);
+    EXPECT_EQ(SIZE_OF_LORA_SLOW, 23u);
 }
 
 // ============================================================================

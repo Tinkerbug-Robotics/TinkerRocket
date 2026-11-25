@@ -1698,6 +1698,32 @@ static inline uint8_t fcStatusGnssImu(const uint8_t* payload, size_t len)
     return (uint8_t)((payload[offsetof(FcStatusData, flags)] & FCS_GNSS_IMU_MASK) >> FCS_GNSS_IMU_SHIFT);
 }
 
+// Bits 5-6 (#1755): on AUTO board-to-rocket mounting, whether a still pad
+// window confirmed the frame recently, as the flight computer judges it
+// (flight_computer main/mount_health_policy.h): a sensor-health state (SH_NA,
+// SH_OK, SH_DEGRADED, defined further down; SH_BAD is not used). SH_NA: a
+// manual mounting code, or off the pad (anything but READY and PRELAUNCH,
+// where the pad orientation estimator runs); SH_OK: AUTO, and a still window
+// completed in the last 30 s; SH_DEGRADED: AUTO, and no window this boot or
+// none in the last 30 s (a board snapped on a prep table, then racked on a
+// rail swaying too much to finish one, flies the table's frame). The out
+// computer passes it to the apps' health dots (telemetry key "mo"), where
+// SH_DEGRADED holds "Ready to fly" to amber, never red. An FC image from
+// before this sends 0 there: SH_NA. Bit 7 is spare.
+static constexpr uint8_t FCS_MOUNT_SHIFT = 5;
+static constexpr uint8_t FCS_MOUNT_MASK  = (uint8_t)(0x3u << FCS_MOUNT_SHIFT);
+static inline uint8_t fcStatusWithMount(uint8_t flags, uint8_t state)
+{
+    return (uint8_t)((flags & (uint8_t)~FCS_MOUNT_MASK) | (uint8_t)((state & 0x3u) << FCS_MOUNT_SHIFT));
+}
+// The out computer's side: the state in an FC_STATUS_MSG payload (v1 or v2;
+// 0 = SH_NA for a payload too short to carry the flags).
+static inline uint8_t fcStatusMount(const uint8_t* payload, size_t len)
+{
+    if (payload == nullptr || len < FC_STATUS_V1_SIZE) return 0;
+    return (uint8_t)((payload[offsetof(FcStatusData, flags)] & FCS_MOUNT_MASK) >> FCS_MOUNT_SHIFT);
+}
+
 // The FC side: the scap_mv field for a V_SCAP reading in volts. NaN (no
 // reading) becomes the sentinel, a reading at or below zero is 0 mV, and the
 // top is clamped under the sentinel, so a reading never passes for "no
@@ -2923,6 +2949,9 @@ static constexpr uint8_t IDENTITY_NVS_SCHEMA_VERSION = 1;
 //       (loraTelemetryLenOk: a v5 SLOW frame is v6's without the byte), so a
 //       base station can be flashed ahead of its rockets; a v5 base station
 //       drops v6 frames as a version mismatch, loudly, as before.
+//       #1755 took `status` bits 2-3 (LORA_SLOW_MOUNT_MASK) with no version
+//       change: a rocket from before it sends them 0 (N/A in the apps), and a
+//       base station from before it never reads them (the apps show N/A).
 static constexpr uint8_t LORA_PROTO_VERSION = 6;
 static constexpr uint8_t LORA_PROTO_VERSION_V5 = 5;   // still read: see v6 above
 
@@ -3083,12 +3112,17 @@ typedef struct __attribute__((packed))
 
     // v6: bits 0-1 the gnss-sdr-dev board's IMU aiding as the flight computer
     // reports it (a SensorHealthState; 0 = no board, or a rocket without it),
-    // the apps' "GNSS IMU" dot on a relayed link; bits 2-7 spare (0).
+    // the apps' "GNSS IMU" dot on a relayed link; bits 2-3 (#1755) whether a
+    // still pad window confirmed an AUTO mounting recently (FCS_MOUNT_*, a
+    // SensorHealthState; 0 = a manual code, off the pad, or a rocket without
+    // it), the apps' "Mounting" dot; bits 4-7 spare (0).
     uint8_t  status;
 } LoRaSlowData;
 
 static_assert(sizeof(LoRaSlowData) == 23, "LoRaSlowData must be 23 bytes");
 static constexpr uint8_t LORA_SLOW_GNSS_IMU_MASK = 0x03u;   // LoRaSlowData.status bits 0-1
+static constexpr uint8_t LORA_SLOW_MOUNT_SHIFT   = 2;       // LoRaSlowData.status bits 2-3 (#1755)
+static constexpr uint8_t LORA_SLOW_MOUNT_MASK    = (uint8_t)(0x3u << LORA_SLOW_MOUNT_SHIFT);
 
 // The two frames MUST agree on the shared prefix, or dispatch reads garbage.
 static_assert(offsetof(LoRaFastData, hdr) == 0, "header must lead the fast frame");
@@ -3206,6 +3240,8 @@ typedef struct
     uint8_t imu_orient_mode;        // #390: LORA2_OMODE_* (0 = not reported)
     uint8_t gnss_imu;               // v6 SLOW status bits 0-1: the gnss-sdr-dev board's
                                     // IMU aiding, a SensorHealthState (0 = not reported)
+    uint8_t mount;                  // SLOW status bits 2-3 (#1755): an AUTO mounting's
+                                    // pad confirmation, a SensorHealthState (0 = not reported)
 } LoRaDataSI;
 
 

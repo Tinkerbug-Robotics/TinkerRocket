@@ -117,4 +117,18 @@ final class BackportRenderTests: XCTestCase {
         _ = try render(HealthDotRow(rows: t.sensorHealthRows), name: "health_dot_row_12_gnss_imu")
         _ = try render(HealthCardView(telemetry: t), name: "health_card_gnss_imu")
     }
+
+    /// #1755: the Mounting dot beside the GNSS board's IMU and all four pyros:
+    /// thirteen dots, the most the row can hold, in three balanced lines.
+    func testHealthCard_mountingWithGnssImuAndFourPyros_rendersThirteenDots() throws {
+        let h = 1 | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 8) | (1 << 10) |
+            (2 << 12) | (2 << 14) | (2 << 16) | (2 << 18) | (1 << 20)
+        let t = try JSONDecoder().decode(
+            TelemetryData.self, from: "{\"h\":\(h),\"gi\":2,\"mo\":2}".data(using: .utf8)!)
+        let names = t.sensorHealthRows.map(\.name)
+        XCTAssertEqual(names, ["Baro", "IMU", "EKF", "GNSS", "Battery", "Mag", "GNSS IMU", "Mounting",
+                               "Storage", "Pyro 1", "Pyro 2", "Pyro 3", "Pyro 4"])
+        _ = try render(HealthDotRow(rows: t.sensorHealthRows), name: "health_dot_row_13_mounting")
+        _ = try render(HealthCardView(telemetry: t), name: "health_card_mounting")
+    }
 }

@@ -431,6 +431,107 @@ final class TelemetryDataTests: XCTestCase {
         }
     }
 
+    // MARK: - AUTO mounting confirmed on the pad ("mo", #1755)
+
+    /// `"h"` plus optional `"gi"` and `"mo"`; nil leaves a key out entirely, the
+    /// way older firmware, a manual code, a rocket off the pad and an older base
+    /// station send the frame.
+    private func decode(health: Int, gi: String? = nil, mo: String?) throws -> TelemetryData {
+        let giPart = gi.map { ",\"gi\":\($0)" } ?? ""
+        let moPart = mo.map { ",\"mo\":\($0)" } ?? ""
+        return try JSONDecoder().decode(TelemetryData.self,
+                                        from: "{\"h\":\(health)\(giPart)\(moPart)}".data(using: .utf8)!)
+    }
+
+    private static let mountOkDetail =
+        "The board found which way its nose points from a still moment on the pad in the last 30 s."
+    private static let mountDegradedDetail =
+        "The AUTO mounting has not been confirmed by a still moment on the pad in the last 30 s:"
+        + " let the rocket sit still on the rail, or set a manual mounting code."
+
+    /// "mo" is a plain integer with the SensorHealth values, not a bitfield.
+    /// Absent = not applicable; so is a value this build does not know.
+    func testMount_KeyDecodes() throws {
+        let absent = try decode(health: 1, mo: nil)
+        XCTAssertNil(absent.mount_state)
+        XCTAssertEqual(absent.mountHealth, .na)
+        XCTAssertEqual(try decode(health: 1, mo: "0").mountHealth, .na)
+        XCTAssertEqual(try decode(health: 1, mo: "1").mountHealth, .ok)
+        XCTAssertEqual(try decode(health: 1, mo: "2").mountHealth, .degraded)
+        XCTAssertEqual(try decode(health: 1, mo: "2").mount_state, 2)
+        // Out of range reads as N/A (hidden), not as a state it isn't.
+        XCTAssertEqual(try decode(health: 1, mo: "4").mountHealth, .na)
+        XCTAssertEqual(try decode(health: 1, mo: "-1").mountHealth, .na)
+        // #571 tolerance: a float or string on the wire still decodes, and
+        // never costs the rest of the frame.
+        XCTAssertEqual(try decode(health: 1, mo: "2.0").mountHealth, .degraded)
+        let str = try decode(health: 1, mo: "\"1\"")
+        XCTAssertEqual(str.mountHealth, .ok)
+        XCTAssertEqual(str.baroHealth, .ok)
+        // "mo" lives outside "h" and apart from "gi": neither leaks into the other.
+        let both = try decode(health: 0, gi: "3", mo: "1")
+        XCTAssertEqual(both.sensor_health, 0)
+        XCTAssertEqual(both.gnssImuHealth, .bad)
+        XCTAssertEqual(both.mountHealth, .ok)
+        XCTAssertFalse(both.hasSensorHealth)
+        XCTAssertEqual(try decode(health: 1, gi: "2", mo: nil).mountHealth, .na)
+        XCTAssertEqual(try decode(health: 1, gi: nil, mo: "2").gnssImuHealth, .na)
+    }
+
+    /// The row appears only when "mo" is present and not 0, after the GNSS
+    /// board's IMU and before Storage, with the plain-language line.
+    func testMount_RowOnlyWhenPresentAndNonZero() throws {
+        let h = pack(baro: .ok, imu: .ok, ekf: .ok, mag: .ok, gnss: .ok, batt: .ok, storage: .ok)
+        for mo in [nil, "0"] {
+            let t = try decode(health: h, mo: mo)
+            XCTAssertFalse(t.sensorHealthRows.contains { $0.name == "Mounting" }, "mo \(mo ?? "absent")")
+            XCTAssertEqual(t.sensorHealthRows.count, 7, "6 core + Storage")
+        }
+        let expected: [(String, TelemetryData.SensorHealth, String)] = [
+            ("1", .ok, Self.mountOkDetail),
+            ("2", .degraded, Self.mountDegradedDetail),
+        ]
+        for (mo, state, detail) in expected {
+            let t = try decode(health: h, mo: mo)
+            XCTAssertEqual(t.sensorHealthRows.map(\.name),
+                           ["Baro", "IMU", "EKF", "GNSS", "Battery", "Mag", "Mounting", "Storage"])
+            let row = try XCTUnwrap(t.sensorHealthRows.first { $0.name == "Mounting" })
+            XCTAssertEqual(row.state, state)
+            XCTAssertEqual(row.detail, detail)
+            let withGi = try decode(health: h, gi: "1", mo: mo)
+            XCTAssertEqual(withGi.sensorHealthRows.map(\.name),
+                           ["Baro", "IMU", "EKF", "GNSS", "Battery", "Mag", "GNSS IMU", "Mounting", "Storage"])
+        }
+        XCTAssertEqual(TelemetryData.mountHealthDetail(.ok), Self.mountOkDetail)
+        XCTAssertEqual(TelemetryData.mountHealthDetail(.degraded), Self.mountDegradedDetail)
+        XCTAssertNil(TelemetryData.mountHealthDetail(.na))
+    }
+
+    /// A mounting not confirmed lately holds "Ready to fly" to amber, never red;
+    /// confirmed or N/A, it changes nothing.
+    func testMount_DegradedGatesGreenToAmberNeverRed() throws {
+        let allOK = pack(baro: .ok, imu: .ok, ekf: .ok, mag: .ok, gnss: .ok, batt: .ok, storage: .ok)
+        XCTAssertEqual(try decode(health: allOK, mo: nil).flightReadiness, .ready)
+        XCTAssertEqual(try decode(health: allOK, mo: "0").flightReadiness, .ready)
+        XCTAssertEqual(try decode(health: allOK, mo: "1").flightReadiness, .ready)
+        XCTAssertEqual(try decode(health: allOK, mo: "2").flightReadiness, .caution)
+        // An unknown value reads N/A: ignored, not amber.
+        XCTAssertEqual(try decode(health: allOK, mo: "4").flightReadiness, .ready)
+        // Never red: even 3, a state the flight computer does not send, stays amber.
+        XCTAssertEqual(try decode(health: allOK, mo: "3").flightReadiness, .caution)
+        // It does not lift a verdict either: red stays red, amber stays amber,
+        // and no scorecard stays unknown.
+        let red = pack(baro: .ok, imu: .bad, ekf: .ok, mag: .ok, gnss: .ok, batt: .ok)
+        let amber = pack(baro: .ok, imu: .ok, ekf: .deg, mag: .ok, gnss: .ok, batt: .ok)
+        for mo in [nil, "0", "1", "2", "3"] {
+            XCTAssertEqual(try decode(health: red, mo: mo).flightReadiness, .notReady, "mo \(mo ?? "absent")")
+            XCTAssertEqual(try decode(health: amber, mo: mo).flightReadiness, .caution, "mo \(mo ?? "absent")")
+            XCTAssertEqual(try decode(health: 0, mo: mo).flightReadiness, .unknown, "mo \(mo ?? "absent")")
+        }
+        // The GNSS board's IMU stays advisory beside it.
+        XCTAssertEqual(try decode(health: allOK, gi: "3", mo: "1").flightReadiness, .ready)
+    }
+
     /// Unconfigured pyros (N/A) are ignored; configured ones add a card row.
     func testSensorHealthRows_OnlyConfiguredPyros() throws {
         let none = try decode(health: pack(baro: .ok, imu: .ok))

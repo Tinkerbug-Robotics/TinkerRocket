@@ -74,6 +74,7 @@ def test_v1_and_v2_in_one_log(tmp_path):
     assert rows[4]["scap_v"] is None and rows[4]["fc_camera_engaged"] is True
     assert rows[5]["scap_v"] is None      # the flag gates the field
     assert all(r["gnss_imu"] == 0 for r in rows)   # no board reported in any
+    assert all(r["mount"] == 0 for r in rows)      # nor a mounting state
 
 
 def test_gnss_imu_aiding_bits(tmp_path):
@@ -89,5 +90,26 @@ def test_gnss_imu_aiding_bits(tmp_path):
     assert pfd.FCS_GNSS_IMU_MASK == 0x18 and pfd.FCS_GNSS_IMU_SHIFT == 3
     assert [r["gnss_imu"] for r in rows] == [1, 2, 3]
     assert rows[0]["scap_v"] == 2.487                  # the other flags are untouched
+    assert rows[1]["fc_camera_engaged"] is True
+    assert rows[2]["fc_raw_votes_withheld"] is True
+
+
+def test_mount_bits(tmp_path):
+    # Bits 5-6 (#1755): an AUTO mounting's pad confirmation, beside the GNSS
+    # IMU's bits 3-4 and the other flags
+    p = tmp_path / "flight_fcs_mo.bin"
+    p.write_bytes(
+        frame(v2(1_000_000, SENSE | (1 << 5), 2487))                  # confirmed lately
+        + frame(v2(1_200_000, CAMERA | (2 << 5) | (1 << 3), 0xFFFF))  # not, with the board aiding
+        + frame(v1(1_400_000, VOTES | (3 << 3)))                      # a manual code: none
+        + frame(v1(1_600_000, 0xFF))                                  # every bit set
+        + b"\x00" * 16)
+    records, _stats, _config = pfd.parse_binary_file(str(p))
+    rows = records["FcStatus"]
+    assert pfd.FCS_MOUNT_MASK == 0x60 and pfd.FCS_MOUNT_SHIFT == 5
+    assert pfd.FCS_MOUNT_MASK & pfd.FCS_GNSS_IMU_MASK == 0
+    assert [r["mount"] for r in rows] == [1, 2, 0, 3]
+    assert [r["gnss_imu"] for r in rows] == [0, 1, 3, 3]   # the GNSS IMU's bits untouched
+    assert rows[0]["scap_v"] == 2.487
     assert rows[1]["fc_camera_engaged"] is True
     assert rows[2]["fc_raw_votes_withheld"] is True
