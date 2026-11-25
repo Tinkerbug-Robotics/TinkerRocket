@@ -27,12 +27,16 @@
 //       running a simulation, which only a sim START — a deliberate operator
 //       action — brings about. An FC reset never sets the flag on its own.
 //   (b) the departure from a LANDED phase that was itself a SIM flight (the
-//       flag was set in its LANDED frames). A flown-out sim holds LANDED with
-//       the flag up through the sim's landed hold, the sim then gives up and
-//       the FC keeps holding LANDED with the flag DOWN, and the operator's sim
-//       Stop resets it to READY — flag still down. Clearing here is what lets
-//       a real flight after a bench sim be logged without an OC reboot, which
-//       the old rule allowed and this one must not lose.
+//       flag was set in its LANDED frames, or in the INFLIGHT frames that led
+//       to it). A flown-out sim holds LANDED with the flag up for one loop
+//       pass at most (#971: the sim ends on the next IMU drain), which the
+//       500 Hz NonSensorData frame catches about half the time (V10 pre-flight
+//       review, 2026-11-18); the FC then holds LANDED with the flag DOWN, and
+//       the operator's sim Stop resets it to READY — flag still down. So the
+//       flight's own INFLIGHT frames, which carry the flag throughout, decide
+//       it too. Clearing here is what lets a real flight after a bench sim be
+//       logged without an OC reboot, which the old rule allowed and this one
+//       must not lose.
 //
 // A real flight's LANDED (no sim flag in any of its frames) is therefore left
 // only by an FC reset, and the lockout holds through it: the OC has to reboot
@@ -45,7 +49,8 @@ namespace LandedLockout {
 struct State
 {
     bool        locked         = false;
-    bool        landed_was_sim = false;   // NSF_SIM_ACTIVE seen in the current LANDED phase
+    bool        landed_was_sim = false;   // NSF_SIM_ACTIVE seen in the current LANDED phase or its flight
+    bool        flight_was_sim = false;   // NSF_SIM_ACTIVE seen in the current INFLIGHT phase
     RocketState prev           = INITIALIZATION;
 };
 
@@ -53,9 +58,18 @@ struct State
 // arrival order. Returns the new `locked`.
 inline bool step(State& s, RocketState state, bool sim_active)
 {
+    if (state == INFLIGHT)
+    {
+        if (s.prev != INFLIGHT) s.flight_was_sim = false; // a fresh flight
+        if (sim_active) s.flight_was_sim = true;
+    }
+    else if (state != LANDED)
+    {
+        s.flight_was_sim = false;                         // the pad: no flight to judge
+    }
     if (state == LANDED)
     {
-        if (s.prev != LANDED) s.landed_was_sim = false;   // a fresh LANDED phase
+        if (s.prev != LANDED) s.landed_was_sim = s.flight_was_sim;   // a fresh LANDED phase
         if (sim_active) s.landed_was_sim = true;
         s.locked = true;
     }

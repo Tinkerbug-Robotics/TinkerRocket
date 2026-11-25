@@ -4,7 +4,7 @@
 
 // When the OC gives its half of the Beetle's two-processor pyro arm.
 //
-// On the Beetle (TR_BOARD_M1) the squib return FET U9 closes only while BOTH
+// On the Beetle (TR_BOARD_M2, and the retired V1) the squib return FET U9 closes only while BOTH
 // FC_ARM (FC GPIO44) and OC_ARM_EN (OC GPIO11, config::ARM_CONSENT_PIN) are
 // high: Q12 and Q14 in series pull Q13's base, and Q13 drives U9's gate from
 // the pack. With U9 open the return reaches ground only through R73 (2.2 k),
@@ -14,6 +14,16 @@
 // raised it, so no channel could fire in a ground test OR in flight, while
 // continuity read true and an LED "fired" (design review 2026-09-21, findings
 // 50 and 53).
+//
+// The Tinker-Mantis V10 (TR_BOARD_V10, #1593) carries the same chain with the
+// same designators: FC_ARM is P4 GPIO33 through R132, OC_ARM_EN is S3 GPIO14,
+// and INA_ALERT (S3 GPIO18) gives the #1553 trip its interrupt. The rule below
+// is board-independent. The reboot notes further down name the Beetle's pads;
+// on the V10 the four FIRE nets are P4 GPIO6/11/9/13, each held off through an
+// FC reset by its R78-R81 pull-down, and FC_ARM's GPIO33 has no pull at reset
+// (unlike the Beetle's GPIO44), so U9 stays open through an FC boot even with
+// consent up. Both are datasheet readings until the first article's scope
+// check (hardware/tinker-mantis/v10-bring-up.md).
 //
 // The FC raises FC_ARM only around a pulse, PYRO_ARM_SETTLE_MS (10) plus
 // PYRO_FIRE_DURATION_MS (200), from either the in-flight deployment state

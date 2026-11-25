@@ -57,10 +57,12 @@ public object PyroCardPolicy {
     /**
      * The manual continuity-test button.
      *
-     * Never on a relay: the stand-back LoRa test (uplink cmds 35/36) is
-     * iOS-only, pending Android's own pyro-safety pass, so a button here would
-     * send a direct-link cmd 35 into a base station — nothing would happen,
-     * and the silence would read as a fault.
+     * On a relay it is the stand-back LoRa test (#1650: cmd 50 → uplink cmd
+     * 35 to the focused rocket, iOS `canTest` in relay mode), offered only
+     * while [relayPathReady]: a focused rocket heard live within 3 s whose ID
+     * no second rocket shares. The relay carries no rail, armed or fired bit,
+     * so those gates cannot apply there; the rocket's own rail-off refusal is
+     * the backstop.
      *
      * On a direct link the rail gate matches the iOS tile: the OC refuses
      * cmd 35 with the rail off, because a queued ARM pulse would deliver at
@@ -72,7 +74,10 @@ public object PyroCardPolicy {
         fired: Boolean,
         inflight: Boolean,
         powerPinOn: Boolean,
-    ): Boolean = !isBaseStation && !armed && !fired && !inflight && powerPinOn
+        relayPathReady: Boolean = false,
+    ): Boolean =
+        if (isBaseStation) relayPathReady
+        else !armed && !fired && !inflight && powerPinOn
 
     /**
      * Where the per-channel trigger config comes from.

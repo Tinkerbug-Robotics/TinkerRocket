@@ -3,4 +3,7 @@
  "event_records": 1,
  "fast_frames": 10,
  "slow_frames": 2,
- "skipped_seq": 3}
+ "skipped_seq": 3,
+ "lora_proto": 6,
+ "slow_frame_len": 23,
+ "gnss_imu": 1}

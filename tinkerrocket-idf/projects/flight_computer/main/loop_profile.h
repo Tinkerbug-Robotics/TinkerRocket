@@ -28,10 +28,12 @@
 // windows of a capture into one table and compares captures side by side.
 //
 // At boot, before the loop, tr_lp_boot() prints the interrupt allocation table,
-// the free heap, and a microbenchmark: cycles per double and float math
-// operation, the queue and copy primitives the drain uses, and the
-// instruction-cache miss penalty (a block of flash code run cold, after a larger
-// block has evicted it, and warm). The profiler costs ~4 % of the loop.
+// the free heap, the PSRAM the heap got, and a microbenchmark: cycles per
+// double and float math operation, one satellite's position and clock from its
+// ephemeris (the raw-GNSS filter's per-satellite step, soft double on the P4),
+// the queue and copy primitives the drain uses, and the instruction-cache miss
+// penalty (a block of flash code run cold, after a larger block has evicted
+// it, and warm). The profiler costs ~4 % of the loop.
 
 #include "tr_loop_profile.h"
 
@@ -50,6 +52,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "sdkconfig.h"
+#include "gnss/eph.h"     // TR_GNSSRaw: the raw-GNSS filter's satellite step, timed at boot
+#include "gnss/types.h"
 #if CONFIG_IDF_TARGET_ARCH_XTENSA
 #include "xtensa-debug-module.h"
 #define TR_LP_HAVE_PMU 1
@@ -331,6 +335,22 @@ static uint32_t IRAM_ATTR timeCall(void (*fn)(void))
 }
 #endif
 
+// One satellite as RawMeasBuilder solves it (RawMeasBuilder.cpp satState): the
+// clock at the transmit time, then the position at t and t +- 0.5 s for the
+// velocity and acceleration. All soft double on the P4, whose FPU is single
+// precision, so this is the filter's per-satellite cost the P4 has to price.
+static volatile double vd_t_sv = 302430.0;
+static double __attribute__((noinline)) benchSatSolve(const gps_eph_t* e)
+{
+    const double t_sv = vd_t_sv;
+    const double t_tx = t_sv - gps_sat_clock(e, t_sv);
+    double rs[3], rs1[3], rs2[3], dts, dts1, dts2;
+    gps_sat_pos(e, t_tx, rs, nullptr, &dts);
+    gps_sat_pos(e, t_tx + 0.5, rs2, nullptr, &dts2);
+    gps_sat_pos(e, t_tx - 0.5, rs1, nullptr, &dts1);
+    return rs[0] + rs1[1] + rs2[2] + dts + dts1 + dts2;
+}
+
 static void boot()
 {
     cpu_mhz = (uint32_t)(esp_clk_cpu_freq() / 1000000);
@@ -342,11 +362,22 @@ static void boot()
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    // Whether the build asked for PSRAM and what the heap got: with
+    // CONFIG_SPIRAM_IGNORE_NOTFOUND a part that did not come up leaves 0 here.
+    printf("[LP] psram: CONFIG_SPIRAM %s | in the heap %u KB, largest block %u B\n",
+#if CONFIG_SPIRAM
+           "on",
+#else
+           "off",
+#endif
+           (unsigned)(heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / 1024u),
+           (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
 
     // Loop overhead of a volatile read + write, to subtract by eye.
     TR_LP_BENCH("baseline (volatile r/w)", 2000, vd_out = vd_in);
     TR_LP_BENCH("double add", 2000, vd_out = vd_in + vd_in2);
     TR_LP_BENCH("double mul", 2000, vd_out = vd_in * vd_in2);
+    TR_LP_BENCH("double mul-add", 2000, vd_out = vd_in * vd_in2 + vd_in);
     TR_LP_BENCH("double div", 2000, vd_out = vd_in / vd_in2);
     TR_LP_BENCH("double sqrt", 1000, vd_out = sqrt(vd_in));
     TR_LP_BENCH("double sin", 1000, vd_out = sin(vd_in));
@@ -364,6 +395,37 @@ static void boot()
     TR_LP_BENCH("powf", 1000, vf_out = powf(vf_in, 0.190295f));
     TR_LP_BENCH("expf", 1000, vf_out = expf(vf_in));
     TR_LP_BENCH("esp_timer_get_time", 2000, vu_out = (uint32_t)esp_timer_get_time());
+
+    {
+        // A GPS-like orbit (made-up elements, no real satellite's): eccentric
+        // enough that the Kepler loop runs its usual handful of iterations.
+        static gps_eph_t eph;
+        eph.valid = 1;
+        eph.sys = GNSS_SYS_GPS;
+        eph.prn = 1;
+        eph.toe = eph.toc = 302400.0;
+        eph.sqrt_a = 5153.6;
+        eph.e = 0.012;
+        eph.i0 = 0.96;
+        eph.omega0 = 1.1;
+        eph.omega = 0.7;
+        eph.m0 = 2.3;
+        eph.delta_n = 4.5e-9;
+        eph.idot = 1.0e-10;
+        eph.omega_dot = -8.0e-9;
+        eph.cuc = 1.0e-6;
+        eph.cus = 8.0e-6;
+        eph.crc = 200.0;
+        eph.crs = 20.0;
+        eph.cic = 1.0e-7;
+        eph.cis = -1.0e-7;
+        eph.af0 = 1.0e-4;
+        eph.af1 = 1.0e-12;
+        double pos[3], clk;
+        TR_LP_BENCH("eph sat pos+clock", 200,
+                    gps_sat_pos(&eph, vd_t_sv, pos, nullptr, &clk); vd_out = pos[0] + clk);
+        TR_LP_BENCH("eph sat solve (builder's)", 50, vd_out = benchSatSolve(&eph));
+    }
 
     {
         static uint8_t src[226], dst[226];

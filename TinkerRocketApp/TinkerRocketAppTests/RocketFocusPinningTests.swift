@@ -14,6 +14,7 @@ final class RocketFocusPinningTests: XCTestCase {
             received.append(telemetry)
         }
         func reset() {}
+        func followStream(baseline: TelemetryData?) {}
     }
 
     private func makeBaseStation() -> BLEDevice {

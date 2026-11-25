@@ -21,14 +21,15 @@ An open source hardware and software full featured flight computer with out of t
 | Product | What it is | Board files | Firmware |
 |---|---|---|---|
 | **Tinker-Mantis** | The full-size flight computer: ESP32-P4 flight computer and ESP32-S3 out computer on one board, with a swappable [LoRa daughterboard](hardware/lora-daughterboard/) and [GNSS carrier](hardware/gnss-sam10m8-18mm-hv/) | [`hardware/tinker-mantis/`](hardware/tinker-mantis/) | `flight_computer` + `out_computer` (V9/V10), `radio_board` on the LoRa daughterboard |
-| **Tinker-Beetle** | A reduced-capability flight computer: two ESP32-S3s, LoRa and GNSS on board | [`hardware/tinker-beetle/`](hardware/tinker-beetle/) | `flight_computer` + `out_computer` (M1) |
+| **Tinker-Beetle** | A reduced-capability flight computer: two ESP32-S3s, LoRa and GNSS on board | [`hardware/tinker-beetle/`](hardware/tinker-beetle/) | `flight_computer` + `out_computer` (M2) |
 | **Tinker-Base** | The ground station for both, with its LoRa radio on board | [`hardware/tinker-base/`](hardware/tinker-base/) | `base_station` |
 
 Firmware for each is released together on `fw-v*` tags; which build belongs to
 which product is in
 [`tinkerrocket-idf/projects/README.md`](tinkerrocket-idf/projects/README.md).
-Boards and firmware that are no longer offered are kept, separately, under
-[`hardware/legacy/`](hardware/legacy/) and `tinkerrocket-idf/projects/legacy/`.
+Boards that are no longer offered are kept, separately, under
+[`hardware/legacy/`](hardware/legacy/); their firmware maps stay in the
+projects, under each project's `main/board/legacy/`.
 
 ## Overview
 
@@ -156,7 +157,7 @@ Two references are generated from source and re-checked in CI, so they cannot dr
 the pad through boost and coast, then 960 Hz once the recovery deploys), "8k Dynamic"
 (the same with 7680 Hz), or a fixed 1k, 2k, 4k or 8k, which land on the sensor's own
 output rates of 960, 1920, 3840 and 7680 Hz. The 8k rates need a board whose flight
-computer reads the IMU from its FIFO (the mini so far); the app offers them only where
+computer reads the IMU from its FIFO (the Tinker-Beetle so far); the app offers them only where
 the rocket reports it can fly them.
 
 ### Radios
@@ -295,7 +296,6 @@ TinkerRocket/
 │   │   ├── out_computer/       # Out computer (Tinker-Mantis, Tinker-Beetle)
 │   │   ├── base_station/       # Base station (Tinker-Base)
 │   │   ├── radio_board/        # LoRa daughterboard
-│   │   ├── legacy/             # Firmware for boards no longer offered
 │   │   └── bench/              # Hardware bring-up tools, never released
 │   └── components/             # First-party + vendored ESP-IDF components
 │       ├── TR_GpsInsEKF/       # 15-state GPS/INS Extended Kalman Filter
@@ -470,13 +470,13 @@ Fifteen GitHub Actions workflows run automatically, each path-filtered to what i
 | Workflow | What it does |
 |----------|--------------|
 | **cpp-tests.yml** | GoogleTest suites — on changes to `tinkerrocket-idf/components/`, `tinkerrocket-idf/projects/`, `tests_cpp/`, or `tests/integration/`. `projects/` is on the list because three suites include policy headers straight out of `projects/*/main` |
-| **firmware-build.yml** | Full ESP-IDF build of `flight_computer`, `out_computer`, `base_station`, `radio_board`, `rocket_computer_mini` and `pyro_channel_test` — 16 jobs, since the board-flagged projects build once per revision, grouped by line: the product builds (Tinker-Mantis V9, Tinker-Beetle `M1`, Tinker-Base V4 and the V3 image its release slot carries until V4 has run on hardware, LoRa), the legacy ones (V7/V8, base station V2, the single-MCU mini under `projects/legacy/`) and the bench tool under `projects/bench/` (Docker: `espressif/idf:v6.0.1`) |
+| **firmware-build.yml** | Full ESP-IDF build of `flight_computer`, `out_computer`, `base_station`, `radio_board` and `pyro_channel_test` — 22 jobs, since the board-flagged projects build once per revision, grouped by line: the product builds (Tinker-Mantis V9 and V10, the V9's [mosaic-only raw-GNSS navigation image](docs/builds/v9-mosaic-rawnav.md), Tinker-Beetle `M2`, Tinker-Base V4 and the V3 image its release slot carries until V4 has run on hardware, LoRa), the legacy ones (V5/V7/V8 and the V8's auto and mosaic-only images, base station V2) and the bench tool under `projects/bench/` (Docker: `espressif/idf:v6.0.1`) |
 | **sim-tests.yml** | pytest for `tinkerrocket-sim/` and the component sources it binds to |
 | **unit-tests.yml** | pytest for `tests/unit/` and `tests/test_roll_profile_semantics.py` — the Python ports of firmware logic (apogee detector, landing detector, mag-scale auto-select) and the base-station binary log reader, whose field offsets are asserted against the C structs in `RocketComputerTypes.h` |
 | **ios-tests.yml** | XCTest for `TinkerRocketApp/` |
 | **android-tests.yml** | Pure-JVM JUnit for `TinkerRocketAndroid/` (protocol/session/maps modules) against the same golden-vector corpus the C++ and iOS suites consume, then `tools/check_android_tests_ran.py`: every `@Test` the sources declare must appear in the JUnit XML, per module — JUnit 5 silently skips a Kotlin test whose expression body returns non-Unit, and the suite stays green. Last, `tools/check_android_api_level.py`: no module's compiled classes may call a Java or Android API above minSdk, checked against the SDK's `api-versions.xml`. The `kotlin("jvm")` modules compile against JDK 21 and lint's NewApi check skips them, which is how a call that needs API 33 crashed Android 12 (#1612) |
-| **firmware-release.yml** | Product firmware and a manifest on `fw-v*` tag push — the six product-line images (Tinker-Mantis, Tinker-Beetle, Tinker-Base, LoRa daughterboard), named for their product. Reads each image's own `esp_app_desc_t` to build the manifest rather than trusting the build matrix, refuses a `flight_computer` image built on the guidance stub, and fails unless all six are present. Manual dry run available, which stops before publishing (#773) |
-| **firmware-release-legacy.yml** | The same, for boards no longer offered, on `fw-legacy-v*` tag push — V7/V8 rocket computers, base station V2, the single-MCU mini. Neither app offers these (both look for `fw-v` tags only); they are for flashing by hand. Published with `--latest=false` |
+| **firmware-release.yml** | Product firmware and a manifest on `fw-v*` tag push — the four product-line images (the Tinker-Mantis V9 pair, the Tinker-Base and the LoRa daughterboard; the Tinker-Mantis V10 and the Tinker-Beetle V2 are built but not released until each passes bring-up), named for their product. Reads each image's own `esp_app_desc_t` to build the manifest rather than trusting the build matrix, refuses a `flight_computer` image built on the guidance stub, and fails unless all four are present. Manual dry run available, which stops before publishing (#773) |
+| **firmware-release-legacy.yml** | The same, for boards no longer offered, on `fw-legacy-v*` tag push — V7/V8 rocket computers, base station V2. Neither app offers these (both look for `fw-v` tags only); they are for flashing by hand. Published with `--latest=false` |
 | **android-release.yml** | Signed release APK on `android-v*` tag push — JVM suite, then `assembleRelease` signed from repo secrets, with an `apksigner` gate that fails if the APK came out debug-signed (see `docs/android-release-signing.md`) |
 | **flight-report-tests.yml** | Flight-report tooling — the Python suite, plus a Node job for the Explore panel, whose choice of what to draw is made in JavaScript and so is tested there |
 | **pages.yml** | Publishes the browser-based analysis tool to GitHub Pages on pushes to `main`. Builds `Data_Analysis/webtool/payload/` rather than shipping it — it is gitignored, and a committed copy would drift from the source the browser actually runs |
@@ -512,7 +512,7 @@ The main sensor frames, with the rate each is produced at:
 | 0xA6 | Power | 14 B | 100 Hz |
 | 0xD1 | IIS2MDC (Mag) | 10 B | 100 Hz |
 | 0xF1 | LoRa Telemetry (fast) | 55 B | 1.67 Hz |
-| 0xF1 | LoRa Telemetry (slow) | 22 B | 0.33 Hz |
+| 0xF1 | LoRa Telemetry (slow) | 23 B | 0.33 Hz |
 | 0xF9 | LoRa Uplink RX | 13 B | per uplink decode |
 | 0x94 | Pyro fault-current trip | 13 B | two per trip (trip + release) |
 

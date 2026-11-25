@@ -26,7 +26,7 @@ jobs:
         include:
           # Grouped by product line. `line` only labels the job; `project` is the
           # CMake project name and `path` (when present) the folder under
-          # tinkerrocket-idf/projects/ for the projects that moved into legacy/ or
+          # tinkerrocket-idf/projects/ for the projects that moved into
           # bench/. Project names did NOT change with the 2026-09-24 product
           # rename: both apps refuse an OTA image whose project name is not the
           # unit's own, so those names are the update contract with every board
@@ -34,39 +34,60 @@ jobs:
           #
           # ---- Product line: what firmware-release.yml publishes -------------
           #
-          # Tinker-Mantis (hardware/tinker-mantis) is the V9/V10 board. Both halves
-          # take -DTR_BOARD_V9=1. flight_computer has no default board revision:
+          # Tinker-Mantis (hardware/tinker-mantis). V9 is the board as fabbed (tag
+          # rocket-computer-v9.0.0); V10 is the board as ordered (tag
+          # tinker-mantis-v10.0.0), with its own map since #1593: its arm moved to P4 GPIO33 and needs the out computer's
+          # consent on S3 GPIO14, so a V9 image cannot arm a V10. Both halves of a
+          # pair take the same flag. flight_computer has no default board revision:
           # the flag is mandatory (projects/flight_computer/main/CMakeLists.txt)
           # because a wrong pyro pin map is silent at runtime. out_computer's flag
           # is mandatory too (#834) — a flagless build used to compile the V7 map
-          # silently. V9/V10 deleted the MRAM (board_v9.h sets MRAM_CS = -1) and
-          # enables the PSRAM log ring via an sdkconfig overlay.
+          # silently. V9 and V10 have no MRAM (MRAM_CS = -1) and enable the PSRAM
+          # log ring via an sdkconfig overlay. V10 is built here but not yet
+          # released (firmware-release.yml): no V10 has passed bring-up.
           - line: Tinker-Mantis
             project: flight_computer
             board: V9
             flags: -B build_v9 -DTR_BOARD_V9=1
+          # The mosaic-only raw-GNSS navigation image (docs/builds/v9-mosaic-rawnav.md):
+          # the V9 flying a Septentrio mosaic-G5 on J1 (TR_GNSS_DRIVER_MOSAIC) with the
+          # raw-GNSS filter as its one navigation filter, PSRAM on for it
+          # (sdkconfig.defaults.rawnav). It pairs with the V9 out_computer.
+          - line: Tinker-Mantis
+            project: flight_computer
+            board: V9-mosaic
+            flags: -B build_v9_rawnav -DTR_BOARD_V9=1 -DTR_GNSS_MOSAIC=1
           - line: Tinker-Mantis
             project: out_computer
             board: V9
             flags: -B build_v9 -DTR_BOARD_V9=1
-          # Tinker-Beetle (hardware/tinker-beetle, fabbed as rocket-computer-mini-
-          # v1.0.1) is a two-ESP32-S3 board that runs out_computer and
-          # flight_computer with -DTR_BOARD_M1=1 — not the single-MCU
-          # rocket_computer_mini project under legacy/, which targets a shape that
-          # was never fabbed (#1188). M1 is the one flight computer that is NOT an
-          # ESP32-P4: sdkconfig.defaults.m1 changes CONFIG_IDF_TARGET as well as
-          # the pin map, and the project CMakeLists forces the target into a build
-          # dir of its own. The out computer shares the V9 PSRAM overlay but has
-          # its own pin map: the radio is on-board SPI and there is no GNSS/LoRa
-          # rail switch of its own.
+          - line: Tinker-Mantis
+            project: flight_computer
+            board: V10
+            flags: -B build_v10 -DTR_BOARD_V10=1
+          - line: Tinker-Mantis
+            project: out_computer
+            board: V10
+            flags: -B build_v10 -DTR_BOARD_V10=1
+          # Tinker-Beetle V2 (hardware/tinker-beetle) is a two-ESP32-S3 board that
+          # runs out_computer and flight_computer with -DTR_BOARD_M2=1. The V1
+          # (rev1) is retired and has no build. M2 is the one
+          # flight computer that is NOT an ESP32-P4: sdkconfig.defaults.m2
+          # changes CONFIG_IDF_TARGET as well as the pin map, and the project
+          # CMakeLists forces the target into a build dir of its own; its PX100
+          # makes it the PX1105R image. Both halves boot from the 4 MB in their
+          # packages (sdkconfig.defaults.flash4mb). The out computer shares the
+          # V9 PSRAM overlay but has its own pin map: the radio is on-board SPI
+          # and there is no GNSS/LoRa rail switch of its own. Built here but not
+          # yet released (firmware-release.yml): no V2 has passed bring-up.
           - line: Tinker-Beetle
             project: flight_computer
-            board: M1
-            flags: -B build_m1 -DTR_BOARD_M1=1
+            board: M2
+            flags: -B build_m2 -DTR_BOARD_M2=1
           - line: Tinker-Beetle
             project: out_computer
-            board: M1
-            flags: -B build_m1 -DTR_BOARD_M1=1
+            board: M2
+            flags: -B build_m2 -DTR_BOARD_M2=1
           # Tinker-Base (hardware/tinker-base) runs base_station with its own map,
           # board_v4.h (-DTR_BS_BOARD=4): the on-board radio over SPI, no I2C, no
           # pack charger. Netlist-verified, not yet run on hardware — so until a
@@ -96,7 +117,13 @@ jobs:
           # the V7 build fails CI". It is an 8 MB part rather than V9's 16 MB, so
           # nothing about it is covered by V8. V8 and V9 differ on ARM and swap
           # FIRE 2/3, so V8 needs its own build too. Their maps live in
-          # main/board/legacy/.
+          # main/board/legacy/. V5, the archived board V7 was respun from, has
+          # an arm per channel (ganged in firmware) and arm-up continuity, the
+          # one board where both of those paths compile in.
+          - line: legacy
+            project: flight_computer
+            board: V5
+            flags: -B build_v5 -DTR_BOARD_V5=1
           - line: legacy
             project: flight_computer
             board: V7
@@ -105,6 +132,22 @@ jobs:
             project: flight_computer
             board: V8
             flags: -B build_v8 -DTR_BOARD_V8=1
+          # The V8 flying either receiver on J1, found at boot (TR_GNSS_DRIVER_AUTO):
+          # the image a V8 flies a mosaic-G5 on, its 1PPS on J1 pin 5.
+          - line: legacy
+            project: flight_computer
+            board: V8-auto
+            flags: -B build_v8_auto -DTR_BOARD_V8=1 -DTR_GNSS_AUTO=1
+          # The same mosaic-only raw-GNSS navigation image on the V8 (its J1 is
+          # the V9's): the raw-GNSS filter alone, PSRAM on (sdkconfig.defaults.rawnav).
+          - line: legacy
+            project: flight_computer
+            board: V8-mosaic
+            flags: -B build_v8_rawnav -DTR_BOARD_V8=1 -DTR_GNSS_MOSAIC=1
+          - line: legacy
+            project: out_computer
+            board: V5
+            flags: -B build_v5 -DTR_BOARD_V5=1
           - line: legacy
             project: out_computer
             board: V7
@@ -120,17 +163,14 @@ jobs:
           - line: legacy
             project: base_station
             board: V2-default
-          # The single-MCU merge for the never-fabbed S3-alone mini.
-          - line: legacy
-            project: rocket_computer_mini
-            path: legacy/rocket_computer_mini
           #
           # ---- Bench tools: never released -----------------------------------
           #
           # pyro_channel_test drives squib FETs by hand and was not built by CI
           # at all. Its flag is mandatory too (#834): V7's PYRO1 FIRE pin is
           # PYRO_ARM on V9, so a flagless build armed the board on the keypress
-          # meant to pulse channel 1. Build every map so none of them rots.
+          # meant to pulse channel 1. Build every map so none of them rots. It
+          # refuses V10 and M2, whose arm needs the out computer's consent.
           - line: bench
             project: pyro_channel_test
             path: bench/pyro_channel_test

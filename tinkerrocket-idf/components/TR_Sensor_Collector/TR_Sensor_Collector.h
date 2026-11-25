@@ -10,8 +10,8 @@
 #include <TR_BMP585.h>
 #include <TR_MMC5983MA.h>
 // Magnetometer driver is a compile-time seam as well (#1312).  rocket-computer
-// V8+ carries an ST IIS2MDC; rocket-computer-mini's U3 is a QST QMC5883P
-// (#797).  TR_QMC5883P mirrors TR_IIS2MDC's call surface — begin / configure
+// V8+ carries an ST IIS2MDC; the V10's U3 is a QST QMC5883P, as the Beetle
+// V1's was (#797).  TR_QMC5883P mirrors TR_IIS2MDC's call surface — begin / configure
 // / readRawXYZ / setHardIronOffset — and hands out the same int16 counts into
 // the same IIS2MDCData, so the selection is the type alone and the slot keeps
 // its IIS2MDC name everywhere downstream (isIIS2MDCActive, IIS2MDC_MSG, the
@@ -38,13 +38,35 @@
 #include "ism6_fifo_decoder.h"
 #include "imu_sample_clock.h"
 // GNSS driver is a compile-time seam: the rocket-computer boards carry a
-// u-blox receiver, the mini carries a Quectel LC86G. Both drivers expose the
-// identical begin/pollNewPVT/getGNSSData surface and produce the same
-// GNSSData, so the selection is the type alone. Projects opt in with
-// add_compile_definitions(TR_GNSS_DRIVER_LC86=1) at project level (same
-// pattern as TR_GUIDANCE_AVAILABLE); default is u-blox, unchanged.
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-#include <TR_GNSSReceiverLC86_Serial.h>
+// u-blox receiver, a V9 can fly a Septentrio mosaic-G5 on J1 instead of its
+// u-blox carrier, and the Tinker-Beetle V2 carries a SkyTraq PX100 (the
+// PX1105R driver). Every driver exposes the identical
+// begin/pollNewPVT/getGNSSData surface and produces the same GNSSData, so the
+// selection is the type alone. Projects opt in with
+// add_compile_definitions(TR_GNSS_DRIVER_MOSAIC=1) or
+// TR_GNSS_DRIVER_PX1105R=1 at project level (same pattern as
+// TR_GUIDANCE_AVAILABLE); default is u-blox, unchanged. (The Beetle V1's
+// Quectel LC86G driver was retired with that board.)
+//
+// TR_GNSS_DRIVER_AUTO=1 puts TR_GNSSAuto in the slot instead: the V9 and V10
+// images, whose J1 takes the u-blox carrier, the mosaic-G5 harness or the
+// gnss-sdr-dev board (which this logs and does not navigate on). It finds
+// the receiver at begin() (gnss_auto_driver.h), so which one it is, and what
+// follows from it, are known only after begin(): read them through
+// gnssType(), never from a compile-time constant.
+//
+// TR_GNSS_DRIVER_SDR=1 puts TinkerRocket's gnss-sdr-dev board's driver in the
+// slot alone: the V10's SDR raw-nav image, whose one navigation filter is the
+// raw-GNSS filter on that board's measurements (no probing: the board is the
+// build's choice, as the mosaic is the mosaic image's).
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+#include <TR_GNSSReceiverMosaic_Serial.h>
+#elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+#include <TR_GNSSReceiverSdr_Serial.h>
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+#include <TR_GNSSReceiverPX1105R_Serial.h>
+#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+#include "gnss_auto_driver.h"
 #else
 #include <TR_GNSSReceiverUBlox_Serial.h>
 #endif
@@ -165,7 +187,7 @@ public:
 #endif
 
     /** GNSS high-perf-clock OTP state at boot; a gnss_otp::* constant.
-     *  Board-agnostic: the LC86 driver reports NOT_M10 (#837 item 6). */
+     *  Board-agnostic: a non-u-blox driver reports NOT_M10 (#837 item 6). */
     uint8_t gnssOtpState() const { return gnss_receiver.otpState(); }
     SensorCollector(uint8_t ISM6HG256_CS,
                     uint8_t ISM6HG256_INT,
@@ -202,10 +224,11 @@ public:
                     uint8_t  ism6_low_g_fs_g   = 16,
                     uint16_t ism6_high_g_fs_g  = 256,
                     uint16_t ism6_gyro_fs_dps  = 4000,
-                    // Mini seam: the mini's magnetometer shares one physical
-                    // I2C bus with the INA230, so the app creates the bus and
-                    // hands the same handle to both. nullptr (the default and
-                    // every existing caller) keeps the collector creating and
+                    // Shared-bus seam: an app whose magnetometer shares one
+                    // physical I2C bus with another device creates the bus
+                    // and hands the same handle here (the retired single-MCU
+                    // mini's, with its INA230). nullptr (the default and
+                    // every caller today) keeps the collector creating and
                     // owning its own bus on I2C_NUM_1.
                     i2c_master_bus_handle_t external_i2c_bus = nullptr);
 
@@ -228,25 +251,184 @@ public:
     bool getIIS2MDCData(IIS2MDCData &data_out);
     bool getGNSSData(GNSSData &data_out);
     // Per-satellite report for the latest GNSS epoch (GNSSSatData): every
-    // epoch from the u-blox, about once a second from the LC86G's GSV.  Same
+    // epoch from the u-blox, at the receiver's own rate from the others.  Same
     // pop-once contract as getGNSSData(): true at most once per epoch.
     bool getGNSSSatData(GNSSSatData &data_out);
-    // Raw RTCM3 frames from the GNSS receiver (GNSS_RTCM_MSG), oldest first:
-    // ~5 a second from the LC86G's MSM7, never from the u-blox.  Drains a
-    // ring the GNSS poll task fills, so call it until it returns false.
-    // `cap` must be GNSS_RTCM_MAX_FRAME.
+    // Raw frames from the GNSS receiver (GNSS_RTCM_MSG), oldest first: ~60
+    // SBF blocks a second from the mosaic-G5, ~400 RTCM3 frames a second from
+    // the gnss-sdr-dev board, whole SkyTraq frames from the PX1105R, never
+    // anything from the u-blox.  Drains a ring the GNSS poll task fills, so
+    // call it until it returns false.  `cap` must be GNSS_SBF_MAX_FRAME
+    // (mosaic-G5; the V9 and V10 images) where the mosaic may be found.
     bool getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
+    // mosaic-G5 only (no-ops elsewhere): the pin its 1PPS reaches and its
+    // navigation rate, set before begin() (on the V9 image the pin is touched
+    // only once the mosaic is found); and a request to send every navigation
+    // block it holds once more, from any task (the flight log starts at
+    // launch, long after the receiver first sent them).
+    void setGNSSPpsPin(int8_t pin);
+    // A part on the BACK of the board (the Tinker-Beetle V2's IMU and
+    // magnetometer, board_m2.h): each sign, +1 or -1 per chip axis, is applied
+    // to every reading as it is read, before anything else sees it -- the
+    // calibration sums, the gyro offset, the queue, the log -- so everything
+    // downstream sees a part on the front, turned only about Z as on every
+    // other board (the converter's ROT_Z). {1, 1, 1}, the default and every
+    // other board's, leaves the readings as the chip gave them. An ISM6 sign
+    // saturates (-32768 reads +32767), and an MMC5983MA sign negates its
+    // 18-bit count about the chip's zero, 2^17. Call before begin().
+    void configureAxisSigns(const int8_t ism6_sign[3], const int8_t mmc_sign[3]);
+    void setGNSSMosaicRate(uint8_t rate_hz);
+    void requestGNSSNavResend();
+    // Leave the GNSS receiver out of this boot: begin() does not look for it,
+    // and isGnssOnline() is false, so the FC flies GNSS-absent (#557). Call
+    // before begin(). The mosaic-G5 build calls it on a boot that follows a
+    // crash restart, so a receiver-triggered fault cannot keep the FC from
+    // finishing its boot and taking an update over the air; the V9 image
+    // does the same when its last boot found the mosaic (gnssLastBootType()).
+    void skipGNSSThisBoot() { use_gnss = false; }
+    // Whether begin() looks for the receiver this boot: built in, and not
+    // left out by skipGNSSThisBoot().
+    bool gnssWantedThisBoot() const { return use_gnss; }
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // The image that flies the raw-GNSS filter on every receiver giving
+    // measurements, the same: no probes, the raw receiver it flew with
+    // (TR_GNSSAuto::setBeginWait).
+    void deferGNSSBringUpThisBoot() { gnss_defer_ = true; }
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-only image, on a reboot in flight: begin() starts looking for
+    // the receiver but does not wait for it (up to 30 s with no flight logic);
+    // the GNSS poll task finds and sets it up whenever it answers, as it does
+    // after a receiver reset in flight (TR_GNSSReceiverMosaicSerial::
+    // setBeginWait). isGnssOnline() is true from begin(), with no fix until
+    // the receiver sends one. Call before begin(); skipGNSSThisBoot() still
+    // leaves the receiver out.
+    void deferGNSSBringUpThisBoot() { gnss_defer_ = true; }
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    // The PX1105R image's, the same (TR_GNSSReceiverPX1105RSerial::setBeginWait).
+    void deferGNSSBringUpThisBoot() { gnss_defer_ = true; }
+#endif
+    // Which receiver the FC talks to (GNSS_TYPE_*): the build's own, or on the
+    // V9 image the one begin() found; GNSS_TYPE_NONE when none came up, so
+    // the FC is GNSS-absent. What the FC names in its identity push and what
+    // sets its IMU limit (imuRateMaxForGnss).
+    uint8_t gnssType() const;
+    // The receiver this board had last boot, readable before begin(): the
+    // build's own, or the V9 image's NVS record (GNSS_TYPE_NONE when it has
+    // none yet).
+    uint8_t gnssLastBootType();
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // The one image makes the raw outputs with the driver of the receiver
+    // found (enableGNSSRawOutputs() only asks for them): after begin(),
+    // whether they could not be made.
+    bool gnssRawOutputsFailed() const { return gnss_receiver.rawOutputsFailed(); }
+#endif
     // Raw GNSS measurements for the raw-GNSS shadow filter (#1600), from the
-    // LC86G's MSM7 and broadcast ephemeris; never from the u-blox. Off until
-    // enableGNSSRawOutputs() (call it before begin()). Safe from any task:
-    // the driver hands them over through queues. See
-    // TR_GNSSReceiverLC86Serial::takeRawEpoch / takeEphemeris.
+    // mosaic-G5's MeasEpoch and SBF navigation blocks on the mosaic-only
+    // image, the gnss-sdr-dev board's MSM7 and RTCM3 ephemerides, or the
+    // PX1105R's 0xE5; never from the u-blox, nor on the auto image without
+    // TR_GNSS_AUTO_RAW. Off until enableGNSSRawOutputs() (call it before
+    // begin()). Safe from any task: the driver hands them over through
+    // queues. getGNSSEphemeris gives an RTCM3 payload (1019/1046/1042) on the
+    // gnss-sdr-dev board and a whole GPSNav/GALNav/BDSNav block on the
+    // mosaic-G5 (SbfNav.h decodes it). See TR_GNSSReceiverMosaicSerial's
+    // takeRawEpoch / takeEphemeris.
     bool enableGNSSRawOutputs();
     bool getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out);
     bool getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len);
+    // The receiver's own fixes with their GPS instant on the MCU clock, for
+    // the shadow's check of each fix against the IMU (#1508). The PX1105R's
+    // (and the one image's, TR_GNSS_AUTO_RAW) only.
+    bool getGNSSFix(gnss_raw::TimedFix& out);
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // The image that flies the raw-GNSS filter on every receiver giving
+    // measurements: each of the three images' calls below, handed to the
+    // receiver in use (TR_GNSSAuto), false or a no-op with another.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    void setGNSSRawEpochPeriodMs(uint32_t period_ms);
+    bool getGNSSRawStats(TR_GNSSReceiverMosaicSerial::RawStats& out) const;
+    bool getGNSSRawStats(TR_GNSSReceiverSdrSerial::RawStats& out) const;
+    bool getGNSSRawStats(TR_GNSSReceiverPX1105RSerial::RawStats& out) const;
+    bool setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c);
+    bool getGNSSRawPairStats(TR_GNSSReceiverMosaicSerial::RawPairStats& out) const;
+    bool getGNSSRawPairStats(TR_GNSSReceiverPX1105RSerial::RawPairStats& out) const;
+    uint32_t gnssPollStackFree() const;
+    bool setGNSSRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k);
+    void noteGNSSRollRate(float p_rps);
+    bool getGNSSRawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const;
+    bool getGNSSEphemerisDecoded(gps_eph_t& out);
+    void setGNSSRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean);
+    bool gnssBoardHeard() const;
+    // Whether the receiver found gives raw measurements (the mosaic-G5, the
+    // PX1105R or the gnss-sdr-dev board): the raw-GNSS filter's receiver.
+    bool gnssRawReceiver() const;
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-only image's raw outputs beside those (its driver's
+    // broadcastIono, setRawEpochPeriodMs and rawStats): the last GPS
+    // ionosphere the receiver decoded (the 8 broadcast bytes and their GPS
+    // day; false before one, not consumed); the fused grid its epochs are
+    // handed over on (GPS-time ms, the receiver profile's); and its counts.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    void setGNSSRawEpochPeriodMs(uint32_t period_ms);
+    bool getGNSSRawStats(TR_GNSSReceiverMosaicSerial::RawStats& out) const;
+    // The Dopplers in pairs (the driver's setRawDopplerPairing: the receiver
+    // profile's rr_pair_avg, off unless set), their counts (rawPairStats:
+    // false with them off), and the GNSS poll task's stack left at its lowest
+    // (bytes; 0 before the task exists), for the bench's console with them on.
+    bool setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c);
+    bool getGNSSRawPairStats(TR_GNSSReceiverMosaicSerial::RawPairStats& out) const;
+    uint32_t gnssPollStackFree() const;
+    // Each satellite's other bands with its L1 band's Doppler (the driver's
+    // setRawMultiband, config.h TR_RAW_MULTIBAND), the IMU path's roll rate
+    // for its wind-up check (rad/s, every flight-filter tick), and its counts
+    // (false with it off).
+    bool setGNSSRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k);
+    void noteGNSSRollRate(float p_rps);
+    bool getGNSSRawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const;
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    // The PX1105R image's, the same as the mosaic's (its driver's
+    // broadcastIono, setRawEpochPeriodMs, rawStats, setRawDopplerPairing --
+    // the mosaic's pair rule -- and rawPairStats), and its ephemerides, which
+    // the driver decodes from the subframes itself (with the receiver's week):
+    // for RawGnssMeasStage::addEphemeris. getGNSSEphemeris gives nothing here.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    void setGNSSRawEpochPeriodMs(uint32_t period_ms);
+    bool getGNSSRawStats(TR_GNSSReceiverPX1105RSerial::RawStats& out) const;
+    bool setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c);
+    bool getGNSSRawPairStats(TR_GNSSReceiverPX1105RSerial::RawPairStats& out) const;
+    uint32_t gnssPollStackFree() const;
+    bool getGNSSEphemerisDecoded(gps_eph_t& out);
+#endif
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    // The SDR raw-nav image's raw outputs beside those (its driver's
+    // setRawEpochConfig and rawStats): the fused grid its epochs are handed
+    // over on (GPS-time ms, the receiver profile's) with the Dopplers' means
+    // between them, and its counts.
+    void setGNSSRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean);
+    bool getGNSSRawStats(TR_GNSSReceiverSdrSerial::RawStats& out) const;
+    uint32_t gnssPollStackFree() const;
+    // The last GPS ionosphere the board sent (its 4001 sub-type 4: the 8
+    // broadcast bytes and the GPS day it took them; false before one, not
+    // consumed), as the mosaic's getGNSSBroadcastIono.
+    bool getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const;
+    // Whether any frame of the board's 4001 (its status, an epoch or a fix)
+    // has come this boot: its driver listens whether or not a board is there.
+    bool gnssBoardHeard() const;
+#endif
+    // The GPS-to-MCU clock line each time it moves (GNSS_CLOCK_MSG): the
+    // PX1105R's from its 0xE5 arrival, the mosaic-G5's from its 1PPS, the
+    // gnss-sdr-dev board's from its epochs (the auto images; its 4002 frames
+    // are stamped by it); false on the u-blox.
+    bool getGNSSClockLine(GnssClockData& out);
+    // One TinkerRocket 4002 frame (TR_GNSSReceiverSdr_Serial/SdrAid.h) to the
+    // gnss-sdr-dev board, from the flight task, its UART's one writer; never
+    // blocks. The flight image's phase (main.cpp sdrPhaseStep) and a bench
+    // image's script go this way. False with no such board on J1 (the auto
+    // image found another receiver, or none) and on every image without
+    // TR_GNSS_DRIVER_AUTO.
+    bool sendGNSSAidFrame(const uint8_t* frame, size_t len);
     // The geoid's height above the WGS84 ellipsoid at the last fix, m
-    // (GNSSData's alt is above the geoid). LC86G only; false elsewhere or
-    // before a fix.
+    // (GNSSData's alt is above the geoid). The mosaic-G5 (and the auto
+    // image's driver); false elsewhere or before a fix.
     bool getGNSSGeoidSeparation(float& sep_m) const;
     void getISM6HG256DebugSnapshot(ISM6HG256DebugSnapshot &snapshot_out) const;
     void getMMC5983MADebugSnapshot(MMC5983MADebugSnapshot &snapshot_out) const;
@@ -269,7 +451,10 @@ public:
     //   cancelCalibration()     drop the outstanding window — its answer is
     //                           discarded when it lands.  Nothing changes.
     //   calibrationInProgress() a window is outstanding.
-    bool          startCalibration(float rotation_z_deg = 0.0f);
+    // hg_alignment: the high-g's six-face alignment to the low-g in use (9
+    // floats, row-major; HG_CAL_*), copied here, or nullptr for none.  With
+    // one, the high-g bias is measured after it (sensor_cal_math.h).
+    bool          startCalibration(float rotation_z_deg = 0.0f, const float* hg_alignment = nullptr);
     SensorCalPoll pollCalibration();
     void          cancelCalibration();
     bool          calibrationInProgress() const { return cal_session_.waiting(); }
@@ -300,6 +485,15 @@ public:
     // effect on the count stream (#1312).  Returns false if the mag isn't
     // active or the I2C write failed.  Issue #96.
     bool setIIS2MDCHardIronOffset(int16_t cx, int16_t cy, int16_t cz);
+    // The offset last asked of setIIS2MDCHardIronOffset() (the count stream
+    // is after it): false, and zeros, if none was this boot.
+    bool iis2mdcHardIronOffset(int16_t &cx, int16_t &cy, int16_t &cz) const
+    {
+        cx = iis2mdc_offset_cx;
+        cy = iis2mdc_offset_cy;
+        cz = iis2mdc_offset_cz;
+        return iis2mdc_offset_set;
+    }
 
     // #1111: IIS2MDC poll health.  Stalled = the chip failed STALL_FAILS
     // consecutive reads and the poll is down to the backed-off probe.
@@ -350,6 +544,8 @@ private:
     SensorCalWindow   cal_window_;            // poll-task private
     SensorCalSession  cal_session_;           // flight-task private
     float             cal_rotation_z_deg_ = 0.0f;  // flight-task private, captured by startCalibration()
+    float             cal_hg_m_[9] = {};           //   and the high-g alignment with it,
+    bool              cal_hg_m_on_ = false;        //   when there is one
     uint32_t          cal_started_ms_ = 0;         // flight-task private: bound on a poll task that never answers
     SensorCalSums     cal_sums_;              // written by the poll task while its window is open; read by the flight task only for the seq it accepted
     SemaphoreHandle_t cal_done_sem_ = nullptr;   // created in begin(); given once per window
@@ -379,6 +575,15 @@ private:
     // module fails bring-up (dead/deaf UART).  Gates the GNSS poll task and is
     // exposed via isGnssOnline() so the FC can enter GNSS-absent mode.
     bool gnss_online_ = true;
+    // begin() has run the GNSS bring-up: until then (and in rescue mode,
+    // which never starts the sensors) gnssType() names no receiver.
+    bool gnss_begun_ = false;
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
+    // deferGNSSBringUpThisBoot(): the poll task brings the receiver up
+    bool gnss_defer_ = false;
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    bool gnss_defer_ = false;
+#endif
     // Set by begin() once the barometer has both answered and been configured.
     bool bmp585_online_ = false;
 
@@ -394,8 +599,14 @@ private:
     TR_BMP585 bmp585;
     TR_MMC5983MA mmc5983ma;
     MagDriver iis2mdc;   // the IIS2MDC-named slot; the type is the seam's choice
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    TR_GNSSReceiverLC86Serial gnss_receiver;
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    TR_GNSSReceiverMosaicSerial gnss_receiver;
+#elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    TR_GNSSReceiverSdrSerial gnss_receiver;
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    TR_GNSSReceiverPX1105RSerial gnss_receiver;
+#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+    TR_GNSSAuto gnss_receiver;
 #else
     TR_GNSSReceiverUBloxSerial gnss_receiver;
 #endif
@@ -494,12 +705,23 @@ public:
     };
     void getIsm6FifoStats(Ism6FifoStats &out) const;
 
+    // The IMU's die temperature (IMU_TEMP_MSG), read by the poll task once a
+    // second between drains: the latest reading not yet taken.
+    bool getIsm6Temperature(Ism6TempData &data_out);
+
 private:
 
     SemaphoreHandle_t bmp585DataSemaphore;
     SemaphoreHandle_t mmc5983maDataSemaphore;
     SemaphoreHandle_t iis2mdcDataSemaphore;
     SemaphoreHandle_t gnssDataSemaphore;
+
+    // The IMU's die temperature: the poll task reads it once a second (the
+    // only task on SPI2, #475) and leaves it here; getIsm6Temperature takes it.
+    SemaphoreHandle_t ism6TempSemaphore = nullptr;
+    Ism6TempData  ism6_temp_data = {};
+    volatile bool ism6_temp_ready = false;
+    uint32_t      ism6_temp_next_us = 0;     // the next read, poll task only (wrap-safe compare)
 
     // Time-gated polling state for IIS2MDC (no DRDY pin in the poll path).
     // #1111: attempt gate + stall back-off; see iis2mdc_poll_gate.h.
@@ -519,6 +741,18 @@ private:
 
     uint32_t ism6hg256_update_period;
     uint32_t mmc_last_sample_time_us;
+    // configureAxisSigns(): the per-axis signs, and whether any is -1
+    int8_t ism6_sign_[3] = {1, 1, 1};
+    int8_t mmc_sign_[3]  = {1, 1, 1};
+    bool   ism6_signed_ = false;
+    bool   mmc_signed_  = false;
+    // An MMC5983MA whose INT pad reaches no GPIO (the Tinker-Beetle V2): the
+    // poll task asks the part's status register instead, twice a sample period
+    // (begin() sets these)
+    bool     mmc_int_wired_      = true;
+    uint32_t mmc_poll_period_us_ = 0;
+    uint32_t mmc_next_poll_us_   = 0;
+    volatile uint32_t mmc5983ma_status_polls_ = 0;
     uint32_t mmc_last_recover_time_us;
     uint32_t mmc_stall_threshold_us;
     uint32_t mmc_recover_cooldown_us;

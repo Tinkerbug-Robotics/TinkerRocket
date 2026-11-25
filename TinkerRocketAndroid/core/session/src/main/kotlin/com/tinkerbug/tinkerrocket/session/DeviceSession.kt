@@ -1,5 +1,7 @@
 package com.tinkerbug.tinkerrocket.session
 
+import com.tinkerbug.tinkerrocket.protocol.AccelCalStatus
+import com.tinkerbug.tinkerrocket.protocol.AntennaOffset
 import com.tinkerbug.tinkerrocket.protocol.BaseStationStorageStats
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
@@ -17,11 +19,13 @@ import com.tinkerbug.tinkerrocket.protocol.GuidanceTargetEcho
 import com.tinkerbug.tinkerrocket.protocol.IMUOrientationMode
 import com.tinkerbug.tinkerrocket.protocol.ImuOrientMsg
 import com.tinkerbug.tinkerrocket.protocol.MagCalStatus
+import com.tinkerbug.tinkerrocket.protocol.MagCalSubType
 import com.tinkerbug.tinkerrocket.protocol.OtaStatusUpdate
 import com.tinkerbug.tinkerrocket.protocol.PadCalStatus
 import com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig
 import com.tinkerbug.tinkerrocket.protocol.RocketConfig
 import com.tinkerbug.tinkerrocket.protocol.RocketStorageStats
+import com.tinkerbug.tinkerrocket.protocol.SdrAlignStatus
 import com.tinkerbug.tinkerrocket.protocol.SensorCalStatus
 import com.tinkerbug.tinkerrocket.protocol.TelemetryCharMessage
 import com.tinkerbug.tinkerrocket.protocol.TelemetryData
@@ -47,6 +51,7 @@ import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.time.ZoneOffset
@@ -136,6 +141,12 @@ public class DeviceSession(
      * this session does NOT push to [knownDevices] itself — the fleet does.
      */
     private val onIdentity: ((ConfigIdentityMsg, DeviceIdentityPusher) -> Unit)? = null,
+    /**
+     * The rockets the user hid from the dashboard (iOS
+     * `fleet?.hiddenRocketKeys`): voice follows the computer on screen
+     * ([VoiceRocketPolicy]). Wire to [FleetManager.hiddenRocketKeys].
+     */
+    private val hiddenRockets: (() -> Set<RocketKey>)? = null,
 ) : DeviceIdentityPusher {
 
     // ── Connection / link state ──────────────────────────────────────────
@@ -145,10 +156,34 @@ public class DeviceSession(
      * DIRECT, not via the [telemetry] StateFlow: a StateFlow dedups equal
      * frames, and burnout detection counts *consecutive unchanged* max-speed
      * frames — conflation would eat exactly the frames it counts. Relay path
-     * feeds only the FOCUSED rocket (#390 — two interleaved flights' callouts
-     * are noise). The app attaches/detaches this on the fleet dispatcher.
+     * feeds one rocket (#390 — two interleaved flights' callouts are noise):
+     * the one on screen, usually the focused one ([voiceRocketId]). The app
+     * attaches/detaches this on the fleet dispatcher, on the foreground base
+     * station only ([FleetManager.voiceDevice]).
      */
     public var telemetryAnnouncer: TelemetryAnnouncer? = null
+        set(value) {
+            // routeDeviceBindings re-assigns the same announcer on every
+            // pass; only a different one starts with no stream.
+            if (value !== field) voiceStreamRocketId = null
+            field = value
+        }
+
+    /**
+     * The relayed rocket whose frames the announcer was last handed (iOS
+     * `voiceStreamRocketID`). A change is a hand-over
+     * ([TelemetryAnnouncer.followStream]).
+     */
+    public var voiceStreamRocketId: Int? = null
+        private set
+
+    private val _voiceRocketId = MutableStateFlow<Int?>(null)
+    /**
+     * The relayed rocket the callouts follow, as of the last relayed frame:
+     * the computer the dashboard is showing ([VoiceRocketPolicy]; iOS
+     * `BLEDevice.voiceRocketID`). The units bar and section headers mark it.
+     */
+    public val voiceRocketId: StateFlow<Int?> = _voiceRocketId.asStateFlow()
 
     private val _isConnected = MutableStateFlow(false)
     public val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -239,6 +274,18 @@ public class DeviceSession(
     public val imuOrientationMode: StateFlow<IMUOrientationMode> = _imuOrientationMode.asStateFlow()
 
     /**
+     * #1629: the mounting code in the newest "imu_orient" message (0..23; in
+     * auto-exact the nearest code, not the rotation in use).  The rocket's own
+     * link leaves "imo" out of telemetry, so the six-face screen's live hint
+     * turns lx/ly/lz back with this ([accelLiveFace]).  Null until a message
+     * carries one, and wiped on disconnect — unlike the name and mode above —
+     * so a hint never runs on an earlier link's mounting (iOS
+     * imuOrientationCode).
+     */
+    private val _imuOrientationCode = MutableStateFlow<Int?>(null)
+    public val imuOrientationCode: StateFlow<Int?> = _imuOrientationCode.asStateFlow()
+
+    /**
      * iOS `contTestPendingUntil` twin: per-channel deadline (session-clock
      * millis) while a manual continuity test round-trips BLE→OC→I2C→FC and
      * back through telemetry "ps" bits (#411).  Displays show TESTING
@@ -248,6 +295,14 @@ public class DeviceSession(
      */
     private val _contTestPendingUntil = MutableStateFlow<Map<Int, Long>>(emptyMap())
     public val contTestPendingUntil: StateFlow<Map<Int, Long>> = _contTestPendingUntil.asStateFlow()
+
+    /**
+     * The last rail-off pyro refusal (0xCE) the out computer sent, stamped on
+     * arrival so two refusals of one channel are still two events (iOS
+     * `pyroTestRefusal`). The test-fire screen aborts on a cmd-36 one.
+     */
+    private val _pyroTestRefusal = MutableStateFlow<PyroTestRefusal?>(null)
+    public val pyroTestRefusal: StateFlow<PyroTestRefusal?> = _pyroTestRefusal.asStateFlow()
 
     // ── Files / downloads ────────────────────────────────────────────────
 
@@ -300,6 +355,73 @@ public class DeviceSession(
      */
     private val _padCalStatus = MutableStateFlow<PadCalStatus?>(null)
     public val padCalStatus: StateFlow<PadCalStatus?> = _padCalStatus.asStateFlow()
+
+    /**
+     * The latest six-face accelerometer calibration status (0xD1, #1629);
+     * null until one arrives on this connection.  The flight computer sends
+     * it only when asked (commands 76/77/78) and when a face window closes,
+     * so null says nothing has asked yet, not that the rocket lacks it.
+     * Every frame carries the stored offset, so this is also what the screen
+     * shows as stored.
+     */
+    private val _accelCalStatus = MutableStateFlow<AccelCalStatus?>(null)
+    public val accelCalStatus: StateFlow<AccelCalStatus?> = _accelCalStatus.asStateFlow()
+
+    /**
+     * #1629: what THIS board holds for calibration, read from the board on
+     * connect ([requestCalibrationStatus]) and kept current by the status
+     * frames the flight computer republishes after every calibration it
+     * stores.  Fields stay null until the board answers.  Folded into the
+     * registry ([KnownDeviceStore.deviceDidReportCalibration]) so My Devices
+     * and a relayed rocket's section can say it too.
+     */
+    private val _calibration = MutableStateFlow(BoardCalibration())
+    public val calibration: StateFlow<BoardCalibration> = _calibration.asStateFlow()
+
+    /**
+     * Until when an IDLE mag-cal frame answers OUR read.  The calibrator also
+     * sends IDLE when a calibration session ends, which says nothing about
+     * what is stored, so an IDLE counts as "no magnetometer calibration" only
+     * inside this window.  Session dispatcher only.
+     */
+    private var magCalReadUntilMs = 0L
+    private var calibrationRequested = false
+    private var lastRailOn = false
+
+    /**
+     * Every 0xD1 frame as it arrives.  Two refusals are byte-identical and a
+     * read-back can equal the save's own answer, so a StateFlow would swallow
+     * exactly the frames the round trips below wait for ([sensorCalFrames]
+     * exists for the same reason).
+     */
+    private val _accelCalFrames = MutableSharedFlow<AccelCalStatus>(extraBufferCapacity = 16)
+    public val accelCalFrames: SharedFlow<AccelCalStatus> = _accelCalFrames.asSharedFlow()
+
+    /**
+     * The gnss-sdr-dev board's IMU mounting, as the flight computer relays
+     * the board's report (0xD2): once a second on the ground with the board
+     * on J1 and at each change.  Null until the first frame — none comes from
+     * a rocket without the board.  iOS BLEDevice.sdrAlignStatus.
+     */
+    private val _sdrAlignStatus = MutableStateFlow<SdrAlignStatus?>(null)
+    public val sdrAlignStatus: StateFlow<SdrAlignStatus?> = _sdrAlignStatus.asStateFlow()
+
+    /** Every 0xD2 frame, in order: the six-face screen matches its command's answer in them ([BoardAlign.Flow.take]). */
+    private val _sdrAlignFrames = MutableSharedFlow<SdrAlignStatus>(extraBufferCapacity = 16)
+    public val sdrAlignFrames: SharedFlow<SdrAlignStatus> = _sdrAlignFrames.asSharedFlow()
+
+    /**
+     * #1629: which face the board is on now, from the newest telemetry frame
+     * — iOS BLEDevice.accelLiveFace.  Its lx/ly/lz turned back through the
+     * mounting they are in: the frame's own "imo" (the base station's relay
+     * carries it), else the "imu_orient" message's code (the rocket's own
+     * link).  Waiting while not connected: the telemetry mirror outlives the
+     * link, and a hint must not.
+     */
+    public val accelLiveFace: Flow<AccelSixFace.LiveFace> =
+        combine(telemetry, imuOrientationCode, imuOrientationMode, isConnected) { t, code, mode, connected ->
+            if (connected) AccelSixFace.liveFace(t, code, mode) else AccelSixFace.LiveFace.Waiting
+        }.distinctUntilChanged()
 
     private val _rocketStorage = MutableStateFlow<RocketStorageStats?>(null)
     public val rocketStorage: StateFlow<RocketStorageStats?> = _rocketStorage.asStateFlow()
@@ -544,7 +666,8 @@ public class DeviceSession(
     /**
      * Wipe exactly what iOS `onDisconnect()` wipes.  NOT wiped (also exactly
      * like iOS): telemetry mirror, identity, remote-rocket roster, scan
-     * results, storage stats, otaStatus, IMU orientation, focus pin.
+     * results, storage stats, otaStatus, IMU orientation name and mode (its
+     * #1629 code is wiped), focus pin.
      */
     private fun onDisconnect() {
         _isConnected.value = false
@@ -571,6 +694,16 @@ public class DeviceSession(
         // over 21, and the rocket on the next connection may have been
         // reflashed.  iOS gets the same from a BLEDevice per connection.
         _padCalStatus.value = null
+        // #1629: the stored offset belongs to the board on THIS link; the
+        // next connection may be another board, or this one reflashed.  So
+        // does the mounting code the live face hint turns lx/ly/lz with.
+        _accelCalStatus.value = null
+        _sdrAlignStatus.value = null
+        _calibration.value = BoardCalibration()
+        magCalReadUntilMs = 0L
+        calibrationRequested = false
+        lastRailOn = false
+        _imuOrientationCode.value = null
         // #435: per-connection live state — a stale echo could "confirm" a
         // send made over a new connection to a rebooted FC.
         _guidanceEcho.value = null
@@ -637,6 +770,10 @@ public class DeviceSession(
                 _rocketConfig.value = (_rocketConfig.value ?: RocketConfig())
                     .copy(guidanceExtras = e)
             }
+            is TelemetryCharMessage.ConfigTilt -> msg.tilt?.let { t ->
+                _rocketConfig.value = (_rocketConfig.value ?: RocketConfig())
+                    .copy(guidanceTilt = t)
+            }
             is TelemetryCharMessage.ConfigRoll -> msg.waypoints?.let { w ->
                 _rocketConfig.value = (_rocketConfig.value ?: RocketConfig())
                     .copy(rollWaypoints = w)
@@ -647,10 +784,14 @@ public class DeviceSession(
                 // is folded in only when present, so an OC that predates them
                 // leaves the previous value alone rather than clearing it.
                 val cur = _identity.value
+                // The receiver: "" (none came up) clears it, which the board
+                // revisions never do; an OC without the key leaves it alone.
+                val gnss = msg.msg.fcGnss
                 _identity.value = cur.copy(
                     fcFirmwareVersion = msg.msg.fcFirmwareVersion ?: cur.fcFirmwareVersion,
                     fcBoardRev = msg.msg.fcBoardRev ?: cur.fcBoardRev,
                     ocBoardRev = msg.msg.ocBoardRev ?: cur.ocBoardRev,
+                    fcGnss = if (gnss != null) gnss.ifEmpty { null } else cur.fcGnss,
                 )
             }
             is TelemetryCharMessage.ImuOrient -> onImuOrient(msg.msg)
@@ -699,8 +840,13 @@ public class DeviceSession(
             // RemoteRocket.updateTelemetry; the two must not diverge.
             val heardNow = data.dataStatus == TelemetryData.DataStatus.LIVE
             val existing = remoteMap[rid]
+            // This rocket's previous frame: the edge reference if voice hands
+            // over to it on this one.
+            val priorFrame = existing?.telemetry
             remoteMap[rid] = if (existing != null) {
-                existing.copy(
+                // #1650: the relayed name feeds the two-rockets-under-one-ID
+                // check before the copy (iOS RemoteRocket.updateTelemetry).
+                existing.noteRelayedName(data.sourceUnitName, now).copy(
                     telemetry = data,
                     // iOS RemoteRocket.updateTelemetry guards !name.isEmpty —
                     // an empty relayed name never clobbers a learned one.
@@ -748,11 +894,20 @@ public class DeviceSession(
                 // Mirror the latched fix only when non-null — a GPS-less
                 // packet must not blank the marker (#140).
                 if (fix != null) _lastValidRocketFix.value = fix
-                // The relayed JSON carries the full rocket state. Without
-                // this, voice callouts only fire when paired directly to the
-                // rocket, never during a real flight (#138). Focused rocket
-                // only (#390).
-                telemetryAnnouncer?.processTelemetry(data)
+            }
+            // The relayed JSON carries the full rocket state. Without this,
+            // voice callouts only fire when paired directly to the rocket,
+            // never during a real flight (#138). One rocket only (#390), and
+            // that rocket is the one on screen, which is usually but not
+            // always the focused one (VoiceRocketPolicy).
+            val voice = chooseVoiceRocket(now)
+            _voiceRocketId.value = voice
+            val announcer = telemetryAnnouncer
+            if (announcer != null && rid == voice) {
+                val following = voiceStreamRocketId
+                if (following != null && following != rid) announcer.followStream(priorFrame)
+                voiceStreamRocketId = rid
+                announcer.processTelemetry(data)
             }
             // #1061: the sim latch has to see RELAYED frames too. It sat
             // below the `return` above, so on a base-station link it never
@@ -769,6 +924,14 @@ public class DeviceSession(
         // #159: the rocket finished flushing and powered on — drop the busy
         // state (guarded inside clearPoweringOn via StateFlow dedup).
         if (data.pwrPinOn && _poweringOn.value) clearPoweringOnNow()
+        // #1629: the flight computer answers the calibration reads; with its
+        // rail off at connect they may never have reached it.  Ask again when
+        // it comes up, if anything is still unanswered.
+        if (data.pwrPinOn && !lastRailOn && calibrationRequested) {
+            val c = _calibration.value
+            if (c.mag == null || c.accel == null || c.gyro == null) requestCalibrationStatus()
+        }
+        lastRailOn = data.pwrPinOn
         // #140 direct path: record + mirror using this device's own identity.
         // Skip when rocketId is unset so a BS-self packet (no source rocket
         // id, falls through to here) can't blank a relay-mirrored fix.
@@ -778,9 +941,12 @@ public class DeviceSession(
             onRocketFix?.invoke(data, RocketKey(id.networkId ?: 0, ownRid))
                 ?.let { _lastValidRocketFix.value = it }
         }
-        // Direct-rocket and BS-self frames both dispatch to voice from here
-        // (iOS parseTelemetryData's fall-through path).
-        telemetryAnnouncer?.processTelemetry(data)
+        // BS-self frames dispatch to voice from here (iOS parseTelemetryData's
+        // fall-through path). Direct-rocket frames never do: voice is
+        // base-station only, because a direct link leaves range at launch.
+        // The fleet never routes the announcer to a rocket link; this guard
+        // keeps one that holds it anyway from speaking.
+        if (isBaseStation) telemetryAnnouncer?.processTelemetry(data)
         recomputeEffective()
     }
 
@@ -799,6 +965,12 @@ public class DeviceSession(
         )
         _identity.value = next
         recomputeEffective()
+        // #1629: a rocket's calibration is read once its role is known — a
+        // base station has no sensors to calibrate and no handler for these.
+        if (!calibrationRequested && next.deviceType == BleDeviceType.ROCKET) {
+            calibrationRequested = true
+            requestCalibrationStatus()
+        }
         // #1041: hand the readback to the fleet, which updates ITS record (the
         // one voice routing and the foreground-BS pick read — frozen at the
         // connect-time guess before this) and folds into the registry. Only a
@@ -823,6 +995,7 @@ public class DeviceSession(
     private fun onImuOrient(msg: ImuOrientMsg) {
         msg.name?.let { _imuOrientationName.value = it }
         msg.mode?.let { _imuOrientationMode.value = it }
+        msg.code?.let { _imuOrientationCode.value = it }
         // iOS caches "set" into rocketConfig ONLY when a config already
         // exists (`if let set..., var cfg = rocketConfig`).
         val setting = msg.setting
@@ -847,22 +1020,36 @@ public class DeviceSession(
             is FileOpsMessage.MagCal -> {
                 _magCalStatus.value = msg.status
                 _magCalFrames.tryEmit(msg.status)
+                noteMagCalStatus(msg.status)
             }
             is FileOpsMessage.SensorCal -> {
                 _sensorCalStatus.value = msg.status
                 _sensorCalFrames.tryEmit(msg.status)
+                foldCalibration(BoardCalibration(gyro = msg.status.valid))
             }
             is FileOpsMessage.PadCal -> _padCalStatus.value = msg.status
+            is FileOpsMessage.AccelCal -> {
+                _accelCalStatus.value = msg.status
+                _accelCalFrames.tryEmit(msg.status)
+                foldCalibration(
+                    BoardCalibration(accel = msg.status.stored, highGAligned = msg.status.highG?.stored),
+                )
+            }
+            is FileOpsMessage.SdrAlign -> {
+                _sdrAlignStatus.value = msg.status
+                _sdrAlignFrames.tryEmit(msg.status)
+            }
             is FileOpsMessage.RocketStorage -> _rocketStorage.value = msg.stats
             is FileOpsMessage.BsStorage -> _bsStorage.value = msg.stats
             is FileOpsMessage.PyroRefusal -> {
                 // Rail-off refusal: no reading is coming back, so close the
                 // TESTING window instead of letting the spinner run out its
-                // 2.5 s implying a round trip happened.  (No test-fire UI on
-                // Android yet — cmd-36 refusals have nothing to clear.)
+                // 2.5 s implying a round trip happened.  A cmd-36 refusal is
+                // for the test-fire screen, which aborts on it.
                 if (msg.cmd == 35) {
                     _contTestPendingUntil.value = _contTestPendingUntil.value - msg.channel
                 }
+                _pyroTestRefusal.value = PyroTestRefusal(msg.cmd, msg.channel, msg.reason, clock())
             }
             is FileOpsMessage.Ota -> _otaStatus.value = msg.status
             is FileOpsMessage.FileList -> {
@@ -955,10 +1142,15 @@ public class DeviceSession(
      *    offset is CHECKED (#854, following iOS #832): on a data chunk it is
      *    the position that data belongs at, so a gap fails the download
      *    instead of splicing; on the EOF chunk it carries the device's own
-     *    bytes_sent, which is checked against what arrived.  The shortfall
-     *    check against the listing size now guards BOTH the EOF and stall
-     *    paths — it used to guard only the stall path, so the common path
-     *    returned Success with whatever had turned up;
+     *    bytes_sent, which is checked against what arrived;
+     *  - short against the listing size: on the stall path that is
+     *    [DownloadResult.Incomplete]; on the EOF path (every chunk contiguous,
+     *    the EOF's byte count equal to what arrived) the device sent exactly
+     *    these bytes and called the file complete, so it is a
+     *    [DownloadResult.Success] whose [DownloadResult.Success.listedSize]
+     *    says how many the listing promised — out-computer firmware before
+     *    the byte-exact stream left out stored bytes outside whole log frames
+     *    (iOS completeDownload, same rule);
      *  - `flags & 0x01` = EOF, `flags & 0x02` = ABORT.  EOF|ABORT (#526)
      *    fails the download outright — the bytes are a truncated fragment;
      *  - every non-EOF chunk re-arms a 3 s stall timer.  On stall: shortfall
@@ -1071,14 +1263,26 @@ public class DeviceSession(
 
     private fun completeDownload(d: ActiveDownload, fromStallTimer: Boolean) {
         cancelStallTimer()
-        // #854/#832: this was gated on fromStallTimer, so the EOF path — the
-        // common one — returned Success with whatever had arrived. The
-        // listing's size is just as authoritative on either path.
-        if (d.expectedSize > 0 && d.buffer.size() < d.expectedSize) {
+        // #854/#832: short against the listing. Who ended the transfer
+        // decides it. The stall timer: the device went quiet and we cannot
+        // know what it meant to send — Incomplete. The device's own EOF:
+        // onFileChunk only gets here when every chunk was contiguous and the
+        // EOF's byte count equals what arrived, so the device sent exactly
+        // these bytes and called the file complete. Out-computer firmware
+        // before the byte-exact stream (tr_ble::nextSegment) left out stored
+        // bytes outside whole log frames — the V5 nose cone's 2026-10-24
+        // flight listed 6,901,811 B and sent 6,901,781 — and failing here threw
+        // the whole flight away over 30 bytes. Keep it; Success carries the
+        // listed size so the caller can say so.
+        if (d.expectedSize > 0 && d.buffer.size() < d.expectedSize && fromStallTimer) {
             finishDownload(d, DownloadResult.Incomplete, finalProgress = null)
             return
         }
-        finishDownload(d, DownloadResult.Success(d.buffer.toByteArray()), finalProgress = 1.0)
+        finishDownload(
+            d,
+            DownloadResult.Success(d.buffer.toByteArray(), listedSize = d.expectedSize),
+            finalProgress = 1.0,
+        )
     }
 
     private fun finishDownload(d: ActiveDownload, result: DownloadResult, finalProgress: Double?) {
@@ -1206,6 +1410,29 @@ public class DeviceSession(
         // #1040: the fleet's sticky map first, then the wire — iOS order.
         onUserFocus?.invoke(rocketId)
         sessionScope.launch { writeCommand(Commands.setFocusRocket(rocketId)) }
+    }
+
+    /** [VoiceRocketPolicy] over this link's roster, focus and the fleet's hidden set. */
+    private fun chooseVoiceRocket(now: Long): Int? {
+        val hidden = hiddenRockets?.invoke() ?: emptySet()
+        val nid = _identity.value.networkId ?: 0
+        val focus = _focusRocketId.value
+        return VoiceRocketPolicy.choose(
+            focus = focus,
+            focusHidden = focus != null && RocketKey(nid, focus) in hidden,
+            focusPinFresh = now < (focusPinGraceUntilMs ?: Long.MIN_VALUE),
+            current = voiceStreamRocketId,
+            rockets = remoteMap.values.map { r ->
+                VoiceRocketPolicy.Candidate(
+                    rocketId = r.rocketId,
+                    hidden = RocketKey(nid, r.rocketId) in hidden,
+                    silentForMs = now - r.lastSeenMs,
+                    state = r.telemetry.state,
+                    landed = r.telemetry.landedFlag,
+                    simulated = r.telemetry.simActive,
+                )
+            },
+        )
     }
 
     /**
@@ -1400,19 +1627,151 @@ public class DeviceSession(
     public fun requestConfig(): Unit = sendBareCommand(BleCommandId.REQUEST_CONFIG)
 
     /**
-     * Manual pyro continuity test — cmd 35, `[channel 1..4]` (direct rocket
-     * links only; the pyro card never renders on BS links).  Opens the
+     * #1629: ask the flight computer what it holds — the magnetometer (61),
+     * the gyro and high-g bias (63) and the six-face offset and high-g
+     * alignment (77).  All three only read storage and republish it.  Sent on
+     * connect, again when the rail comes up with answers missing, and by the
+     * calibration screens when they close.  Rocket links only.
+     */
+    public fun requestCalibrationStatus() {
+        sessionScope.launch {
+            if (isBaseStation) return@launch
+            magCalReadUntilMs = clock() + CAL_READ_WINDOW_MS
+            writeCommand(Commands.bare(BleCommandId.MAG_CAL_READ_OC))
+            writeCommand(Commands.bare(BleCommandId.SENSOR_CAL_READ_OC))
+            writeCommand(Commands.bare(BleCommandId.ACC_CAL_READ))
+        }
+    }
+
+    /**
+     * APPLIED always means a calibration is stored (a read's answer, or a
+     * calibration just accepted).  IDLE means none only as the answer to a
+     * read; anything else (a session sampling, in review, aborted) says
+     * nothing about storage.
+     */
+    private fun noteMagCalStatus(status: MagCalStatus) {
+        when (status.subType) {
+            MagCalSubType.APPLIED -> foldCalibration(BoardCalibration(mag = true))
+            MagCalSubType.IDLE -> if (clock() <= magCalReadUntilMs) {
+                magCalReadUntilMs = 0L
+                foldCalibration(BoardCalibration(mag = false))
+            }
+            else -> Unit
+        }
+    }
+
+    private fun foldCalibration(reading: BoardCalibration) {
+        val stamped = reading.copy(readAtMs = clock())
+        _calibration.value = _calibration.value.merged(stamped)
+        knownDevices?.deviceDidReportCalibration(_identity.value.unitId, stamped)
+    }
+
+    /**
+     * Manual pyro continuity test — cmd 35, `[channel 1..4]`.  Opens the
      * per-channel TESTING window; the result arrives implicitly in later
-     * telemetry frames' "ps" bits — no dedicated reply, timeout, or failure
-     * state on the wire.
+     * telemetry frames' "ps" bits (or, over LoRa, the scorecard's measured
+     * bits) — no dedicated reply, timeout, or failure state on the wire.
+     *
+     * #1650: on a base-station link this is the stand-back test (iOS
+     * `sendPyroContTest`): relayed in the cmd-50 envelope to the FOCUSED
+     * rocket. Never broadcast — a pyro command must name its rocket — and
+     * refused, with no TESTING window, when that rocket ID looks like two
+     * rockets: both would act on it.
      */
     public fun sendPyroContTest(channel: Int) {
         sessionScope.launch {
+            val frame = if (isBaseStation) {
+                val rid = _focusRocketId.value ?: return@launch
+                if (isDuplicateIdSuspected(rid)) return@launch
+                Commands.relayToRocket(rid, Commands.pyroContTest(channel))
+            } else {
+                Commands.pyroContTest(channel)
+            }
+            val window = if (isBaseStation) CONT_TEST_PENDING_WINDOW_RELAY_MS
+            else CONT_TEST_PENDING_WINDOW_MS
             _contTestPendingUntil.value = _contTestPendingUntil.value +
-                (channel to clock() + CONT_TEST_PENDING_WINDOW_MS)
-            writeCommand(Commands.pyroContTest(channel))
+                (channel to clock() + window)
+            writeCommand(frame)
         }
     }
+
+    /**
+     * True when a pyro command sent right now will actually go out (iOS
+     * `pyroCommandPathReady`). Direct link: connected. Base-station link:
+     * connected AND a focused rocket heard live within
+     * [RELAY_STALE_THRESHOLD_MS] — a base station that has not heard the
+     * rocket would queue a blind uplink into silence (no ACK, #285) — AND that
+     * rocket ID not shared by two rockets.
+     *
+     * Computed from the relayed rocket's own last-heard clock at call time,
+     * not from [focusedRelayAgeMs], which only refreshes on the 2 s tick.
+     */
+    public fun pyroCommandPathReady(nowMs: Long = clock()): Boolean {
+        if (!_isConnected.value) return false
+        if (!isBaseStation) return true
+        val focus = _focusRocketId.value ?: return false
+        val remote = _remoteRockets.value.firstOrNull { it.rocketId == focus } ?: return false
+        if (remote.duplicateIdSuspected(nowMs)) return false
+        return nowMs - remote.lastSeenMs <= RELAY_STALE_THRESHOLD_MS
+    }
+
+    /**
+     * Test fire — cmd 36 `[channel]` (iOS `sendPyroFire`). On a base-station
+     * link this is the stand-back fire: the cmd-50 envelope to the FOCUSED
+     * rocket, never broadcast, and nothing at all when that rocket ID looks
+     * shared, since both rockets would fire. The LoRa uplink is blind (#285):
+     * delivery is confirmed by the operator's eyes and the post-fire
+     * continuity re-test, not by an ACK. [PyroTestFire] is the only caller,
+     * and it checks [pyroCommandPathReady] first.
+     */
+    public fun sendPyroFire(channel: Int) {
+        sessionScope.launch {
+            val frame = if (isBaseStation) {
+                val rid = _focusRocketId.value ?: return@launch
+                if (isDuplicateIdSuspected(rid)) return@launch
+                Commands.relayToRocket(rid, Commands.pyroFire(channel))
+            } else {
+                Commands.pyroFire(channel)
+            }
+            writeCommand(frame)
+        }
+    }
+
+    /**
+     * Rocket logging around a test fire (iOS `setRocketLoggingForTest`):
+     * the desired-state cmd 23, relayed to the focused rocket on a
+     * base-station link. Never the bare toggle, which flips whatever the
+     * rocket is doing, so a stop could start a fresh log (#1089).
+     */
+    public fun setRocketLoggingForTest(on: Boolean) {
+        sessionScope.launch {
+            val inner = Commands.toggleLoggingWithState(on)
+            if (isBaseStation) {
+                val rid = _focusRocketId.value ?: return@launch
+                writeCommand(Commands.relayToRocket(rid, inner))
+            } else {
+                writeCommand(inner)
+            }
+        }
+    }
+
+    /**
+     * The followed rocket's ID looks shared by two rockets (iOS
+     * `focusedRocketIDShared`): the test-fire screen's FIRE stays disabled.
+     */
+    public fun focusedRocketIdShared(nowMs: Long = clock()): Boolean {
+        if (!isBaseStation) return false
+        val focus = _focusRocketId.value ?: return false
+        return isDuplicateIdSuspected(focus, nowMs)
+    }
+
+    /**
+     * True while this base station hears [rocketId] as what looks like two
+     * rockets (iOS `isDuplicateIDSuspected(rocketID:)`).
+     */
+    public fun isDuplicateIdSuspected(rocketId: Int, nowMs: Long = clock()): Boolean =
+        _remoteRockets.value.firstOrNull { it.rocketId == rocketId }
+            ?.duplicateIdSuspected(nowMs) ?: false
 
     /** True while [channel]'s TESTING window is open. */
     public fun contTestPending(channel: Int): Boolean =
@@ -1507,6 +1866,22 @@ public class DeviceSession(
                 pyro4TriggerMode = channels[3].mode,
                 pyro4TriggerValue = channels[3].value,
             )
+        }
+    }
+
+    /**
+     * Mirror a cmd-81 antenna offset into the cached readback — iOS
+     * `sendAntennaOffsetConfig`.  Only over a readback that already carries
+     * the setting: firmware without it ignores the command, and the settings
+     * screen must keep saying so rather than show a value nobody stored.
+     * It is what was sent, not what the flight computer reported, so the
+     * screen says "not reported yet" until the next readback says "fc".
+     */
+    public fun mirrorAntennaOffset(offset: AntennaOffset) {
+        sessionScope.launch {
+            val cfg = _rocketConfig.value ?: return@launch
+            if (cfg.antennaOffset == null) return@launch
+            _rocketConfig.value = cfg.copy(antennaOffset = offset, antennaOffsetFromFlightComputer = false)
         }
     }
 
@@ -1650,6 +2025,121 @@ public class DeviceSession(
         return flow.verdict
     }
 
+    // ── #1629: the six-face accelerometer calibration ────────────────────
+    //
+    // Four round trips over one frame kind, 0xD1 (the fourth, 80, the
+    // high-g's alignment).  Callable from any
+    // dispatcher, as ActiveRocketSyncer.runPadCalibration is: they only
+    // collect [accelCalFrames] and queue their write on the session's own
+    // dispatcher, subscribed before it goes out so a fast answer cannot slip
+    // past.  The flight computer's answers carry no request id, so the screen
+    // runs one at a time; overlapping them would make the attribution a guess.
+
+    /**
+     * Read the stored offset back (command 77): the first 0xD1 frame inside
+     * [timeoutMs], or null — which is also what a flight computer without
+     * the calibration gives.
+     */
+    public suspend fun readAccelCal(timeoutMs: Long = AccelSixFace.READ_TIMEOUT_MS): AccelCalStatus? =
+        awaitAccelCalFrame(Commands.bare(BleCommandId.ACC_CAL_READ), timeoutMs)
+
+    /**
+     * One face window (command 78), attributed by [AccelSixFace.Sequencer]:
+     * frames before this window's MEASURING are ignored, a FAILED with no
+     * samples in its place is a refusal, and the first DONE or FAILED after
+     * it is the result.  [onWindowOpen] runs, on the caller's dispatcher,
+     * when the MEASURING lands: the 3 s the board must be held still start
+     * then.
+     */
+    public suspend fun measureAccelFace(
+        timeoutMs: Long = AccelSixFace.FACE_TIMEOUT_MS,
+        onWindowOpen: () -> Unit = {},
+    ): AccelSixFace.Measurement {
+        if (!_isConnected.value) return AccelSixFace.Measurement.NotConnected
+        val seq = AccelSixFace.Sequencer()
+        withTimeoutOrNull(timeoutMs) {
+            _accelCalFrames
+                .onSubscription { sendCommandFrame(Commands.bare(BleCommandId.ACC_FACE_MEASURE)) }
+                .first { frame ->
+                    val wasOpen = seq.windowOpen
+                    val settled = seq.onFrame(frame) != null
+                    if (!wasOpen && seq.windowOpen) onWindowOpen()
+                    settled
+                }
+        }
+        return seq.outcome ?: AccelSixFace.Measurement.NoAnswer
+    }
+
+    /**
+     * Store and apply an offset (command 76: board frame, m/s²; all zero
+     * clears it), then read it back (77) — the script's write_offset: the
+     * answer to 76 first, for up to [applyTimeoutMs], then the 77.  A flight
+     * computer that refuses the write in flight or after landing sends
+     * nothing for it, and the read-back then shows what it kept.
+     */
+    public suspend fun applyAccelCal(
+        offsetX: Float,
+        offsetY: Float,
+        offsetZ: Float,
+        applyTimeoutMs: Long = AccelSixFace.APPLY_TIMEOUT_MS,
+        readTimeoutMs: Long = AccelSixFace.READ_TIMEOUT_MS,
+    ): AccelSixFace.Applied {
+        val answer = awaitAccelCalFrame(Commands.accelCalApply(offsetX, offsetY, offsetZ), applyTimeoutMs)
+        return AccelSixFace.Applied(answer, readAccelCal(readTimeoutMs))
+    }
+
+    /**
+     * Store or clear the high-g's alignment (command 80), then read it back
+     * (77) — the script's write_high_g, in [applyAccelCal]'s shape: the
+     * answer to 80 first, for up to [applyTimeoutMs], then the 77.  An older
+     * flight computer, or an older out computer that does not relay 80, sends
+     * nothing for it, and its read-back then carries no high-g.
+     */
+    public suspend fun applyHighGCal(
+        write: AccelSixFace.HighGWrite,
+        applyTimeoutMs: Long = AccelSixFace.APPLY_TIMEOUT_MS,
+        readTimeoutMs: Long = AccelSixFace.READ_TIMEOUT_MS,
+    ): AccelSixFace.Applied {
+        val answer = awaitAccelCalFrame(Commands.highGCalApply(write.op, write.matrix, write.bias), applyTimeoutMs)
+        return AccelSixFace.Applied(answer, readAccelCal(readTimeoutMs))
+    }
+
+    /**
+     * A save or a clear of the calibration, in iOS AccelCalFlow's order: the
+     * offset (76) and its read-back, then — when [highG] is given
+     * ([AccelSixFace.highGAfterSave] / [AccelSixFace.highGAfterClear]) — the
+     * high-g's write (80) and its read-back.  The high-g goes out whatever
+     * the offset's read-back said, as on iOS.  [onOffset] runs, on the
+     * caller's dispatcher, as soon as the offset's report is in, so the
+     * screen can show it while the high-g's is still out.
+     */
+    public suspend fun writeAccelCal(
+        isClear: Boolean,
+        sent: List<Float>,
+        highG: AccelSixFace.HighGWrite?,
+        onOffset: (AccelSixFace.WriteReport) -> Unit = {},
+    ): AccelSixFace.Written {
+        val a = applyAccelCal(sent[0], sent[1], sent[2])
+        val offset = AccelSixFace.WriteReport(isClear, sent, a.final)
+        onOffset(offset)
+        val w = highG ?: return AccelSixFace.Written(offset, null)
+        return AccelSixFace.Written(offset, AccelSixFace.HighGWriteReport(w, applyHighGCal(w).final))
+    }
+
+    /**
+     * Command 83: a save, a clear, a restart or a report of the gnss-sdr-dev
+     * board's IMU mounting, with the app's id for it. The answers come as
+     * [sdrAlignFrames], the id echoed ([BoardAlign.Flow]).
+     */
+    public fun sendSdrAlign(op: Int, id: Int): Unit = sendCommandFrame(Commands.sdrAlign(op, id))
+
+    private suspend fun awaitAccelCalFrame(frame: ByteArray, timeoutMs: Long): AccelCalStatus? {
+        if (!_isConnected.value) return null
+        return withTimeoutOrNull(timeoutMs) {
+            _accelCalFrames.onSubscription { sendCommandFrame(frame) }.first()
+        }
+    }
+
     // ── DeviceIdentityPusher (#547 registry push-through) ────────────────
 
     override fun sendSetUnitName(name: String) {
@@ -1704,6 +2194,18 @@ public class DeviceSession(
          *  round-trip allowance before displays trust "ps" bits again. */
         public const val CONT_TEST_PENDING_WINDOW_MS: Long = 2_500
 
+        /**
+         * #1629: how long an IDLE mag-cal frame counts as the answer to a read.
+         * The out computer serves queued commands about once a second, behind
+         * whatever the connect-time profile sync queued first.
+         */
+        public const val CAL_READ_WINDOW_MS: Long = 30_000
+
+        /** iOS `BLEDevice.contTestPendingWindowRelay` — the same allowance
+         *  over LoRa, where the test rides the uplink and the reading the
+         *  next downlink frames (#1650). */
+        public const val CONT_TEST_PENDING_WINDOW_RELAY_MS: Long = 8_000
+
         /** iOS asyncAfter(0.5) between the cmd-2 write and the explicit read. */
         public const val FILE_LIST_READ_DELAY_MS: Long = 500
 
@@ -1756,6 +2258,20 @@ public data class DeviceIdentity(
      */
     val fcBoardRev: String? = null,
     val ocBoardRev: String? = null,
+    /** The GNSS receiver the FC found ("u-blox", "mosaic-G5"); null for none, or not said. */
+    val fcGnss: String? = null,
+)
+
+/**
+ * A rail-off pyro refusal (0xCE, iOS `PyroTestRefusal`): [cmd] 35 continuity
+ * or 36 fire, [channel] 1..4, [reason] 1 = FC rail off; [atMs] is the
+ * session-clock arrival time.
+ */
+public data class PyroTestRefusal(
+    val cmd: Int,
+    val channel: Int,
+    val reason: Int,
+    val atMs: Long,
 )
 
 /** One rocket seen via this base-station link's LoRa relay (iOS RemoteRocket). */
@@ -1765,7 +2281,55 @@ public data class RelayedRocket(
     val telemetry: TelemetryData,
     /** Session-clock millis of the last relayed frame. */
     val lastSeenMs: Long,
-)
+    /** The last non-empty relayed name ("run"); seeded from [unitName]. */
+    val lastHeardName: String? = unitName.ifEmpty { null },
+    /** Session-clock millis of the name changes inside the alternation window. */
+    val nameChangeTimesMs: List<Long> = emptyList(),
+    /** When two name changes inside the window were last seen; null = never. */
+    val nameAlternationSeenAtMs: Long? = null,
+) {
+    /**
+     * #1650: true while this rocket ID looks like two rockets (iOS
+     * `RemoteRocket.duplicateIDSuspected`). Two rockets set to the same ID
+     * reach the base station as ONE rocket whose relayed name flips between
+     * theirs, frame by frame. The base station says so itself with "dup" when
+     * its firmware knows how; the name alternation is the app's own view of
+     * the same symptom, so an older base station still gets the warning and
+     * the pyro block.
+     */
+    public fun duplicateIdSuspected(nowMs: Long): Boolean {
+        if (telemetry.duplicateIdSuspected) return true
+        val seen = nameAlternationSeenAtMs ?: return false
+        return nowMs - seen <= NAME_ALTERNATION_HOLD_MS
+    }
+
+    /**
+     * Fold one relayed name into the alternation check. A rename is one
+     * change, so it takes two inside the window; a frame without a name
+     * (trimmed, or before the beacon) says nothing either way.
+     */
+    public fun noteRelayedName(name: String?, nowMs: Long): RelayedRocket {
+        if (name.isNullOrEmpty()) return this
+        val last = lastHeardName
+        if (last == null || last == name) return copy(lastHeardName = name)
+        val changes = (nameChangeTimesMs + nowMs)
+            .filter { nowMs - it <= NAME_ALTERNATION_WINDOW_MS }
+        return copy(
+            lastHeardName = name,
+            nameChangeTimesMs = changes,
+            nameAlternationSeenAtMs = if (changes.size >= 2) nowMs else nameAlternationSeenAtMs,
+        )
+    }
+
+    public companion object {
+        /** iOS `RemoteRocket.nameAlternationWindow`. */
+        public const val NAME_ALTERNATION_WINDOW_MS: Long = 10_000
+
+        /** iOS `nameAlternationHold`: long enough that a rocket briefly out
+         *  of range does not clear the flag between alternations. */
+        public const val NAME_ALTERNATION_HOLD_MS: Long = 30_000
+    }
+}
 
 /** Download progress mirror (iOS isDownloading/downloadingFilename/downloadProgress). */
 public data class DownloadProgress(
@@ -1779,20 +2343,34 @@ public data class DownloadProgress(
  * to a nil URL; the reasons are preserved here.
  */
 public sealed interface DownloadResult {
-    /** Assembled file bytes (EOF, or a stall with no known shortfall). */
-    public class Success(public val bytes: ByteArray) : DownloadResult {
+    /**
+     * Assembled file bytes (EOF, or a stall with no known shortfall).
+     * [listedSize] is the size the file list promised (0 = unknown). When the
+     * bytes come up short of it, the device ended the transfer itself (EOF,
+     * its byte count matching what arrived): the missing bytes are ones it did
+     * not send, not ones lost on the link — see [isShortOfListing].
+     */
+    public class Success(
+        public val bytes: ByteArray,
+        public val listedSize: Int = 0,
+    ) : DownloadResult {
+        /** Kept although short of the listing: the caller must say so. */
+        public val isShortOfListing: Boolean get() = listedSize > 0 && bytes.size < listedSize
+
         override fun equals(other: Any?): Boolean =
-            other is Success && bytes.contentEquals(other.bytes)
+            other is Success && bytes.contentEquals(other.bytes) && listedSize == other.listedSize
 
-        override fun hashCode(): Int = bytes.contentHashCode()
+        override fun hashCode(): Int = 31 * bytes.contentHashCode() + listedSize
 
-        override fun toString(): String = "Success(${bytes.size} bytes)"
+        override fun toString(): String =
+            if (isShortOfListing) "Success(${bytes.size} of $listedSize listed bytes)"
+            else "Success(${bytes.size} bytes)"
     }
 
     /** #526 EOF|ABORT — the device could not finish; nothing is kept. */
     public data object Aborted : DownloadResult
 
-    /** 3 s stall with fewer bytes than the file list promised. */
+    /** 3 s stall with fewer bytes than the file list promised, or a gap. */
     public data object Incomplete : DownloadResult
 
     /** The link dropped mid-transfer. */

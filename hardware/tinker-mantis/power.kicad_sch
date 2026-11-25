@@ -6519,7 +6519,7 @@
 		)
 		(uuid "cf87a5d9-763e-4149-87fb-c228878a2eea")
 	)
-	(text "Supercap hold-up (rework): U47 charges the cap to\n2.5 V at 100 mA, bypasses V_BUCK to +3V3 in normal\noperation, and boosts from the cap to a flat 3.3 V\nwhen V_BUCK collapses -- the rail no longer sags,\nand the 2.9 V cutoff chain is gone.  OSEL/VCHG/ICHG\nare 1% code resistors: 4.75k = 3.3 V out, 6.65k =\n2.5 V termination (bounded by VIN - 800 mV), 22.1k\n= 100 mA charge.\nHold: ~2.6-3.9 s @0.7 A (5 F, 2.5 -> 1.5-1.9 V\nfloor at that load, eta 0.9, flat 3.3 V out) --\nrides any firing event with margin.\nVBUCK_OK (100k/1M off V_BUCK) replaces CAP_ACTIVE,\nINVERTED: HIGH = buck present, LOW = riding the cap.\nEN/MODE to VIN = auto buck/boost.  Keep L7 and C141\ntight to U47 -- the SW node is hot."
+	(text "Supercap hold-up (rework): U47 charges the cap to\n2.5 V at 100 mA, bypasses V_BUCK to +3V3 in normal\noperation, and boosts from the cap to a flat 3.0 V\nwhen V_BUCK collapses -- the rail no longer sags,\nand the 2.9 V cutoff chain is gone.  OSEL/VCHG/ICHG\nare 1% code resistors: 3.09k = 3.0 V out, 6.65k =\n2.5 V termination (bounded by VIN - 800 mV), 22.1k\n= 100 mA charge.\n3.0 V not 3.3 so the cap always charges: VBYPASS is\n150 mV worst case against V_BUCK 3.465 V.\nCell: C130, 2 F. Hold-up times are in\nholdup-tps61094-rework.md.\nVBUCK_OK (100k/1M off V_BUCK) replaces CAP_ACTIVE,\nINVERTED: HIGH = buck present, LOW = riding the cap.\nEN/MODE high via D10 (V_BUCK or +3V3) = auto\nbuck/boost.  Keep L11 and C141 tight to U47 -- the\nSW node is hot."
 		(exclude_from_sim no)
 		(at 298.45 53.34 0)
 		(effects
@@ -8770,16 +8770,6 @@
 		)
 		(uuid "fc3a6418-f410-4a6b-a2a3-569357566ff7")
 	)
-	(wire
-		(pts
-			(xy 136.525 93.98) (xy 153.035 93.98)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "fd43fbc9-0c9e-4373-aec4-302861f0ecb0")
-	)
 	(global_label "VBAT_J8"
 		(shape input)
 		(at 167.005 161.925 0)
@@ -9280,30 +9270,6 @@
 					(size 1.27 1.27)
 				)
 				(justify right)
-			)
-		)
-	)
-	(global_label "V_BUCK"
-		(shape input)
-		(at 245.11 36.83 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "bb116ffb-a34f-4163-a03a-59a590b2e4ca")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 245.11 26.6481 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
 			)
 		)
 	)
@@ -11574,7 +11540,7 @@
 				)
 			)
 		)
-		(property "Description" "Supercap hold-up: bypass V_BUCK->+3V3, charge 2.6V/100mA, boost to 3.3V on loss"
+		(property "Description" "Supercap hold-up: bypass V_BUCK->+3V3, charge 2.5 V / 100 mA, boost to 3.0 V on loss"
 			(at 240.03 52.07 0)
 			(hide yes)
 			(show_name no)
@@ -18603,7 +18569,7 @@
 				)
 			)
 		)
-		(property "Description" "OSEL: VOUT = 3.3 V"
+		(property "Description" "OSEL: VOUT = 3.0 V"
 			(at 273.05 55.88 0)
 			(hide yes)
 			(show_name no)
@@ -21152,6 +21118,288 @@
 					(reference "#PWR0114")
 					(unit 1)
 				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:D_Dual_CommonCathode_AAK")
+		(at 245.11 31.75 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "238a5d11-46f4-42a8-8f5b-3ee8d1cdb351")
+		(property "Reference" "D10"
+			(at 245.11 29.21 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "BAV170M"
+			(at 245.11 27.305 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Package_TO_SOT_SMD:SOT-883"
+			(at 245.11 31.75 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 245.11 31.75 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "U47 EN/MODE OR-gate: V_BUCK enables it, +3V3 keeps it enabled through the hold-up"
+			(at 245.11 31.75 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "BAV170M,315"
+			(at 245.11 31.75 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Nexperia"
+			(at 245.11 31.75 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "4bedac81-ba35-4eb4-8bcb-10136c0dd6f8")
+		)
+		(pin "2"
+			(uuid "77d40f4a-4456-4ffd-83dd-1ba7266cfabe")
+		)
+		(pin "3"
+			(uuid "70720fd7-10ce-43ba-914f-2052d034a07d")
+		)
+		(instances
+			(project "tinker-mantis"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "D10")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:+3V3")
+		(at 252.73 31.75 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "69928b25-8410-4e84-9953-112f1661d5a0")
+		(property "Reference" "#PWR916"
+			(at 252.73 35.56 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 252.73 27.94 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 252.73 31.75 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 252.73 31.75 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+3V3\""
+			(at 252.73 31.75 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "82b25ded-7259-43fb-979e-f445e6c02059")
+		)
+		(instances
+			(project "tinker-mantis"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "#PWR916")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:+3V3")
+		(at 153.035 93.98 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "5b604f31-efb7-4d28-a524-e93e64792e35")
+		(property "Reference" "#PWR917"
+			(at 153.035 97.79 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 153.035 90.17 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 153.035 93.98 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 153.035 93.98 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+3V3\""
+			(at 153.035 93.98 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "6be0bc65-f608-4de8-9927-eebddd07bdf9")
+		)
+		(instances
+			(project "tinker-mantis"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/4387b4db-c729-4e1d-84b2-dffd80f2e21f"
+					(reference "#PWR917")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(global_label "V_BUCK"
+		(shape input)
+		(at 237.49 31.75 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "24a19dd5-d86b-44cb-b295-db8a7a2911f5")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 237.49 31.75 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
 			)
 		)
 	)

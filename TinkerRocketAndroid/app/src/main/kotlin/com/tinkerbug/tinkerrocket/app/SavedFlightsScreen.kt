@@ -14,6 +14,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,6 +27,8 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.material3.AlertDialog
 
 /**
@@ -130,9 +133,30 @@ private fun SavedFlightRow(
     onShare: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    // #1658: a summary written before settings.board has no board; the log has it.
+    var logBoard by remember(flight.name) { mutableStateOf<String?>(null) }
+    LaunchedEffect(flight.name) {
+        val bin = flight.bin
+        if (flight.fcBoard == null && bin != null) {
+            logBoard = withContext(Dispatchers.IO) { FlightCache.boardFromLog(bin) }
+        }
+    }
+    val source = flight.source
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp)) {
-            Text(flight.displayName, style = MaterialTheme.typography.bodyLarge)
+            // #1658: the rocket beside the name, so flights from several
+            // rockets on one base station can be told apart in the list.
+            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(flight.displayName, style = MaterialTheme.typography.bodyLarge)
+                source?.rocketLabel?.let { rocket ->
+                    Text(
+                        rocket,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
             Text(
                 "${formatSize(flight.sizeBytes)} · ${formatDate(flight.lastModified)}" +
                     if (flight.hasCsv) "" else " · .bin only (not converted)",
@@ -149,6 +173,26 @@ private fun SavedFlightRow(
                 if (parts.isNotEmpty()) {
                     Text(parts.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
                 }
+            }
+            // #1658: which computer it came from. Android has no flight detail
+            // page, so iOS's Source section is folded into the card: the
+            // computer and its board, then firmware and GNSS when known.
+            val board = source?.ocBoard ?: source?.fcBoard ?: flight.fcBoard ?: logBoard
+            Text(
+                listOfNotNull(
+                    source?.unitName ?: "Unknown computer",
+                    board,
+                    source?.unitId?.let { "unit $it" },
+                ).joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            val build = listOfNotNull(
+                source?.fcFw?.let { "FC $it" },
+                source?.ocFw?.let { "OC $it" },
+                source?.fcGnss,
+            )
+            if (build.isNotEmpty()) {
+                Text(build.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
             }
             Row(
                 Modifier.fillMaxWidth().padding(top = 8.dp),

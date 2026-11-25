@@ -1,0 +1,126 @@
+# gnss-px100-18mm-hv — fabrication and assembly notes
+
+**V1, released 2026-10-23** (tag `gnss-px100-18mm-hv-v1.0.0`) and ordered as bare boards from JLC. V2 is in work
+and these notes still apply to it unchanged. Every via is filled and capped (note 3; README *Layout* item 3).
+
+**Parts changes of 2026-10-26, for the V1 builds and V2:**
+- L13 is not fitted, and C37 is 1.3 pF instead of 4 pF. L13 and L15 would ground the PX100's L5 input (pin 37) for
+  DC; README *Front end* explains why.
+- C48 is a 0 Ω jumper instead of a 1 nF capacitor, so the TCXO drives TCXO_I directly, as in SkyTraq's reference
+  (README, Y1 row).
+
+The tag's BOM still lists L13 fitted, C37 at 4 pF and C48 at 1 nF, so build from the schematic in work, not from the
+tag.
+Stencil thickness,
+the area-ratio floor and the paste-coverage convention are repo-wide in
+[`hardware/SOLDER-PASTE-CONVENTION.md`](../SOLDER-PASTE-CONVENTION.md).
+
+```
+TINKERROCKET PX100 GNSS CARRIER PROTOTYPE - FABRICATION AND ASSEMBLY NOTES
+BOARD 28.3 x 30.8 mm, 2 mm CORNER RADIUS, 4 LAYER, 1.6 mm NOMINAL.
+
+1. STACKUP: JLCPCB JLC04161H-3313, 4 LAYERS, 1.6 mm, 1 oz OUTER /
+   0.5 oz INNER. BUILD TO THIS TEMPLATE; THE RF TRACE WIDTH IS DRAWN
+   FOR IT. LAYERS: L1 PARTS + RF, L2 GND, L3 SIGNAL AND POWER, L4 GND.
+   *** 1.6 mm: THE EDGE SMA (J1) IS RATED FOR 1.2-1.6 mm BOARDS. ***
+
+2. SURFACE FINISH: ENIG (0.4 mm PITCH PX100 AND LNAs, SMALL SAW LANDS).
+
+3. VIAS: 201 THROUGH VIAS, 0.40 mm PAD / 0.30 mm DRILL, EPOXY FILLED
+   AND COPPER CAPPED (IPC-4761 TYPE VII), THEN TENTED BOTH SIDES.
+   *** ORDER FILLED-AND-CAPPED VIAS (A PAID OPTION ON 4 LAYERS AT
+   JLC). IT APPLIES TO EVERY VIA ON THE BOARD. ***
+   FIVE VIAS ARE IN U1'S EXPOSED PAD (PIN 41, THE PX100'S ONLY GROUND),
+   THE ONLY VIAS IN ANY PAD; THEIR CAPS MUST BE PLANAR AND SOLDERABLE.
+   EVERY OTHER VIA IS AT LEAST 0.09 mm FROM ANY SOLDER MASK OPENING,
+   EXCEPT ONE VDD_RF VIA 0.03 mm FROM C50'S PAD.
+
+4. RF TRACES: 0.16 mm ON F.Cu, 0.20 mm GAP TO THE GROUND POUR, OVER
+   In1.Cu GROUND: 50 OHM. DO NOT ADJUST THE WIDTHS.
+
+ASSEMBLY - STENCIL
+STENCIL FOIL 0.08 mm, FLAT. TOP STENCIL ONLY.
+*** ORDER THE FOIL AS 0.08 mm. ***
+TIGHTEST APERTURES: U3/U4 (TSNP) 0.25 mm ROUND, AREA RATIO 0.78 AT
+0.08 mm; FL7 (MURATA 1109 SAW) 0.20 x 0.25 mm, AREA RATIO 0.69 AT
+0.08 mm (0.56 AT 0.10 mm, BELOW THE 0.66 FLOOR).
+U1'S EXPOSED PAD PRINTS AS A 2 x 2 WINDOWPANE (73 %), AS DRAWN.
+
+ASSEMBLY - REFLOW
+ONE PASS, TOP SIDE ONLY.
+THE SAW FILTERS SET THE CEILING: B4327 (FL6) PEAK 250 C +0/-5;
+B8389 (FL4, FL5) 30-70 s ABOVE 220 C. THE PX100 ALLOWS 260 C PEAK,
+60-150 s ABOVE 217 C. RUN PEAK 240-245 C, 60-70 s ABOVE 220 C.
+FL6 IS MSL 2a; FL4/FL5 ARE MSL 3 AND ESD SENSITIVE (250 V HBM).
+Y1 (EPSON TCXO): FOLLOW EPSON'S REFLOW AND STORAGE LIMITS.
+
+ASSEMBLY - PLACEMENT
+- U1 (PX100, QFN-40): PIN 1 AT THE SILK DOT.
+- U3, U4: PIN 1 AT THE SILK TRIANGLE. A ROTATED PART PUTS 1.8 V ON
+  ITS RF INPUT.
+- FL7 (MURATA SAFFB1G17AA0F0A): PORT 1 IS THE MID-LEFT LAND, NEXT TO
+  THE SILK DOT; THE LAND PATTERN IS NOT SYMMETRIC.
+- Y1 (EPSON TG2520SMN): PIN 1 AT THE SILK DOT (BOTTOM LEFT). ITS LONG
+  SIDE RUNS ALONG THE BOARD'S X AXIS ON PURPOSE (ACCELERATION
+  SENSITIVITY); DO NOT ROTATE IT 90 DEGREES.
+  V1 STAND-IN: EPSON TG2016SMN 26 MHz MCGNNM (2.0 x 1.6 mm), CENTERED
+  ON THE SAME LANDS, PIN 1 AT THE DOT, LONG SIDE ALONG X. ITS
+  TERMINALS SIT ON THE PADS' INNER CORNERS (ABOUT 88 % ON THE PAD);
+  USE LESS PASTE THAN THE STENCIL PRINTS.
+  EPSON TG-5006CG-12H: ITS PIN 1 (N.C.) MUST NOT BE CONNECTED, AND
+  PAD 1 IS GROUND ON THIS BOARD. FIT IT ONLY WITH PAD 1 INSULATED
+  (NO PASTE, UV SOLDER MASK OVER THE PAD).
+- U2 IS ADP7142ARDZ-3.3 ONLY; THE ADJUSTABLE ADP7142ARDZ REGULATES AT
+  1.2 V ON THIS BOARD.
+- L13: DO NOT FIT (LEAVE THE PADS BARE). C37: 1.3 pF (MURATA
+  GJM1555C1H1R3BB01D), NOT 4 pF. A FITTED L13 GROUNDS U1 PIN 37.
+- C48 IS A 0 OHM JUMPER (0402WGF0000TCE) ON 0402 CAPACITOR PADS, NOT
+  A CAPACITOR.
+- SH1 (SHIELD FRAME), SH2 (SHIELD COVER) AND J1 (EDGE SMA) ARE NOT
+  FITTED BY THE ASSEMBLER.
+
+ASSEMBLY - HAND WORK
+- SH1 (LAIRD BMI-S-202-F FRAME): FIT BY HAND AFTER INSPECTION AND
+  FIRST POWER-UP. THE RING PADS ARE PRE-TINNED BY THE STENCIL.
+- SH2 (LAIRD BMI-S-202-C COVER): SNAP ON AFTER THE FIRST SKY TEST; IT
+  COMES OFF AGAIN FOR REWORK.
+- J1 (RF SOLUTIONS CON-SMA-EDGE-S): SLIDE ONTO THE BOARD EDGE AND
+  SOLDER THE CENTRE PIN AND ALL FOUR GROUND LEGS, TOP AND BOTTOM.
+```
+
+## Sourcing for the two V1 builds
+
+Checked 2026-10-23. LCSC stocks every part except those in the table, and four BOM lines go to in-stock equivalents
+there: C20/C21/C26 GRM1555C1H330JA01D (none in stock) to GRM1555C1H330GA01D (C162097, 2 % instead of 5 %); FL1
+DLW21SN670HQ2L (too few) to DLW21SN670SQ2L (C113043, the same 67 Ω, rated 400 mA and 250 mΩ instead of 320 mA and
+310 mΩ); the 25 V 1 µF CL05A105KA5NQNC on C40, C44, C47, C49, C50, C53, C55 and C56 (backordered) to the 16 V
+CL05A105KO5NNNC already on C27/C28 (C29266; every one of those capacitors sits on 3.3 V or less); the 10 kΩ
+0402WGF1002TCE on R12, R14 and R15 (backordered) to the RC0402FR-0710KL already on R1/R3 (C60490).
+
+Changed 2026-10-26: C37 is now Murata GJM1555C1H1R3BB01D, 1.3 pF ±0.1 pF (LCSC C161309, 17,589 in stock), replacing
+GJM1555C1H4R0BB01D (C161323). L13 is not fitted; its part, LQW15AN6N8G8ZD (C2043812), is shared with L10 and L11,
+so that line needs two per board instead of three. If the LCSC order isn't placed yet, swap the C37 line and cut the
+6.8 nH line; if the parts have already arrived, the spare inductor stays in the bag.
+
+Also changed 2026-10-26: C48 is the UNI-ROYAL 0402WGF0000TCE 0 Ω jumper (LCSC C17168, a JLC basic part). It replaces
+GRM1555C1H102JA01D (C76947), which C22–C25 still use, so that 1 nF line drops from five per board to four. Keep a
+spare or two: a 1 nF back in C48's place is the bring-up fallback.
+
+| Ref | Part | Source |
+|---|---|---|
+| U1 | SkyTraq PX100-5C-01A | SkyTraq; LCSC does not list it |
+| U2 | Analog Devices ADP7142ARDZ-3.3 | DigiKey 505-ADP7142ARDZ-3.3-ND (352 in stock) |
+| U3, U4 | Infineon BGA855N6E6327XTSA1 | DigiKey BGA855N6E6327XTSA1CT-ND (28,517 in stock) |
+| J1 | RF Solutions CON-SMA-EDGE-S | DigiKey CON-SMA-EDGE-S-ND (13,162 in stock) |
+| SH1 | Laird BMI-S-202-F frame | DigiKey 903-1051-1-ND (59,465 in stock) |
+| SH2 | Laird BMI-S-202-C cover | DigiKey 903-1014-ND (44,644 in stock) |
+| Y1 | Epson TG2520SMN 26.000000MHz MCGNNM | Not at LCSC; fit the TG2016SMN below |
+
+Y1 has two in-stock stand-ins at LCSC, both Epson and both ±0.5 ppm:
+
+- **TG2016SMN 26 MHz MCGNNM** (X1G0054410304, LCSC C7527385): the TG2520SMN's own family and data sheet, so the same
+  2.66–3.465 V supply, −40…85 °C range and acceleration data, and pin 1 may be open or grounded. It is 2.0 × 1.6 mm;
+  centered on the 2.5 × 2.0 lands, about 88 % of each terminal sits on its pad, at the pad's inner corner. Fit this one.
+- **TG-5006CG-12H** (X1G0042110003, LCSC C1998253): the TG2520SMN's size, pinout and lands, 3.0 V ±5 %, −30…85 °C,
+  no published acceleration data. Its data sheet says pin 1 (N.C.) must not be connected to anything, and this board
+  grounds pad 1, so it goes on only with pad 1 insulated.

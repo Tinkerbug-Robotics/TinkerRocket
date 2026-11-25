@@ -1,0 +1,13 @@
+{
+ "flags": 3,
+ "face_state": 2,
+ "offset_x": 0.0412000008,
+ "offset_y": -0.0273000002,
+ "offset_z": 0.0155999996,
+ "face_mean_x": -0.0830999985,
+ "face_mean_y": 0.1149,
+ "face_mean_z": 9.82129955,
+ "face_sd_x": 0.0122999996,
+ "face_sd_y": 0.0133999996,
+ "face_sd_z": 0.0144999996,
+ "face_n": 2880}

@@ -130,6 +130,18 @@ class TelemetryDataTest {
         assertNull(TelemetryData.decode("[1,2,3]"))   // non-object top level
     }
 
+    // ── Two rockets under one ID (#1650) ──────────────────────────────────
+
+    @Test
+    fun `dup decodes tolerantly and absent means clear`() {
+        assertTrue(decodeOk("""{"rid":2,"dup":1}""").duplicateIdSuspected)
+        assertFalse(decodeOk("""{"rid":2}""").duplicateIdSuspected)
+        // Tolerant like every integer key (#571).
+        assertEquals(1, decodeOk("""{"rid":2,"dup":"1"}""").duplicateId)
+        // Any nonzero value counts: it gates pyro, so the unexpected blocks.
+        assertTrue(decodeOk("""{"rid":2,"dup":3}""").duplicateIdSuspected)
+    }
+
     // ── Hop-state keys (#150) ─────────────────────────────────────────────
 
     @Test
@@ -410,6 +422,96 @@ class TelemetryDataTest {
         assertEquals(TelemetryData.FlightReadiness.READY, t.flightReadiness)
     }
 
+    // ── GNSS board IMU ("gi") ─────────────────────────────────────────────
+
+    /** "h" plus an optional "gi"; null leaves the key out, as older firmware and a v5 rocket or BS do. */
+    private fun decodeHealth(health: Int, gi: String?): TelemetryData =
+        decodeOk(if (gi == null) """{"h":$health}""" else """{"h":$health,"gi":$gi}""")
+
+    @Test
+    fun `gnss imu key decodes and absent or unknown is NA`() {
+        // A plain integer with the SensorHealth values, not a bitfield.
+        val absent = decodeHealth(1, null)
+        assertNull(absent.gnssImuState)
+        assertEquals(SH.NA, absent.gnssImuHealth)
+        assertEquals(SH.NA, decodeHealth(1, "0").gnssImuHealth)
+        assertEquals(SH.OK, decodeHealth(1, "1").gnssImuHealth)
+        assertEquals(SH.DEGRADED, decodeHealth(1, "2").gnssImuHealth)
+        assertEquals(SH.BAD, decodeHealth(1, "3").gnssImuHealth)
+        assertEquals(3, decodeHealth(1, "3").gnssImuState)
+        // Out of range reads as NA (hidden), not as a state it isn't.
+        assertEquals(SH.NA, decodeHealth(1, "4").gnssImuHealth)
+        assertEquals(SH.NA, decodeHealth(1, "-1").gnssImuHealth)
+        // #571 tolerance: a float or string on the wire still decodes, and
+        // never costs the rest of the frame.
+        assertEquals(SH.DEGRADED, decodeHealth(1, "2.0").gnssImuHealth)
+        val str = decodeHealth(1, "\"1\"")
+        assertEquals(SH.OK, str.gnssImuHealth)
+        assertEquals(SH.OK, str.baroHealth)
+        // "gi" lives outside "h": it must not leak into any bitfield item.
+        val giOnly = decodeHealth(0, "3")
+        assertEquals(0, giOnly.sensorHealth)
+        assertEquals(SH.NA, giOnly.magHealth)
+        assertFalse(giOnly.hasSensorHealth)
+    }
+
+    @Test
+    fun `gnss imu row appears only when present and not 0`() {
+        val h = pack(baro = SH.OK, imu = SH.OK, ekf = SH.OK, mag = SH.OK, gnss = SH.OK, batt = SH.OK, storage = SH.OK)
+        for (gi in listOf(null, "0")) {
+            val t = decodeHealth(h, gi)
+            assertFalse(t.sensorHealthRows.any { it.name == "GNSS IMU" }, "gi ${gi ?: "absent"}")
+            assertEquals(7, t.sensorHealthRows.size)              // 6 core + Storage
+        }
+        val expected = listOf(
+            Triple("1", SH.OK, "The GNSS board's IMU is fully aiding its tracking loops."),
+            Triple(
+                "2", SH.DEGRADED,
+                "The GNSS board's IMU is not fully aiding: it aids the vertical only" +
+                    " until it knows its heading (the six-face calibration with the GNSS board" +
+                    " on J1 gives it one; run it again if the board was moved), or its IMU is off in the board's settings.",
+            ),
+            Triple(
+                "3", SH.BAD,
+                "The GNSS board stopped using its IMU: its at-rest check failed" +
+                    " or its samples stopped.",
+            ),
+        )
+        for ((gi, state, detail) in expected) {
+            val t = decodeHealth(h, gi)
+            // Right after Mag, its advisory sibling.
+            assertEquals(
+                listOf("Baro", "IMU", "EKF", "GNSS", "Battery", "Mag", "GNSS IMU", "Storage"),
+                t.sensorHealthRows.map { it.name },
+            )
+            val row = t.sensorHealthRows.single { it.name == "GNSS IMU" }
+            assertEquals(state, row.state)
+            assertEquals(detail, row.detail)
+        }
+        // The other rows carry no line of their own.
+        assertTrue(decodeHealth(h, "1").sensorHealthRows.filter { it.name != "GNSS IMU" }.all { it.detail == null })
+        assertNull(gnssImuHealthDetail(SH.NA))
+    }
+
+    @Test
+    fun `gnss imu never changes the go no-go verdict`() {
+        // Advisory only, like Mag: no "gi" value moves any of the four outcomes.
+        val cases = listOf(
+            pack(baro = SH.OK, imu = SH.OK, ekf = SH.OK, mag = SH.OK, gnss = SH.OK, batt = SH.OK, storage = SH.OK) to
+                TelemetryData.FlightReadiness.READY,
+            pack(baro = SH.OK, imu = SH.OK, ekf = SH.DEGRADED, mag = SH.OK, gnss = SH.OK, batt = SH.OK) to
+                TelemetryData.FlightReadiness.CAUTION,
+            pack(baro = SH.OK, imu = SH.BAD, ekf = SH.OK, mag = SH.OK, gnss = SH.OK, batt = SH.OK) to
+                TelemetryData.FlightReadiness.NOT_READY,
+            0 to TelemetryData.FlightReadiness.UNKNOWN,
+        )
+        for ((h, verdict) in cases) {
+            for (gi in listOf(null, "0", "1", "2", "3", "4")) {
+                assertEquals(verdict, decodeHealth(h, gi).flightReadiness, "h $h, gi ${gi ?: "absent"}")
+            }
+        }
+    }
+
     @Test
     fun `health rows include only configured pyros`() {
         val none = decodeHealth(pack(baro = SH.OK, imu = SH.OK))
@@ -571,13 +673,45 @@ class TelemetryDataTest {
             FcBootStep.GNSS to "Starting GNSS",
             FcBootStep.SERVOS to "Starting servos",
             FcBootStep.COMPLETE to "Flight computer ready",
+            FcBootStep.RESCUE to "Rescue mode — ready for a firmware update",
+            FcBootStep.NO_FLIGHT_LOOP to "Flight computer not running — no flight loop",
         )
         for ((step, label) in expected) {
             assertEquals(label, step.label)
             assertEquals(label, decodeOk("""{"bs":${step.raw}}""").fcBootStatusLine())
         }
         assertEquals(expected.size, FcBootStep.entries.size)
-        assertEquals(expected.size, FcBootStep.STEP_COUNT, "FCB_STEP_COUNT")
+        // FCB_STEP_COUNT counts the progress steps; RESCUE and NO_FLIGHT_LOOP
+        // are states outside that range (64 and 65 in RocketComputerTypes.h).
+        assertEquals(expected.size - 2, FcBootStep.STEP_COUNT, "FCB_STEP_COUNT")
+        assertEquals(64, FcBootStep.RESCUE.raw, "FCB_RESCUE")
+        assertEquals(65, FcBootStep.NO_FLIGHT_LOOP.raw, "FCB_NO_FLIGHT_LOOP")
+    }
+
+    @Test
+    fun `rescue mode is named and never stalls`() {
+        // It stays put by design: "no progress for 300s" would read as "keep
+        // waiting", the opposite of what the operator should do.
+        val t = decodeOk("""{"st":"INITIALIZATION","bs":64,"bt":412}""")
+        assertEquals(FcBootStep.RESCUE, t.fcBootStep)
+        assertTrue(t.fcRescue)
+        assertFalse(t.fcBootStalled(3600))
+        assertEquals("Rescue mode — ready for a firmware update", t.fcBootStatusLine(3600))
+        assertFalse(decodeOk("""{"st":"INITIALIZATION","bs":2,"bt":199}""").fcRescue)
+    }
+
+    @Test
+    fun `no flight loop is named and never stalls`() {
+        // Setup finished but the flight task was never created. It used to stay
+        // at COMPLETE and read "Flight computer ready"; nothing will change
+        // until another image is flashed, so it never reads as "no progress".
+        val t = decodeOk("""{"st":"INITIALIZATION","bs":65,"bt":24800}""")
+        assertEquals(FcBootStep.NO_FLIGHT_LOOP, t.fcBootStep)
+        assertTrue(t.fcNoFlightLoop)
+        assertFalse(t.fcRescue)
+        assertFalse(t.fcBootStalled(3600))
+        assertEquals("Flight computer not running — no flight loop", t.fcBootStatusLine(3600))
+        assertFalse(decodeOk("""{"st":"INITIALIZATION","bs":5,"bt":199}""").fcNoFlightLoop)
     }
 
     @Test

@@ -69,8 +69,17 @@ system — and is subscribed to the task watchdog. Its 16 KB stack is not arbitr
 EKF's `timeUpdate()` and `measUpdate()` allocate roughly 7.5 KB of temporary 15×15
 matrices on the stack per call.
 
+That stack is one block of internal RAM, and `setup_fc()` leaves little of it, so
+`app_main` creates the flight task before any other task of its own (the rescue task
+replaces it). A bench image once created its benchmark task first and the flight task
+never started (Beetle, 2026-10-26). `tinkerrocket-idf/tools/check_flight_task_first.py`
+now fails the Docs workflow on that order. If the flight task still cannot be created,
+`app_main` reports boot step `FCB_NO_FLIGHT_LOOP` (65) every 500 ms, and the apps say the
+flight computer is not running instead of "Flight computer ready". A bench image built with
+`-DTR_TEST_NO_FLIGHT_LOOP=1` starves the flight task on purpose to show it.
+
 The IMU task reads the chip's FIFO where the board header turns that on
-(`ISM6_FIFO_CAPTURE`: the mini and V9/V10; #1485), a burst at a time on the FIFO-threshold
+(`ISM6_FIFO_CAPTURE`: the Tinker-Beetle and V9/V10; #1485), a burst at a time on the FIFO-threshold
 interrupt, and times each sample from the burst's sample count (`imu_sample_clock.h`);
 elsewhere it reads one sample per data-ready edge. The magnetometer has its own task
 since #1485: its I2C read inside the IMU task was holding the IMU off for milliseconds
@@ -162,6 +171,14 @@ and since #1153 that includes the simulator's Start: it used to reset the flight
 (sampling runs on raw values) for the rest of the boot. A sim reset that does reach a live
 session — a Stop, or the sim's own give-up — now ends it and restores the persisted
 offsets, as a reboot would.
+
+The session calibrates whichever magnetometer the board runs. With the I2C slot's chip
+(IIS2MDC, or the QMC5883P behind it), the offset goes into that chip. With an MMC5983MA
+(the Tinker-Beetle V2, or a V7 whose slot probe found nothing), the chip has no offset
+register, so the converter subtracts the offset in software. The calibrator, the NVS
+record and the apps see the MMC's counts restated at the IIS2MDC's 0.15 µT
+(`TR_MagCalibrator/mag_cal_mmc.h`), so a saved calibration round-trips through a rocket
+profile the same way on every board.
 
 ## Estimation
 
@@ -410,7 +427,7 @@ once they said seen, pass an all-zero position and velocity under the marker's
 timestamp. Whenever the two disagreed the filter fused a lat=0/lon=0/vel=0 fix: first on
 decimation-off ticks (#367), then on ticks where a frozen IMU timestamp skips the whole
 EKF update before its GNSS block (#1107). The feed lives in `EkfGnssFeed.h` in the EKF
-component and the mini shares it. Never hand the filter a placeholder: a real fix, or
+component. Never hand the filter a placeholder: a real fix, or
 the previous one again.
 
 **`sdkconfig` is generated and untracked, and it overrides `sdkconfig.defaults`.** Same

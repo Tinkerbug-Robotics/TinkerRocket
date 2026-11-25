@@ -73,6 +73,65 @@ void SensorConverter::configureBoardToRocket(const float R[9])
     b2r_identity_ = identity;
 }
 
+void SensorConverter::setLowGOffset(float ox, float oy, float oz)
+{
+    lg_off_x_ = ox;
+    lg_off_y_ = oy;
+    lg_off_z_ = oz;
+#ifdef ESP_PLATFORM
+    ESP_LOGI("Converter", "Low-g offset set: %.4f, %.4f, %.4f m/s²", (double)ox, (double)oy, (double)oz);
+#endif
+}
+
+void SensorConverter::lowGBoardRaw(const ISM6HG256Data& in, double out[3]) const
+{
+    const double c = (double)cosf(ism6_rot_z_rad);
+    const double s = (double)sinf(ism6_rot_z_rad);
+    const double lg_x = (double)in.acc_low_raw.x * (double)acc_low_ms2_per_lsb;
+    const double lg_y = (double)in.acc_low_raw.y * (double)acc_low_ms2_per_lsb;
+    out[0] = (lg_x * c) - (lg_y * s);
+    out[1] = (lg_x * s) + (lg_y * c);
+    out[2] = (double)in.acc_low_raw.z * (double)acc_low_ms2_per_lsb;
+}
+
+void SensorConverter::highGBoardRaw(const ISM6HG256Data& in, double out[3]) const
+{
+    const double c = (double)cosf(ism6_rot_z_rad);
+    const double s = (double)sinf(ism6_rot_z_rad);
+    const double hg_x = (double)in.acc_high_raw.x * (double)acc_high_ms2_per_lsb;
+    const double hg_y = (double)in.acc_high_raw.y * (double)acc_high_ms2_per_lsb;
+    out[0] = (hg_x * c) - (hg_y * s);
+    out[1] = (hg_x * s) + (hg_y * c);
+    out[2] = (double)in.acc_high_raw.z * (double)acc_high_ms2_per_lsb;
+}
+
+void SensorConverter::setHighGAlignment(const float m[9])
+{
+    bool identity = true;
+    for (int i = 0; i < 9; i++)
+    {
+        hg_m_[i] = m[i];
+        if (m[i] != ((i % 4 == 0) ? 1.0f : 0.0f)) identity = false;
+    }
+    hg_m_set_ = !identity;
+#ifdef ESP_PLATFORM
+    ESP_LOGI("Converter", "High-g alignment %s: [%.5f %.5f %.5f; %.5f %.5f %.5f; %.5f %.5f %.5f]",
+             hg_m_set_ ? "set" : "identity (none)", (double)m[0], (double)m[1], (double)m[2],
+             (double)m[3], (double)m[4], (double)m[5], (double)m[6], (double)m[7], (double)m[8]);
+#endif
+}
+
+void SensorConverter::clearHighGAlignment()
+{
+    for (int i = 0; i < 9; i++) hg_m_[i] = (i % 4 == 0) ? 1.0f : 0.0f;
+    hg_m_set_ = false;
+}
+
+void SensorConverter::highGAlignment(float out[9]) const
+{
+    for (int i = 0; i < 9; i++) out[i] = hg_m_[i];
+}
+
 void SensorConverter::setHighGBias(float bx, float by, float bz)
 {
     if (bx == hg_bias_x_ && by == hg_bias_y_ && bz == hg_bias_z_)
@@ -247,15 +306,37 @@ void SensorConverter::convertISM6HG256Data(const ISM6HG256Data& in, ISM6HG256Dat
     out.low_g_acc_x = (lg_x * c) - (lg_y * s);
     out.low_g_acc_y = (lg_x * s) + (lg_y * c);
     out.low_g_acc_z = (double)in.acc_low_raw.z * (double)acc_low_ms2_per_lsb;
+    // the hand-calibrated offset (board frame), off both accelerometers below
+    const double ox = lg_off_on_ ? (double)lg_off_x_ : 0.0;
+    const double oy = lg_off_on_ ? (double)lg_off_y_ : 0.0;
+    const double oz = lg_off_on_ ? (double)lg_off_z_ : 0.0;
+    out.low_g_acc_x -= ox;
+    out.low_g_acc_y -= oy;
+    out.low_g_acc_z -= oz;
 
     // High-g accel (m/s^2), rotate about +Z to board frame, subtract bias.
     // Bias is calibrated in board frame, so it must come off BEFORE the
     // board→rocket rotation below.
     const double hg_x = (double)in.acc_high_raw.x * (double)acc_high_ms2_per_lsb;
     const double hg_y = (double)in.acc_high_raw.y * (double)acc_high_ms2_per_lsb;
-    out.high_g_acc_x = (hg_x * c) - (hg_y * s) - (double)hg_bias_x_;
-    out.high_g_acc_y = (hg_x * s) + (hg_y * c) - (double)hg_bias_y_;
-    out.high_g_acc_z = (double)in.acc_high_raw.z * (double)acc_high_ms2_per_lsb - (double)hg_bias_z_;
+    if (!(lg_off_on_ && hg_m_set_))
+    {
+        out.high_g_acc_x = (hg_x * c) - (hg_y * s) - (double)hg_bias_x_ - ox;
+        out.high_g_acc_y = (hg_x * s) + (hg_y * c) - (double)hg_bias_y_ - oy;
+        out.high_g_acc_z = (double)in.acc_high_raw.z * (double)acc_high_ms2_per_lsb - (double)hg_bias_z_ - oz;
+    }
+    else
+    {
+        // The six-face alignment to the low-g (HG_CAL_*), board frame, before
+        // the bias: high = M * h - bias - offset.
+        const double h[3] = {(hg_x * c) - (hg_y * s), (hg_x * s) + (hg_y * c),
+                             (double)in.acc_high_raw.z * (double)acc_high_ms2_per_lsb};
+        double m[9];
+        for (int i = 0; i < 9; i++) m[i] = (double)hg_m_[i];
+        out.high_g_acc_x = m[0] * h[0] + m[1] * h[1] + m[2] * h[2] - (double)hg_bias_x_ - ox;
+        out.high_g_acc_y = m[3] * h[0] + m[4] * h[1] + m[5] * h[2] - (double)hg_bias_y_ - oy;
+        out.high_g_acc_z = m[6] * h[0] + m[7] * h[1] + m[8] * h[2] - (double)hg_bias_z_ - oz;
+    }
 
     // Gyro (deg/s), then rotate about +Z to board frame.
     const double g_x = (double)in.gyro_raw.x * (double)gyro_dps_per_lsb;
@@ -291,7 +372,7 @@ void SensorConverter::convertMMC5983MAData(const MMC5983MAData& in, MMC5983MADat
 
   // Gauss = centered * (8 / 131072)
   // SI: uT = Gauss * 100
-  static constexpr double UT_PER_COUNT = (8.0 * 100.0) / 131072.0; // 0.006103515625
+  static constexpr double UT_PER_COUNT = MAG_UT_PER_COUNT_MMC5983MA; // 0.006103515625
 
   const double mx = (double)cx * UT_PER_COUNT;
   const double my = (double)cy * UT_PER_COUNT;
@@ -630,6 +711,10 @@ void SensorConverter::packLoRaSlow(const LoRaDataSI& in, LoRaSlowData& out)
     // fitted) and negative noise as 0, and saturates rather than wrapping.
     out.cam_ma   = encodeRailMilliamps(in.cam_current);
     out.servo_ma = encodeRailMilliamps(in.servo_current);
+
+    // v6: the gnss-sdr-dev board's IMU aiding (a SensorHealthState); the
+    // spare bits stay 0.
+    out.status = (uint8_t)(in.gnss_imu & LORA_SLOW_GNSS_IMU_MASK);
 }
 
 void SensorConverter::unpackLoRaSlow(const LoRaSlowData& in, LoRaDataSI& out)
@@ -646,6 +731,10 @@ void SensorConverter::unpackLoRaSlow(const LoRaSlowData& in, LoRaDataSI& out)
 
     out.cam_current   = (float)in.cam_ma * 0.001f;
     out.servo_current = (float)in.servo_ma * 0.001f;
+
+    // v6. A v5 frame (a rocket from before it) reaches here through
+    // unpackLoRaSlowV5Bytes with the byte 0: no board reported.
+    out.gnss_imu = (uint8_t)(in.status & LORA_SLOW_GNSS_IMU_MASK);
 }
 
 // --- byte-level wrappers -----------------------------------------------------
@@ -675,5 +764,12 @@ void SensorConverter::unpackLoRaSlowBytes(const uint8_t in_bytes[SIZE_OF_LORA_SL
 {
     LoRaSlowData p{};
     memcpy(&p, in_bytes, sizeof(LoRaSlowData));
+    unpackLoRaSlow(p, out);
+}
+
+void SensorConverter::unpackLoRaSlowV5Bytes(const uint8_t in_bytes[SIZE_OF_LORA_SLOW_V5], LoRaDataSI& out)
+{
+    LoRaSlowData p{};   // status stays 0: a v5 frame has none
+    memcpy(&p, in_bytes, SIZE_OF_LORA_SLOW_V5);
     unpackLoRaSlow(p, out);
 }

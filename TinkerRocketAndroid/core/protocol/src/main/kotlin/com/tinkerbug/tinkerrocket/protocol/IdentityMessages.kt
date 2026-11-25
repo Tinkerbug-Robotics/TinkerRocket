@@ -66,6 +66,10 @@ public data class FcIdentityMsg(
     // never treat that as agreement with anything.
     val fcBoardRev: String? = null,   // "fc_board"
     val ocBoardRev: String? = null,   // "oc_board"
+    // The GNSS receiver the FC found: "u-blox", "mosaic-G5", "LC86G". The V9
+    // finds its receiver at boot, so the pad shows which. "" is a real answer
+    // (none came up: GNSS-absent); null is an OC that predates the key.
+    val fcGnss: String? = null,       // "fc_gnss"
 ) {
     public companion object {
         public fun parse(json: JsonObject): FcIdentityMsg =
@@ -73,6 +77,7 @@ public data class FcIdentityMsg(
                 fcFirmwareVersion = JsonBridging.nsString(json, "fc_fw"),
                 fcBoardRev = JsonBridging.nsString(json, "fc_board")?.ifEmpty { null },
                 ocBoardRev = JsonBridging.nsString(json, "oc_board")?.ifEmpty { null },
+                fcGnss = JsonBridging.nsString(json, "fc_gnss"),
             )
     }
 }
@@ -93,6 +98,14 @@ public data class ImuOrientMsg(
      * by the session layer — iOS only stores it when a config already exists.
      */
     val setting: Int?,            // "set"
+    /**
+     * #1629: the mounting code the FC applies (0..23; in auto-exact the
+     * nearest code, not the rotation in use), clamped 0..255; null = key
+     * absent.  The rocket's own link leaves "imo" out of telemetry, so this
+     * is what turns its lx/ly/lz back into the board frame for the six-face
+     * screen's live hint (iOS BLEDevice.imuOrientationCode).
+     */
+    val code: Int? = null,        // "code"
 ) {
     /**
      * Typed mode: null when the key was absent; unknown raw values map to
@@ -109,6 +122,7 @@ public data class ImuOrientMsg(
             modeRaw = JsonBridging.nsInt(json, "mode")
                 ?.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong())?.toInt(),
             setting = JsonBridging.nsInt(json, "set")?.coerceIn(0, 0xFF)?.toInt(),
+            code = JsonBridging.nsInt(json, "code")?.coerceIn(0, 0xFF)?.toInt(),
         )
     }
 }

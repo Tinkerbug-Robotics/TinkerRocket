@@ -5,3 +5,9 @@
 ## upstream driver lacks; the adapter and FTL stay as managed deps.
 dependencies:
   espressif/spi_nand_flash_fatfs: "*"
+  # Pinned: the vendored spi_nand_flash is an override the lock file cannot
+  # record, so every clean build re-solves and took the newest dhara 1.x.
+  # 1.1.0 (2026-09-22) adds a read-path cache to the FTL map; the V2 base
+  # station in use was built before it, on 1.0.0. Move deliberately, with a
+  # NAND bench.
+  espressif/dhara: "~1.0.0"

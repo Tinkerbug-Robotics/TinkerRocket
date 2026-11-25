@@ -1,5 +1,5 @@
-"""tools/ota_probe.py — wire framing, the identity arithmetic, and the whole
-flow against a fake device.
+"""tools/ota_probe.py — wire framing, the identity arithmetic, finding the
+board by its advertised name, and the whole flow against a fake device.
 
 The probe exists to answer #1425's remaining question on a bench in seconds
 rather than through a multi-minute push from the phone, so its two failure
@@ -116,6 +116,50 @@ def test_other_file_ops_traffic_is_ignored():
     p.on_status(None, bytearray(b'{"type":"file_list","files":[]}'))
     p.on_status(None, bytearray(b'not json at all'))
     assert p.statuses == []
+
+
+# --------------------------------------------------------------------------
+# Finding the board by name — the advertisement's name first (#1623)
+# --------------------------------------------------------------------------
+
+class FakeScanner:
+    """bleak's scanner as find_device uses it: the filter sees each sighting
+    in turn, and the first one it accepts is the device."""
+
+    def __init__(self, *sightings):
+        self.sightings = sightings
+
+    async def find_device_by_filter(self, filterfunc, timeout=None):
+        for d, ad in self.sightings:
+            if filterfunc(d, ad):
+                return d
+        return None
+
+
+@pytest.mark.parametrize("cached, advertised, query, found", [
+    # macOS before it has connected to the unit: the name is only advertised
+    (None, "Mini V1", "mini v1", True),
+    # a sighting before the scan response (which carries the name): the cached one
+    ("Mini V1", None, "Mini V1", True),
+    # renamed since this Mac cached its name: the advertisement is current ...
+    ("TR-R-ab5c", "Mini V1", "Mini V1", True),
+    # ... and the old name no longer finds it
+    ("TR-R-ab5c", "Mini V1", "TR-R", False),
+    (None, None, "Mini V1", False),
+])
+def test_find_device_reads_the_advertised_name_first(monkeypatch, cached, advertised,
+                                                     query, found):
+    """On macOS bleak's d.name is CoreBluetooth's cached GAP name, None until
+    the Mac has connected to the unit: matching it alone called a board
+    advertising "Mini V1" not found."""
+    d = types.SimpleNamespace(name=cached, address="FAKE")
+    ad = types.SimpleNamespace(local_name=advertised)
+    monkeypatch.setattr(probe_mod, "BleakScanner", FakeScanner((d, ad)))
+    if found:
+        assert asyncio.run(probe_mod.find_device(query)) is d
+    else:
+        with pytest.raises(SystemExit):
+            asyncio.run(probe_mod.find_device(query))
 
 
 # --------------------------------------------------------------------------

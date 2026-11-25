@@ -57,7 +57,7 @@ which runs on everything. (The full set is larger; the README's CI table lists a
 | Workflow | Runs on |
 |----------|---------|
 | `cpp-tests.yml` | changes to components, `tests_cpp/`, integration tests |
-| `firmware-build.yml` | full ESP-IDF build of all six firmware projects, once per board revision |
+| `firmware-build.yml` | full ESP-IDF build of all five firmware projects, once per board revision |
 | `sim-tests.yml` | the simulator and the sources it binds to |
 | `unit-tests.yml` | `tests/unit/` — Python ports of firmware logic, plus the base-station log reader |
 | `ios-tests.yml` | the iOS app |
@@ -145,16 +145,21 @@ hardware-specific rules in detail.
 There is no default board revision, and the build fails without one:
 
 ```bash
-idf.py -B build_v9 -DTR_BOARD_V9=1 build
+idf.py -B build_v10 -DTR_BOARD_V10=1 build
 ```
 
-`TR_BOARD_V9=1` is the Tinker-Mantis, `hardware/tinker-mantis/` (its title block reads V9,
-V10 at HEAD). `TR_BOARD_M1=1` is the Tinker-Beetle, `hardware/tinker-beetle/`, whose flight
+`TR_BOARD_V10=1` is the Tinker-Mantis V10 as ordered (tag `tinker-mantis-v10.0.0`), and
+`TR_BOARD_V9=1` is the V9 as fabbed (tag `rocket-computer-v9.0.0`). They are not interchangeable:
+V10 moved the arm to P4 GPIO33 and made it a two-processor vote with the out computer, so
+a V9 image cannot arm a V10, and a V10 image cannot arm a V9 (#1593). `TR_BOARD_M2=1` is the Tinker-Beetle V2, `hardware/tinker-beetle/`, whose flight
 computer is an ESP32-S3 rather than a P4 — its overlay changes the chip target, so it needs
-a build dir of its own (`-B build_m1`) and rewrites `dependencies.lock` to
-`target: esp32s3`; revert that file after a local M1 build. `TR_BOARD_V8=1` and
+a build dir of its own (`-B build_m2`) and rewrites `dependencies.lock` to
+`target: esp32s3`; revert that file after a local M2 build. The Tinker-Beetle V1 (rev1) is
+retired and has no build. `TR_BOARD_V8=1` and
 `TR_BOARD_V7=1` are legacy boards (the V8 bench boards, whose PCB was never committed, and
-the V7); their maps live in `main/board/legacy/`.
+the V7); their maps live in `main/board/legacy/`. So does `TR_BOARD_V5=1`, the archived
+board V7 was respun from: four arm lines the firmware drives as one, and continuity that
+reads only with the arm up.
 
 The flag is mandatory here — and only here — because the failure mode is pyrotechnic and
 silent. V8 and V9 disagree on the ARM pin (5 vs 16) and swap the FIRE pins of channels 2
@@ -164,9 +169,10 @@ channel's connector — or, since ARM is never driven, fires nothing at all thro
 bleed that still lights a test LED. The boot log prints the map it was built with
 (`[BOARD] pin map:` / `[BOARD] pyro:`); check it against the board before arming anything.
 
-The out computer takes `-DTR_BOARD_V9=1` too, though on that MCU it selects the same pins
-as V8 — pass it anyway so both halves of a pair are built with one flag. The same goes for
-`-DTR_BOARD_M1=1`: both halves of the Tinker-Beetle are built with it.
+The out computer takes the same flag as its flight computer. With `-DTR_BOARD_V9=1` it
+selects the same pins as V8; with `-DTR_BOARD_V10=1` it adds the arm consent output (S3
+GPIO14) that the V10's flight computer cannot fire without. `-DTR_BOARD_M2=1` builds both
+halves of the Tinker-Beetle V2.
 
 ### Building the base station
 

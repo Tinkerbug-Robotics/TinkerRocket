@@ -98,10 +98,11 @@ public:
     // reads normal on the pad, and no channel can conduct at apogee.
     //
     // `project_name` must match exactly. `board_suffix` is the CMake
-    // TR_BOARD_SUFFIX ("-v9", "-m1", ...) and must appear in the image's
-    // version string. Pass nullptr or "" for either to skip that half; with
-    // both unset the check is disabled and behaviour is unchanged, which is
-    // what keeps existing callers and the host tests valid.
+    // TR_BOARD_SUFFIX ("-v9", "-v10", "-m1", ...) and must appear in the
+    // image's version string followed by '+', '-' or the end, so "-v1" does
+    // not match a "-v10" image (#1593). Pass nullptr or "" for either to skip
+    // that half; with both unset the check is disabled and behaviour is
+    // unchanged, which is what keeps existing callers and the host tests valid.
     void setExpectedIdentity(const char* project_name, const char* board_suffix);
 
     // Offset of esp_app_desc_t within an ESP-IDF app image: the image header
@@ -110,6 +111,10 @@ public:
     static constexpr size_t APP_DESC_OFFSET = 32;
     static constexpr size_t APP_DESC_SIZE   = 256;
     static constexpr uint32_t APP_DESC_MAGIC = 0xABCD5432u;
+
+    // True when `suffix` occurs in `version` and ends at a suffix boundary
+    // ('+', '-' or the end of the string). The rule setExpectedIdentity uses.
+    static bool hasBoardSuffix(const char* version, const char* suffix);
     ~TR_OTA_Receiver();
 
     TR_OTA_Receiver(const TR_OTA_Receiver&) = delete;

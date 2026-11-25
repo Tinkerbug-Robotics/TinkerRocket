@@ -16,6 +16,13 @@ import kotlin.math.abs
 public interface TelemetryAnnouncer {
     public fun processTelemetry(telemetry: TelemetryData)
     public fun reset()
+
+    /**
+     * Voice moved to another rocket's stream on the same base station (see
+     * [VoiceRocketPolicy]). [baseline] is that rocket's last frame before the
+     * one about to be processed, or null if none was heard.
+     */
+    public fun followStream(baseline: TelemetryData?)
 }
 
 /**
@@ -71,6 +78,9 @@ public interface AnnouncerSpeech {
  *  - **Descent** every 10 s after apogee (first one 5 s after apogee).
  *  - **Landed**: on the landed_flag rising edge (state=LANDED fallback), with
  *    horizontal distance from the captured launch location.
+ *  - **Predicted landing**: when the link dies before the landed frame gets
+ *    through, which is what usually happens at touchdown, the landing is
+ *    called at the predicted touchdown instead ([TouchdownPredictor]).
  *
  * The direction word ("climbing"/"descending") comes from the SIGN of the
  * altitude rate, never from the apogee-phase flag — #235's bug was "climbing"
@@ -90,6 +100,14 @@ public class FlightAnnouncer(
      * deployments are still announced, they just go ungraded.
      */
     private val recovery: () -> RecoveryProfile? = { null },
+    /**
+     * Run an action at a moment on [clock] (ms) on the fleet thread; calling
+     * the returned function drops it. The predicted landing call is the one
+     * callout that has to fire with no frame arriving. The default schedules
+     * nothing: the base station's stale re-pushes (every 2 s) still make the
+     * call, just later. Production schedules on the fleet scope.
+     */
+    private val schedule: (atMs: Long, action: () -> Unit) -> (() -> Unit) = { _, _ -> {} },
 ) : TelemetryAnnouncer {
 
     private val _enabled = MutableStateFlow(initialEnabled)
@@ -126,6 +144,18 @@ public class FlightAnnouncer(
     /** Recovery-event detector (#813). Self-guards on apogee/landing. */
     private val deployment = DeploymentWatcher()
 
+    /** Predicted landing: the link usually dies at touchdown, before the
+     *  landed frame gets through (see [TouchdownPredictor]). */
+    private val touchdown = TouchdownPredictor()
+
+    /** The last live descent frame, for the predicted call's distance. */
+    private var lastLiveDescent: TelemetryData? = null
+
+    /** The landing call came from the prediction, not a landed frame. */
+    private var landingWasPredicted = false
+
+    private var cancelLandingCall: (() -> Unit)? = null
+
     // ── Enable / test ────────────────────────────────────────────────────
 
     public fun setEnabled(value: Boolean) {
@@ -161,6 +191,10 @@ public class FlightAnnouncer(
         // the time-gated callouts would otherwise re-announce the same frozen
         // reading every interval forever.
         if (telemetry.dataStatus != TelemetryData.DataStatus.LIVE) {
+            // Once the link is lost these re-pushes are the frames that keep
+            // arriving. Only these: a live frame means the link is up, and it
+            // makes its own landing call if it carries the landed flag.
+            checkPredictedLanding()
             previous = telemetry
             return
         }
@@ -202,10 +236,12 @@ public class FlightAnnouncer(
 
         // Descent callouts (after apogee, before landed).
         if (telemetry.pastApogee && !telemetry.landedFlag && state == "INFLIGHT") {
+            trackDescentForLandingCall(telemetry)
             checkDescentCallout(telemetry)
         }
 
         // Landing: flag edge, else the state transition as fallback.
+        if (telemetry.landedFlag || state == "LANDED") clearLandingCall()
         if (telemetry.landedFlag && !(prev?.landedFlag ?: false) && !landedAnnounced) {
             landedAnnounced = true
             announceImmediate(landedPhrase(telemetry))
@@ -221,6 +257,37 @@ public class FlightAnnouncer(
     override fun reset() {
         resetFlightState()
         speech.stop()
+    }
+
+    /**
+     * Start following another rocket's stream ([VoiceRocketPolicy]) — iOS
+     * `FlightAnnouncer.followStream`.
+     *
+     * The one-shots and detectors were tracking the previous rocket's flight,
+     * so they start over. Without that, a rocket that flew earlier leaves
+     * apogee and landing marked as announced, and the next flight calls
+     * neither. [baseline] becomes the edge reference: a computer already past
+     * apogee or landed does not re-announce it at the switch, which a frame
+     * from the other rocket as the reference would cause.
+     *
+     * The pad position carries over unless the baseline gives a fresh one:
+     * rockets fly from one site, and a computer picked up mid-flight has no
+     * pad fix of its own. Picked up in flight, the burnout callout is skipped
+     * (its climb was not watched) but the altitude cadence it gates runs.
+     * Picked up past apogee or landed, those count as said: the live apogee
+     * votes toggle in descent (the V9's did on 2026-11-21), and each toggle
+     * would otherwise be a fresh "Apogee". Anything still playing finishes.
+     */
+    override fun followStream(baseline: TelemetryData?) {
+        val pad = launchLocation
+        resetFlightState()
+        launchLocation = pad
+        previous = baseline
+        val b = baseline ?: return
+        if (!b.launchFlag && b.state != "INFLIGHT") captureLaunchLocation(b)
+        if (b.state == "INFLIGHT") burnoutAnnounced = true
+        if (b.pastApogee) apogeeAnnounced = true
+        if (b.landedFlag || b.state == "LANDED") landedAnnounced = true
     }
 
     // ── Event detectors ──────────────────────────────────────────────────
@@ -327,6 +394,51 @@ public class FlightAnnouncer(
         announce(altitudeWithRatePhrase(alt, telemetry.altitudeRate))
     }
 
+    // ── Predicted landing ────────────────────────────────────────────────
+
+    /**
+     * One live descent frame: refresh the prediction and push the landing call
+     * back to when it is now due. While frames keep coming the call keeps
+     * moving, so it only fires once the link has gone quiet.
+     */
+    private fun trackDescentForLandingCall(telemetry: TelemetryData) {
+        // A live frame from well off the ground after a predicted call: the
+        // link came back and the rocket is still flying, so the prediction was
+        // early. Take the call back and let the real landing make it.
+        val alt = telemetry.pressureAlt
+        if (landingWasPredicted && alt != null && alt > DeploymentWatcher.MIN_AGL_M) {
+            landingWasPredicted = false
+            landedAnnounced = false
+        }
+        touchdown.observe(clock(), telemetry.pressureAlt, telemetry.altitudeRate, recovery())
+        lastLiveDescent = telemetry
+        if (landedAnnounced) return
+        val due = touchdown.callDueMs ?: return
+        cancelLandingCall?.invoke()
+        cancelLandingCall = schedule(due) { checkPredictedLanding() }
+    }
+
+    /**
+     * Make the landing call from the prediction once it is due and the link
+     * has gone quiet. The landed frame that arrives minutes later, once
+     * someone walks into range, then finds the call already made.
+     */
+    private fun checkPredictedLanding() {
+        if (!_enabled.value || landedAnnounced) return
+        val due = touchdown.callDueMs ?: return
+        if (clock() < due) return
+        val last = lastLiveDescent ?: return
+        landedAnnounced = true
+        landingWasPredicted = true
+        clearLandingCall()
+        announceImmediate(distancePhrase("Predicted landing.", last))
+    }
+
+    private fun clearLandingCall() {
+        cancelLandingCall?.invoke()
+        cancelLandingCall = null
+    }
+
     // ── Phrasing ─────────────────────────────────────────────────────────
 
     private fun altitudeWithRatePhrase(alt: Float, rate: Float?): String {
@@ -339,15 +451,19 @@ public class FlightAnnouncer(
         }
     }
 
-    private fun landedPhrase(telemetry: TelemetryData): String {
+    private fun landedPhrase(telemetry: TelemetryData): String = distancePhrase("Landed.", telemetry)
+
+    /** [lead], then the horizontal distance from the launch site when both
+     *  positions are known. */
+    private fun distancePhrase(lead: String, telemetry: TelemetryData): String {
         val launch = launchLocation
         val lat = telemetry.latitude
         val lon = telemetry.longitude
         if (launch == null || lat == null || lon == null || lat.isNaN() || lon.isNaN()) {
-            return "Landed."
+            return lead
         }
         val dist = DriftCast.haversineM(launch.first, launch.second, lat, lon)
-        return "Landed. ${SpokenUnits.distance(dist, unitSystem())} away"
+        return "$lead ${SpokenUnits.distance(dist, unitSystem())} away"
     }
 
     private fun captureLaunchLocation(telemetry: TelemetryData) {
@@ -386,6 +502,10 @@ public class FlightAnnouncer(
         lastDescentAnnounceMs = Long.MIN_VALUE / 2
         launchLocation = null
         deployment.reset()
+        touchdown.reset()
+        lastLiveDescent = null
+        landingWasPredicted = false
+        clearLandingCall()
     }
 
     public companion object {

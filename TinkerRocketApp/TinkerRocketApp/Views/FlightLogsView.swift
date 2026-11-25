@@ -153,8 +153,18 @@ struct FlightLogRow: View {
 
             // Title and subtitle
             VStack(alignment: .leading, spacing: 4) {
-                Text(flight.displayTitle)
-                    .font(.body)
+                // #1658: the rocket beside the date, so flights from several
+                // rockets on one base station can be told apart in the list.
+                HStack(spacing: 6) {
+                    Text(flight.displayTitle)
+                        .font(.body)
+                    if let rocket = flight.rocketLabel {
+                        Text(rocket)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+                }
 
                 HStack(spacing: 6) {
                     Text(formatFileSize(flight.size))

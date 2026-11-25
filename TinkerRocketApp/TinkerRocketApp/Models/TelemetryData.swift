@@ -209,6 +209,11 @@ struct TelemetryData: Codable {
     // Source rocket identity (base station relay only, nil for direct BLE)
     var source_rocket_id: Int?        // rocket_id from LoRa header
     var source_unit_name: String?     // rocket unit name from LoRa beacon
+    /// Base station: two rockets appear to share this rocket ID ("dup", 1 =
+    /// suspected; omitted when clear). Any nonzero value counts — it gates
+    /// pyro commands, so an unexpected value fails toward blocking.
+    var duplicate_id: Int?
+    var duplicateIDSuspected: Bool { (duplicate_id ?? 0) != 0 }
 
     // Telemetry freshness status (#95).  Sent by the BS in periodic-push
     // payloads; absent from RX-path payloads (which are always live).  iOS
@@ -281,6 +286,37 @@ struct TelemetryData: Codable {
     // absolute position and guidance is off.  Rides sensor_health, so it reaches
     // the app on both the direct-BLE and base-station-relay paths.
     var gnssAbsentMode: Bool { shState(22) == .bad }
+
+    // The GNSS board's own IMU ("gi"): whether that board's tracking loops are
+    // using its IMU.  A plain integer with the SensorHealth values (0 not
+    // applicable, 1 OK, 2 degraded, 3 bad), NOT part of the "h" bitfield.  The
+    // out computer sends it while the flight computer reports it, and a base
+    // station relays it from the LoRa slow frame, so on a base-station link it
+    // updates every 3 s.  It is absent from older firmware and from a v5 rocket
+    // or base station, so nil means "not applicable", never "fine".  Advisory
+    // only, like Mag.
+    var gnss_imu_state: Int?
+    var gnssImuHealth: SensorHealth {
+        gnss_imu_state.flatMap(SensorHealth.init(rawValue:)) ?? .na
+    }
+    /// One plain sentence on what the GNSS IMU dot means, or nil when the row
+    /// is hidden.  Read out by VoiceOver as the dot's hint.  Android twin:
+    /// `gnssImuHealthDetail(SensorHealth)`.
+    static func gnssImuHealthDetail(_ state: SensorHealth) -> String? {
+        switch state {
+        case .ok:
+            return "The GNSS board's IMU is fully aiding its tracking loops."
+        case .degraded:
+            return "The GNSS board's IMU is not fully aiding: it aids the vertical only"
+                + " until it knows its heading (the six-face calibration with the GNSS board"
+                + " on J1 gives it one; run it again if the board was moved), or its IMU is off in the board's settings."
+        case .bad:
+            return "The GNSS board stopped using its IMU: its at-rest check failed"
+                + " or its samples stopped."
+        case .na:
+            return nil
+        }
+    }
 
     // #1166: the out computer's verdict on the hold-up supercap ("hu").
     enum HoldupState: Int { case charging = 1, charged = 2, notCharging = 3, noReading = 4, notFitted = 5 }
@@ -376,7 +412,11 @@ struct TelemetryData: Codable {
 
     // Rows for the pre-launch health card.  Core sensors always shown; a pyro
     // channel appears only when configured for the flight (state != .na).
-    struct SensorHealthRow: Identifiable { let name: String; let state: SensorHealth; var id: String { name } }
+    // `detail` is an optional plain-language line (VoiceOver hint).
+    struct SensorHealthRow: Identifiable {
+        let name: String; let state: SensorHealth; var detail: String? = nil
+        var id: String { name }
+    }
     var sensorHealthRows: [SensorHealthRow] {
         var rows = [
             SensorHealthRow(name: "Baro",    state: baroHealth),
@@ -386,6 +426,10 @@ struct TelemetryData: Codable {
             SensorHealthRow(name: "Battery", state: battHealth),
             SensorHealthRow(name: "Mag",     state: magHealth),
         ]
+        if gnssImuHealth != .na {   // "gi": absent from older firmware / a v5 rocket or BS
+            rows.append(SensorHealthRow(name: "GNSS IMU", state: gnssImuHealth,
+                                        detail: Self.gnssImuHealthDetail(gnssImuHealth)))
+        }
         if storageHealth != .na {   // OC-reported only; absent on older firmware / BS self-frames
             rows.append(SensorHealthRow(name: "Storage", state: storageHealth))
         }
@@ -398,7 +442,8 @@ struct TelemetryData: Codable {
     // Go/no-go rollup (#303).  Red = a hard fault waiting won't fix (baro/IMU/
     // battery BAD, a full/failing flight-log store, or a configured pyro with no
     // continuity).  Green needs every required item OK — including EKF
-    // initialized/converged and a GNSS fix.  Mag is advisory and never gates.
+    // initialized/converged and a GNSS fix.  Mag and the GNSS board's IMU
+    // ("gi") are advisory and never gate: neither is read below.
     // Storage is OC-reported: absent (N/A) on older firmware → ignored, not red.
     // Amber = anything in between.
     enum FlightReadiness { case unknown, ready, caution, notReady
@@ -438,6 +483,20 @@ struct TelemetryData: Codable {
     /// a newer FC may report a step this build has never heard of.
     enum FcBootStep: Int {
         case links = 0, nvs, sensors, gnss, servos, complete
+        /// FCB_RESCUE: not a step but where a boot that cannot finish ends up.
+        /// The FC's last boots stalled in setup or kept resetting, so it brought
+        /// up only the out-computer link and serves firmware updates and nothing
+        /// else, until an update lands or the rocket is power-cycled
+        /// (flight_computer fc_rescue_policy.h).  Outside the progress range on
+        /// the wire, hence the explicit value.
+        case rescue = 64
+        /// FCB_NO_FLIGHT_LOOP: setup finished, but the flight task could not be
+        /// created (too little internal RAM for its stack), so no flight loop
+        /// runs: no data, no commands, no flight.  It used to stop at COMPLETE
+        /// and read "Flight computer ready" while the dashboard sat on
+        /// "Syncing…" (Beetle bench image, 2026-10-26).  Only another image
+        /// fixes it, flashed over USB: the app's update needs the flight loop.
+        case noFlightLoop = 65
         var label: String {
             switch self {
             case .links:    return "Linking to flight computer"
@@ -446,6 +505,8 @@ struct TelemetryData: Codable {
             case .gnss:     return "Starting GNSS"
             case .servos:   return "Starting servos"
             case .complete: return "Flight computer ready"
+            case .rescue:   return "Rescue mode — ready for a firmware update"
+            case .noFlightLoop: return "Flight computer not running — no flight loop"
             }
         }
     }
@@ -458,6 +519,14 @@ struct TelemetryData: Codable {
         let degradedBits: Int  // "bd"
 
         var knownStep: FcBootStep? { FcBootStep(rawValue: step) }
+
+        /// The FC is in rescue mode: it will not finish booting on its own, and
+        /// a flight computer firmware update is the thing it is waiting for.
+        var isRescue: Bool { knownStep == .rescue }
+
+        /// The FC finished starting but runs no flight loop, and nothing the
+        /// app can send will change that.
+        var isNoFlightLoop: Bool { knownStep == .noFlightLoop }
 
         // FCB_DEG_* (RocketComputerTypes.h).  A set bit means the step finished
         // DEGRADED and boot CONTINUED — nothing stopped, which is exactly why
@@ -503,9 +572,12 @@ struct TelemetryData: Codable {
         /// every frame, so a wedged boot and a just-started one carry the same
         /// "bt" — only the dwell separates them.  FCB_COMPLETE is exempt: the
         /// FC has finished and the app is just waiting for the first real
-        /// NonSensorData to arrive.
+        /// NonSensorData to arrive.  So are rescue mode and "no flight loop",
+        /// which stay put by design: "no progress" would only tell the operator
+        /// to keep waiting.
         func isStalled(dwell: TimeInterval) -> Bool {
-            knownStep != .complete && dwell >= Self.stallAfter(knownStep)
+            knownStep != .complete && !isRescue && !isNoFlightLoop
+                && dwell >= Self.stallAfter(knownStep)
         }
 
         /// The secondary line.  `dwell` defaults to 0 = "just seen", so a caller
@@ -596,8 +668,10 @@ struct TelemetryData: Codable {
         case flight_status_bits = "fs"
         case pyro_status_bits = "ps"  // packed bitfield: b0=armed (global), then (cont,fired) per channel 1..4
         case sensor_health = "h"      // #303 scorecard: 2 bits/sensor, see RocketComputerTypes.h
+        case gnss_imu_state = "gi"    // GNSS board IMU: SensorHealth value; BS link: every 3 s
         case source_rocket_id = "rid"
         case source_unit_name = "run"
+        case duplicate_id = "dup"      // three rockets, one base station
         case data_status = "ds"        // #95
         case data_age_ms = "age"       // #95
         case fields_trimmed = "tr"     // #282: frame trimmed to fit MTU
@@ -700,8 +774,10 @@ struct TelemetryData: Codable {
         flight_status_bits = flexInt(.flight_status_bits) ?? 0   // #293: tolerant
         pyro_status_bits = flexInt(.pyro_status_bits) ?? 0       // #293: tolerant
         sensor_health = flexInt(.sensor_health) ?? 0                 // #571
+        gnss_imu_state = flexInt(.gnss_imu_state)                    // absent stays nil = N/A
         source_rocket_id = flexInt(.source_rocket_id)                // #571: rid is the demux key
         source_unit_name = try c.decodeIfPresent(String.self, forKey: .source_unit_name)
+        duplicate_id = flexInt(.duplicate_id)
         // #95: missing "ds" → .live (older firmware doesn't emit it)
         let dsRaw = flexInt(.data_status) ?? 0                       // #571
         data_status = DataStatus(rawValue: dsRaw) ?? .live

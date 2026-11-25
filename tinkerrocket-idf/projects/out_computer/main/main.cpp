@@ -24,6 +24,7 @@
 #include "soc/rtc_cntl_reg.h"  // Brownout detector control
 #include "soc/rtc.h"            // #541: rtc_clk_* for the 32k-crystal second chance
 #include "esp_private/esp_clk.h"  // #541: esp_clk_slowclk_cal_set after a late 32k start
+#include "esp_private/cache_utils.h"  // #1659: spi_flash_cache_enabled() in the I2S RX ISR
 #include <esp_timer.h>          // #541: boot USB-enumeration light-sleep grace timer
 #include <hal/gpio_ll.h>        // #1553: the INA_ALERT ISR drops OC_ARM_EN from IRAM
 #include <soc/gpio_struct.h>
@@ -64,9 +65,14 @@ static inline std::string itos(int v)
 #include "rail_restore_policy.h"
 #include "blind_window_policy.h"   // #1271: what a phone-IO blind window actually cost  // #825: boot rail re-assert decision
 #include "flight_token_policy.h"  // #1176: tier-2 rail decision from a durable token
+#include "token_page_policy.h"   // #1659: room for W2 on the token's active NVS page
 #include "holdup_policy.h"        // #1166: the verdict on the hold-up supercap
+#include "supply_status_policy.h" // #1593: the V10's PG_RAIL / VBUCK_OK edges
+#include "cam_draw_policy.h"      // CENJARS 11-01: is the camera running, from its rail current
+#include <atomic>
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
 #include <esp_system.h>           // esp_reset_reason
+#include <esp_random.h>           // esp_random: transmit-slot phase on a release
 #include <esp_adc/adc_oneshot.h>  // #850: camera/servo IMON reads
 #include <esp_adc/adc_cali.h>
 #include <esp_adc/adc_cali_scheme.h>
@@ -78,8 +84,15 @@ static inline std::string itos(int v)
 #include "logger_retry_policy.h"      // #1228: retrying a flight logger that failed to come up
 #include "storage_health_policy.h"    // #281/#278, #1235 items 3/4: the storage go/no-go verdict
 #include "landed_lockout_policy.h"    // #317, #1235 item 5: no new log session after LANDED
+#include "fc_reboot_display_policy.h" // an FC-only reboot on the ground reads as a fresh boot
 #include "arm_consent_policy.h"       // #1168: when the OC gives its half of the Beetle's pyro arm
 #include "pyro_fault_trip_policy.h"   // #1553: drop that consent on a shorted e-match mid-pulse
+#include "snapshot_answer_policy.h"   // when the OC may answer the FC's snapshot ask with "no flight"
+#include "snapshot_replay_filter.h"   // #383/#846: which of the FC's snapshots the OC keeps
+#include "lora_slot_follow_policy.h"  // three rockets: the base station's transmit grid (uplink 82)
+#if TR_OC_ANTENNA_OFFSET
+#include "antenna_readback_policy.h"  // whose GNSS antenna offset the config readback serves
+#endif
 
 #include <TR_I2C_Interface.h>
 #include <TR_I2S_Stream.h>
@@ -93,7 +106,7 @@ static inline std::string itos(int v)
 #include <TR_Orientation.h>
 #include <TR_Coordinates.h>
 #include <TR_BLE_To_APP.h>
-#include <BleDownloadChunk.h>   // #1160: how a log frame goes into a download chunk
+#include <BleDownloadChunk.h>   // #1160 + nextSegment: what the download sends next, in what chunks
 #include <RocketComputerTypes.h>
 #include <RollProfileGate.h>    // #1115: shared roll-profile acceptance gate (host-tested)
 #include <ServoConfigGate.h>    // #1141 item 3: shared servo-config acceptance gate (host-tested)
@@ -101,6 +114,7 @@ static inline std::string itos(int v)
 #include <TR_FlightLog.h>
 #include <SnapshotTailScan.h>   // #846: boot re-seed of the snapshot cache
 #include <ground_baseline_policy.h>   // #1150: the pad reference after an in-flight OC reset
+#include <flight_snapshot_answer.h>   // the snapshot answer as the FC reads it, and "no flight"
 #include <TR_NandBackend_esp.h>
 #include <NvsBitmapStore.h>
 #include <NandBitmapStore.h>   // #398: bitmap on NAND (not NVS) — no cache-disable stall
@@ -957,8 +971,23 @@ static bool pwr_pin_on = false;
 // inherited, and the FC re-validates magic/version/state/CRC32/sim on its
 // side — a stale or garbage cache can never restore a flight.
 static constexpr size_t kSnapFrameLen = 4 + 1 + 1 + sizeof(FlightSnapshotData) + 2;
+static_assert(kSnapFrameLen == flight_snapshot_answer::kFrameLen,
+              "the FC reads exactly the frame the OC stages (#399)");
 static uint8_t  snapshot_cache[kSnapFrameLen];
 static bool     snapshot_cache_valid = false;
+// True once this boot's NAND re-seed has run, or the V7/V8 MRAM slot is
+// readable: from then on, "nothing servable" means no flight even on a
+// recovery boot (snapshot_answer_policy.h). Set in initLoggingSubsystem().
+static bool     snapshot_stores_settled = false;
+
+// The FC's snapshot CRC32 (flight_computer computeSnapshotCRC), for the
+// explicit "no flight" answer, which is the only snapshot the OC writes itself.
+static uint32_t snapshotCrc(const FlightSnapshotData& s)
+{
+    CRC32 crc;
+    crc.add(reinterpret_cast<const uint8_t*>(&s), flight_snapshot_answer::kCrcBytes);
+    return crc.calc();
+}
 
 // ==========================================================================
 // SECTION: #1176 flight token — durable evidence that a flight was in progress
@@ -976,7 +1005,7 @@ struct __attribute__((packed)) FlightToken {
     uint32_t magic;
     uint8_t  state;        // FlightTokenPolicy::kTok*
     uint8_t  attempts;     // auto-restore attempts consumed
-    uint16_t rsv;
+    uint16_t rsv;          // read by nothing; #1659's pad-time page turn flips it
     uint8_t  have_frame;   // 1 = snap[] holds a launch-edge capture
     uint8_t  pad[3];
     uint8_t  snap[kSnapFrameLen];
@@ -1072,6 +1101,107 @@ static bool tokenSetState(uint8_t state, bool keep_frame, const uint8_t* frame)
     return tokenWrite(t);
 }
 
+// #1659: free entries on the token partition's ACTIVE NVS page, read from the
+// flash (token_page_policy.h has the format and why nvs_get_stats will not
+// do). False unless exactly one page is ACTIVE, which is how NVS leaves the
+// partition between writes; the caller then leaves the page as it is.
+static bool tokenActivePageFree(uint32_t& free_entries)
+{
+    using namespace TokenPagePolicy;
+    const esp_partition_t* part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, kTokNvsPart);
+    if (part == nullptr) return false;
+
+    int active = -1;
+    for (uint32_t pg = 0; pg < part->size / kPageSize; ++pg)
+    {
+        uint32_t state = 0;
+        if (esp_partition_read(part, pg * kPageSize, &state, sizeof(state)) != ESP_OK)
+            return false;
+        if (state == kPageStateActive)
+        {
+            if (active >= 0) return false;
+            active = (int)pg;
+        }
+    }
+    if (active < 0) return false;
+
+    const uint32_t base = (uint32_t)active * kPageSize;
+    uint8_t table[kEntryTableBytes];
+    if (esp_partition_read(part, base + kEntryTableOffset, table, sizeof(table)) != ESP_OK)
+        return false;
+    uint32_t next = firstEmptyEntry(table);
+    // Page::load's own step: an entry the table calls EMPTY whose first word
+    // is written was cut short by a power loss, and NVS skips past it.
+    while (next < kEntryCount)
+    {
+        uint32_t word = 0;
+        if (esp_partition_read(part, base + kEntryDataOffset + next * kEntrySize,
+                               &word, sizeof(word)) != ESP_OK)
+            return false;
+        if (word != 0xFFFFFFFFu) { ++next; continue; }
+        break;
+    }
+    free_entries = kEntryCount - next;
+    return true;
+}
+
+// #1659: make room for W2 on the pad. Called after W1 on loop_oc, which also
+// stages W2, so no other token write can interleave with it. When W2 and one
+// spare write would not both fit on the active page, rewrite the token until
+// NVS has moved to a fresh page: two rewrites at most, and an erase there
+// costs nothing in the air.
+static void tokenTurnPageForFlight()
+{
+    using namespace TokenPagePolicy;
+    constexpr uint32_t kEntriesPerWrite = blobEntries(sizeof(FlightToken));
+    static_assert(kEntriesPerWrite == 10, "the 248-byte token is 10 NVS entries");
+    uint32_t free_before = 0;
+    if (!tokenActivePageFree(free_before))
+    {
+        ESP_LOGW("PWR", "#1659: cannot read the flight-token NVS page — "
+                        "the launch-edge token write may erase a sector");
+        return;
+    }
+    uint32_t free_now = free_before;
+    uint32_t rewrites = 0;
+    const int64_t t0 = esp_timer_get_time();
+    while (!writesFitOnActivePage(free_now, kEntriesPerWrite, kWritesToCover))
+    {
+        FlightToken t = {};
+        if (rewrites == kMaxTurnWrites || !tokenRead(t))
+        {
+            ESP_LOGE("PWR", "#1659: flight-token page turn stopped after %u "
+                            "rewrites (%u free entries) — the launch-edge write "
+                            "may erase a sector",
+                     (unsigned)rewrites, (unsigned)free_now);
+            return;
+        }
+        // NVS skips a write whose bytes match what it holds, so flip the
+        // reserved word. Nothing reads it: the token is unchanged.
+        t.rsv = (uint16_t)(t.rsv ^ 1u);
+        if (!tokenWrite(t) || !tokenActivePageFree(free_now))
+        {
+            ESP_LOGE("PWR", "#1659: flight-token page turn FAILED on rewrite %u",
+                     (unsigned)(rewrites + 1));
+            return;
+        }
+        ++rewrites;
+    }
+    if (rewrites > 0)
+    {
+        ESP_LOGW("PWR", "#1659: flight-token NVS page turned on the pad — %u "
+                        "rewrite(s) in %lld us, %u -> %u free entries",
+                 (unsigned)rewrites, (long long)(esp_timer_get_time() - t0),
+                 (unsigned)free_before, (unsigned)free_now);
+    }
+    else
+    {
+        ESP_LOGI("PWR", "#1659: flight-token NVS page has %u free entries, "
+                        "room for the launch-edge write", (unsigned)free_now);
+    }
+}
+
 // RAM staging for the launch-edge write. The blob write itself runs on the
 // Core-0 flush task (see flightlogFlushTaskHook) rather than in the loop or the
 // I2S parser, so the one in-flight flash write never lands in a latency-
@@ -1098,10 +1228,13 @@ static void tokenServiceInflightWrite()
     t.state    = FlightTokenPolicy::kTokInflight;
     t.attempts = 0;                     // a new flight gets a full budget
     if (have) { memcpy(t.snap, frame, kSnapFrameLen); t.have_frame = 1; }
+    const int64_t t0 = esp_timer_get_time();
     if (tokenWrite(t))
     {
-        ESP_LOGW("PWR", "#1176: flight token set INFLIGHT (carried frame %s)",
-                 have ? "yes" : "no");
+        // #1659: the time says whether it was an append (~1-2 ms) or paid for
+        // a sector erase (~60 ms), which the pad-time page turn exists to stop.
+        ESP_LOGW("PWR", "#1176: flight token set INFLIGHT (carried frame %s, %lld us)",
+                 have ? "yes" : "no", (long long)(esp_timer_get_time() - t0));
     }
     else
     {
@@ -1137,7 +1270,7 @@ static uint32_t snapshot_seed_bytes = 0;
 // applies both and gates the V7/V8 MRAM fallback too — that store has no
 // clock of its own and, now that a failed recovery no longer clears it
 // (#834-3), can hold an INFLIGHT frame indefinitely.
-static constexpr uint32_t kSnapshotServeTtlMs = 600000;  // = FC MAX_FLIGHT_TIME
+static constexpr uint32_t kSnapshotServeTtlMs = 1800000;  // = FC MAX_FLIGHT_TIME_CEILING_MS
 static_assert(kSnapshotServeTtlMs == InflightRefusalPolicy::kMaxFlightTimeMs,
               "#1162: the snapshot serve-TTL and the silent-FC INFLIGHT hold "
               "bound the same flight");
@@ -1157,6 +1290,59 @@ static bool snapshotServable(const uint8_t* frame, uint32_t age_ms)
     if (snap.rocket_state != (uint8_t)INFLIGHT) return false;   // a clear
     return snap.flight_elapsed_ms < kSnapshotServeTtlMs;
 }
+
+// The rocket state a snapshot wire frame carries.
+static uint8_t snapshotFrameState(const uint8_t* frame)
+{
+    FlightSnapshotData snap = {};
+    memcpy(&snap, frame + 6, sizeof(snap));   // past SOF(4)+type+len
+    return snap.rocket_state;
+}
+
+// The V7/V8 MRAM slot read back as neither empty (the zeros a #1176
+// retirement writes) nor a snapshot (its magic): bytes that may be a torn
+// flight frame, which the OC never answers "no flight" over
+// (snapshot_answer_policy.h).
+static bool snapshotSlotGarbled(const uint8_t* frame)
+{
+    FlightSnapshotData snap = {};
+    memcpy(&snap, frame + 6, sizeof(snap));   // past SOF(4)+type+len
+    if (snap.magic == FlightSnapshotData::MAGIC) return false;
+    for (size_t i = 0; i < kSnapFrameLen; ++i)
+    {
+        if (frame[i] != 0) return true;
+    }
+    return false;
+}
+
+// Stage the explicit "no flight in progress" answer to GET_FLIGHT_SNAPSHOT
+// (snapshot_answer_policy.h). Kept out of processFrame() so its ~460 B of
+// locals never sit on the I2S parser task's stack, which holds processFrame()'s
+// frame twice over during a batch unpack (#1485); the ask only ever arrives
+// over the I2C ingress.
+static __attribute__((noinline)) void stageNoFlightAnswer()
+{
+    FlightSnapshotData none = flight_snapshot_answer::noFlightPayload();
+    none.crc32 = snapshotCrc(none);
+    uint8_t frame[kSnapFrameLen];
+    size_t frame_len = 0;
+    if (TR_I2C_Interface::packMessage(SNAPSHOT_MSG,
+                                      reinterpret_cast<const uint8_t*>(&none),
+                                      sizeof(none), frame, sizeof(frame),
+                                      frame_len) &&
+        frame_len == kSnapFrameLen)
+    {
+        i2c_interface.writeToSlave(frame, frame_len, 0);
+        ESP_LOGI("OC", "[RECOVERY] FC asked for a flight snapshot: no flight "
+                       "in progress, answered so");
+    }
+    else
+    {
+        ESP_LOGE("OC", "[RECOVERY] could not pack the no-flight answer (%u B) — "
+                       "sending no reply",
+                 (unsigned)frame_len);
+    }
+}
 // #825: false after a boot rail restore — our reset wiped the commanded
 // camera state while the FC (kept alive by the restored rail) may still be
 // recording, so the explicit-state dedup below must forward the first
@@ -1171,6 +1357,26 @@ static bool fc_camera_engaged_prev = false;
 // When the last FC_STATUS_MSG arrived (millis), so a flag from an FC that has
 // since gone silent is not trusted (fcCameraEngagedNow).
 static uint32_t fc_status_last_ms = 0;
+// #1409: the V10/V11's hold-up cap as the flight computer reads it, from the
+// last FC_STATUS_MSG: FcScapReport << 16 | scap_mv, and when it arrived.
+// Written by processFrame (the I2S parse task or loop_oc), read by
+// serviceHoldup (loop_oc), hence atomics; a reading and a time from two
+// different frames are 200 ms apart and harmless.
+static std::atomic<uint32_t> fc_scap_report{0};
+static std::atomic<uint32_t> fc_scap_rx_ms{0};
+// The gnss-sdr-dev board's IMU aiding, from the last FC_STATUS_MSG's flags
+// (FCS_GNSS_IMU_*, a SensorHealthState; 0 from an FC without the board or an
+// image from before it), for the apps' dot ("gi"). Written by processFrame,
+// read by the telemetry builders (fcGnssImuNow), hence atomic.
+static std::atomic<uint8_t> fc_gnss_imu{0};
+
+// The gnss-sdr-dev board's IMU aiding as the FC last reported it, while that
+// report is recent (as fcCameraEngagedNow, below); 0 (not sent to the apps) otherwise.
+static uint8_t fcGnssImuNow()
+{
+    if ((millis() - fc_status_last_ms) >= 1500U) return 0;
+    return fc_gnss_imu.load(std::memory_order_relaxed);
+}
 static bool peripherals_initialized = false; // Deferred init for peripherals behind PWR_PIN
 // #1228: the flight-logger half of initPeripherals() has a life of its own.
 // peripherals_initialized says the radio and the FC link are up; oc_logger_ok
@@ -1496,6 +1702,114 @@ static void stageImuRateConfig()
     cfg.rate_hz = cfg_imu_rate;
         setPendingCommandWithConfig(IMU_RATE_CONFIG_PENDING, IMU_RATE_CONFIG_MSG, &cfg, sizeof(cfg));
 }
+
+// GNSS log setting (BLE cmd 79): every SBF block of a mosaic-G5 in the log
+// (DETAILED, the default) or the REDUCED set, which lets the IMU fly 8k.
+// Kept like the IMU rate: cached here for the readback ("glog") and for the
+// IMU limit the apps' menus follow (imuRateMaxNow), relayed to the FC, which
+// keeps its own copy in NVS and applies it at boot.
+static uint8_t cfg_gnss_log = GNSS_LOG_DETAILED;
+
+static void stageGnssLogConfig()
+{
+    GnssLogConfigData cfg;
+    cfg.setting = cfg_gnss_log;
+    setPendingCommandWithConfig(GNSS_LOG_CONFIG_PENDING, GNSS_LOG_CONFIG_MSG, &cfg, sizeof(cfg));
+}
+
+// GNSS antenna offset (BLE cmd 81): where the antenna sits from the FC's IMU,
+// in the board's own frame, or unknown (the default). Kept like the GNSS log:
+// cached here, relayed to the FC, which keeps its own copy in NVS and applies
+// it on the ground. The readback ("antk", "antx", "anty", "antz") serves the
+// FC's own copy from its config report once the FC has taken what was sent
+// and remembers a setting, and this cache until then (antennaReadback,
+// antenna_readback_policy.h); an FC that reports none of its own is sent it
+// again. loop_oc writes it (cmd 81) while the I2S parser task reads it (the
+// config report's comparison and self-heal), so every access goes through the
+// mux: a torn copy would pass antennaOffsetValid and could be sent to the FC.
+static AntennaOffsetConfigData cfg_antenna = {};
+static portMUX_TYPE cfg_antenna_mux = portMUX_INITIALIZER_UNLOCKED;
+static AntennaOffsetConfigData antennaCache()
+{
+    portENTER_CRITICAL(&cfg_antenna_mux);
+    const AntennaOffsetConfigData a = cfg_antenna;
+    portEXIT_CRITICAL(&cfg_antenna_mux);
+    return a;
+}
+static void setAntennaCache(const AntennaOffsetConfigData& a)
+{
+    portENTER_CRITICAL(&cfg_antenna_mux);
+    cfg_antenna = a;
+    portEXIT_CRITICAL(&cfg_antenna_mux);
+}
+
+#if TR_OC_ANTENNA_OFFSET
+// An antenna command staged for the FC and not yet confirmed by its config
+// report, and the value staged: while it stands the readback serves the cache
+// (antenna_readback_policy.h has why). Set by stageAntennaConfig, on loop_oc
+// (cmd 81) and on the I2S parser task (the report's self-heal); settled by
+// the report's handler (the parser) when a report carries ant_staged, or when
+// the command has left the queue for good (none queued, none being served:
+// queueOutStatusResponse clears the serving slot after its deliveries) and a
+// report still does not.
+//
+// Both tasks run on core 1, and the parser (prio 6) preempts loop_oc (prio 5)
+// anywhere, never the other way round: the hazard is the parser running in
+// the middle of a loop_oc sequence. Every access is one critical section on
+// cmd_queue_mux, the queue's own lock, so the settle reads the flag, the value
+// and the queue in one piece. The mark comes AFTER the enqueue: a report the
+// parser handles between the two finds the command queued and settles nothing
+// it should not, where marking first would let it find a staged value with
+// nothing queued, settle it, and serve the FC's old value.
+static bool                    ant_unconfirmed = false;
+static AntennaOffsetConfigData ant_staged      = {};
+#endif
+
+static void stageAntennaConfig(const AntennaOffsetConfigData& cfg)
+{
+    setPendingCommandWithConfig(ANTENNA_CONFIG_PENDING, ANTENNA_CONFIG_MSG, &cfg, sizeof(cfg));
+#if TR_OC_ANTENNA_OFFSET
+    portENTER_CRITICAL(&cmd_queue_mux);   // after the enqueue: see ant_unconfirmed
+    ant_staged      = cfg;
+    ant_unconfirmed = true;
+    portEXIT_CRITICAL(&cmd_queue_mux);
+#endif
+}
+
+#if TR_OC_ANTENNA_OFFSET
+static bool antennaUnconfirmed()
+{
+    portENTER_CRITICAL(&cmd_queue_mux);
+    const bool u = ant_unconfirmed;
+    portEXIT_CRITICAL(&cmd_queue_mux);
+    return u;
+}
+
+// The report's handler, with a report that carries the antenna: settles an
+// unconfirmed command (AntennaReadbackPolicy::reportSettles). True when it
+// gave one up that the report does not hold, with that value in *staged_out
+// for the log.
+static bool settleStagedAntenna(const AntennaOffsetConfigData& reported, AntennaOffsetConfigData* staged_out)
+{
+    bool gave_up = false;
+    portENTER_CRITICAL(&cmd_queue_mux);
+    if (ant_unconfirmed)
+    {
+        bool queued = pending_out_command == ANTENNA_CONFIG_PENDING;
+        for (size_t i = 0; i < cmd_queue_count && !queued; i++)
+            queued = cmd_queue[(cmd_queue_head + i) % CMD_QUEUE_DEPTH].cmd == ANTENNA_CONFIG_PENDING;
+        const bool holds = memcmp(&reported, &ant_staged, sizeof(reported)) == 0;
+        if (AntennaReadbackPolicy::reportSettles(holds, !queued))
+        {
+            ant_unconfirmed = false;
+            gave_up         = !holds;
+            *staged_out     = ant_staged;
+        }
+    }
+    portEXIT_CRITICAL(&cmd_queue_mux);
+    return gave_up;
+}
+#endif
 // Pyro config cache (4 channels on new PCB)
 static bool    cfg_pyro_enabled[4]      = { false, false, false, false };
 static uint8_t cfg_pyro_trigger_mode[4] = { 0, 0, 0, 0 };
@@ -1649,6 +1963,40 @@ static uint32_t lora_uplink_logged = 0;
 static uint32_t lora_uplink_nid_drops = 0;
 static uint32_t last_lora_tx_ms = 0;
 
+// Transmit slots (three rockets on one base station).  The base station times
+// this rocket's frames and sends uplink 82 with where its 2 Hz grid should be;
+// lora_slot remembers when the last frames went (by seq) and, once locked,
+// serviceLoRa transmits on that grid instead of free-running.  RAM only: a
+// reboot, a release, a retune, hop mode or a mute returns to free-running.
+// Reported as "tsl" in the config readback.  See lora_slot_follow_policy.h.
+static lora_slot_follow::State lora_slot;
+
+static uint32_t loraTxPeriodMs()
+{
+    return (config::LORA_TX_RATE_HZ > 0) ? (1000U / config::LORA_TX_RATE_HZ) : 40U;
+}
+
+// Free-running from a random point of the period (lastTxForRandomPhase): a
+// rocket that was transmitting on top of another comes apart from it.
+static void loraRandomizeTxPhase(const char* why)
+{
+    const uint32_t now_ms = millis();
+    last_lora_tx_ms = lora_slot_follow::lastTxForRandomPhase(now_ms, loraTxPeriodMs(),
+                                                             esp_random());
+    ESP_LOGI("LORA", "[SLOT] %s -- next frame in %ld ms (random phase)", why,
+             (long)(int32_t)(last_lora_tx_ms + loraTxPeriodMs() - now_ms));
+}
+
+// Back to free-running, with a log line when there was a lock to drop.
+static void loraSlotUnlock(const char* why)
+{
+    if (lora_slot_follow::unlock(lora_slot))
+    {
+        ESP_LOGI("LORA", "[SLOT] unlocked (%s) -- free-running, a frame every %u ms",
+                 why, (unsigned)loraTxPeriodMs());
+    }
+}
+
 // Free-running per-TX sequence counter (#105).  Stamped into LoRaData.seq
 // on every actual transmit so the BS can compute observed-loss rates and
 // the slow-hop seq-anchored channel schedule.  Widened to 16 bits in
@@ -1706,6 +2054,25 @@ static char          fc_fw_version[40]  = {0};
 static char          fc_board_rev[board_identity::kMaxRev + 1] = {0};
 static char          oc_board_rev[board_identity::kMaxRev + 1] = {0};
 static volatile bool fc_identity_dirty  = false;
+// The GNSS receiver the FC found (GNSS_TYPE_*), the third field of its
+// FC_IDENTITY push: GNSS_TYPE_NONE until an FC that sends it has, and while
+// the FC flies GNSS-absent. Relayed to the app as fc_identity's "fc_gnss",
+// and it sets the IMU limit below.
+static volatile uint8_t fc_gnss_type = GNSS_TYPE_NONE;
+// The "config" frame carries "irmax" and "irate", and the receiver and the
+// GNSS log setting move both (a mosaic-G5 with the detailed log caps the IMU
+// at 3840 Hz): send the readback again when they do.
+static volatile bool config_readback_dirty = false;
+
+// The fastest IMU rate the FC flies now: this board's, lowered by the
+// receiver the FC found with the GNSS log setting (imuRateMaxForGnss, the
+// rule the FC applies itself). What the apps filter their menus on
+// ("irmax"), and what the readback's "irate" is brought within, so it says
+// what the FC flies.
+static uint16_t imuRateMaxNow()
+{
+    return imuRateMaxForGnss(config::IMU_RATE_MAX_HZ, fc_gnss_type, cfg_gnss_log);
+}
 
 // FC's active board→rocket mounting orientation, mirrored from the v3
 // status query.  Re-published to the app when it changes mid-connection
@@ -1731,8 +2098,14 @@ static bool             fc_config_report_has_pyro = false;
 // #1472: false for a v1/v2 report, which has no `camera_type` — its zero
 // would otherwise read as CAM_TYPE_NONE, a real camera setting.
 static bool             fc_config_report_has_camera = false;
+// False for a v1-v3 report, which has no `antenna` — its zero would
+// otherwise read as "unknown", a real antenna setting.
+static bool             fc_config_report_has_antenna = false;
+// False for a v1-v4 report, which has no `guidance_tilt` — its zeros are not
+// limits the FC holds, so no config_tilt frame is sent for it.
+static bool             fc_config_report_has_guidance_tilt = false;
 // #1149 item 3: the same treatment last_query_cfg got, for the same reason.
-// This 194-byte struct is overwritten WHOLESALE by the I2S parser task (core 1,
+// This 209-byte struct is overwritten WHOLESALE by the I2S parser task (core 1,
 // prio 6) and was read field-by-field by loop_oc (core 1, prio 5) through a
 // reference held across dozens of statements and three String builds. The
 // parser strictly preempts loopTask, so a config readback could mix two report
@@ -1740,20 +2113,76 @@ static bool             fc_config_report_has_camera = false;
 static portMUX_TYPE fc_config_report_mux = portMUX_INITIALIZER_UNLOCKED;
 static inline ConfigReportData snapshotConfigReport(bool* valid_out,
                                                     bool* has_pyro_out = nullptr,
-                                                    bool* has_camera_out = nullptr)
+                                                    bool* has_camera_out = nullptr,
+                                                    bool* has_antenna_out = nullptr,
+                                                    bool* has_guidance_tilt_out = nullptr)
 {
     portENTER_CRITICAL(&fc_config_report_mux);
     const ConfigReportData snap = fc_config_report;
     const bool valid = fc_config_report_valid;
     const bool has_pyro = fc_config_report_has_pyro;
     const bool has_camera = fc_config_report_has_camera;
+    const bool has_antenna = fc_config_report_has_antenna;
+    const bool has_guidance_tilt = fc_config_report_has_guidance_tilt;
     portEXIT_CRITICAL(&fc_config_report_mux);
     if (valid_out) *valid_out = valid;
     if (has_pyro_out) *has_pyro_out = has_pyro;
     if (has_camera_out) *has_camera_out = has_camera;
+    if (has_antenna_out) *has_antenna_out = has_antenna;
+    if (has_guidance_tilt_out) *has_guidance_tilt_out = has_guidance_tilt;
     return snap;
 }
 static volatile bool    fc_config_report_dirty = false;
+
+#if TR_OC_ANTENNA_OFFSET
+// The GNSS antenna offset the readback reports ("antk".."antz"), and where it
+// came from ("antsrc") — the FC's own when the FC is up with a report that
+// carries one (v4), has taken the antenna command the OC last staged, and
+// remembers a setting (or the cache is Unknown too); the OC's cache (what the
+// phone last pushed) otherwise. antenna_readback_policy.h has the rule: the
+// apps adopt only the FC's, so it must never be a value the FC is about to be
+// sent. The cache used to be the only answer, so a cmd 81 the FC never
+// applied, or an FC whose NVS was erased, still read as the rocket's.
+// Defined up here because the report's handler compares it before and after
+// each report, to send the "config" frame again when what it says moves.
+// Not on the Beetle, whose FC keeps no antenna offset: the readback leaves
+// the keys out, and the apps lock the setting.
+struct AntennaReadback
+{
+    AntennaOffsetConfigData cfg;
+    bool                    from_fc;
+};
+static AntennaReadback antennaReadback()
+{
+    // The unconfirmed flag before the report: called from loop_oc, this can be
+    // preempted by a report that settles the flag, and a stale flag with the
+    // newer report only serves the cache once more. The other order could
+    // pair the settled flag with the report from before, and serve the FC's
+    // old value as its own.
+    AntennaReadbackPolicy::Inputs in;
+    in.staged_unconfirmed = antennaUnconfirmed();
+    bool valid = false, has_antenna = false;
+    const ConfigReportData r = snapshotConfigReport(&valid, nullptr, nullptr, &has_antenna);
+    const AntennaOffsetConfigData cache = antennaCache();
+    in.rail_on            = pwr_pin_on;
+    in.report_valid       = valid;
+    in.report_has_antenna = has_antenna;
+    in.fc_remembers       = (r.flags & (1U << ConfigReportData::F_ANTENNA_FROM_NVS)) != 0U;
+    in.cache_known        = cache.known == 1U;
+    AntennaReadback a;
+    a.from_fc = AntennaReadbackPolicy::serveFc(in);
+    a.cfg     = a.from_fc ? r.antenna : cache;
+    return a;
+}
+
+// The antenna self-heal (the report's handler): an FC whose report carries
+// the antenna without F_ANTENNA_FROM_NVS has never been told (a fresh board,
+// or its NVS erased), and is sent the cache once when that is measured; the
+// readback serves the cache until the FC remembers a setting. Once per FC
+// boot — cleared by its boot frames — so an FC that does not take it is not
+// sent it on every 5 s report.
+static volatile bool ant_heal_sent = false;
+#endif
 
 // FC's guidance-target echo (#435), mirrored from the v5 status query and
 // re-published as a compact "guid_target" JSON frame whenever it changes —
@@ -1916,6 +2345,25 @@ static void initRailCurrentAdc()
 // How often commitPowerSample re-reads the rail currents (#1485: 10 Hz).
 static constexpr uint32_t RAIL_AMPS_PERIOD_MS = 100;
 
+// CENJARS 11-01: the camera rail's running/dark verdict (cam_draw_policy.h),
+// for the FC's RunCam start. Written by the power sampler at each 10 Hz rail
+// read and read by the status serve, so it crosses tasks as one atomic byte
+// plus the read's time: a verdict older than CAM_DRAW_FRESH_MS (a stalled
+// sampler, an INA fault) is reported as not monitored rather than as stale.
+static CamDrawPolicy::Debounce cam_draw;
+static std::atomic<uint8_t>  cam_draw_bits{0};   // OUT_STATUS_CAM_* bits
+static std::atomic<uint32_t> cam_draw_ms{0};     // millis() of the read behind them
+static constexpr uint32_t CAM_DRAW_FRESH_MS = 1000;
+
+static uint8_t camDrawStatusBits(uint32_t now_ms)
+{
+    const uint8_t bits = cam_draw_bits.load(std::memory_order_acquire);
+    if (bits == 0) return 0;
+    if ((uint32_t)(now_ms - cam_draw_ms.load(std::memory_order_relaxed)) > CAM_DRAW_FRESH_MS)
+        return 0;
+    return bits;
+}
+
 static float readRailAmps(int gpio, float r_ohm)
 {
     if (!rail_adc_ready || gpio < 0 || r_ohm <= 0.0f) return NAN;
@@ -1943,9 +2391,9 @@ static float readRailAmps(int gpio, float r_ohm)
 }
 
 // ---------------------------------------------------------------------------
-//  #1166: hold-up supercap voltage (net V_SCAP_ADC, rocket-computer-mini)
+//  #1166: hold-up supercap voltage (net V_SCAP_ADC, the Tinker-Beetle)
 //
-//  R125/R126 halve V_SCAP onto SCAP_ADC_PIN (ADC1_CH7 on the M1), C144 at the
+//  R125/R126 halve V_SCAP onto SCAP_ADC_PIN (ADC1_CH7 on the Beetle), C144 at the
 //  pin.  The TPS61094 terminates the cap at 2.5 V, so the pad sees ~1.25 V
 //  plus the converter's tolerance: ADC_ATTEN_DB_6 (~0-1.75 V) is the
 //  narrowest range that cannot clip it, and it needs its own calibration
@@ -1957,6 +2405,12 @@ static float readRailAmps(int gpio, float r_ohm)
 //  trace the first-article cold-start log asks for, and nowhere else — no
 //  arm block.  Boards without the sense line (SCAP_ADC_PIN < 0) skip all of
 //  it and their telemetry never carries the keys.
+//
+//  #1409: the Tinker-Mantis V10/V11 (SCAP_FROM_FC) has the same divider on the
+//  FLIGHT computer's GPIO17. The FC reads it and sends it in every
+//  FC_STATUS_MSG; serviceHoldup takes that reading in place of an ADC read
+//  here, and the verdict, the keys and the trace are the Beetle's. While the FC
+//  is off or silent the verdict is withheld (key absent), not judged stale.
 // ---------------------------------------------------------------------------
 static adc_cali_handle_t      scap_adc_cali  = nullptr;
 static bool                   scap_adc_ready = false;
@@ -1982,6 +2436,16 @@ static inline adc_channel_t adc1ChannelForGpio(int gpio)
 
 static void initHoldupAdc()
 {
+    if (config::SCAP_FROM_FC)
+    {
+        // #1409: the V10/V11's sense line is the flight computer's GPIO17; its
+        // reading arrives in FC_STATUS_MSG and serviceHoldup judges it here.
+        ESP_LOGI("OC", "[HOLDUP] V_SCAP from the flight computer (FC_STATUS_MSG): charged at %.2f V, "
+                       "advisory after %lu s under it; no verdict while the FC is off (#1166, #1409)",
+                 (double)config::HOLDUP_CHARGED_V,
+                 (unsigned long)(config::HOLDUP_LOW_ADVISORY_MS / 1000u));
+        return;
+    }
     if (config::SCAP_ADC_PIN < 0) return;   // no sense line on this board
 
     if (rail_adc_unit == nullptr)
@@ -2063,7 +2527,7 @@ static float readHoldupVolts()
 // verdict.  NOT CHARGING and NO READING are warnings; everything else is info.
 static void serviceHoldup(uint32_t now_ms)
 {
-    if (!scap_adc_ready) return;
+    if (!scap_adc_ready && !config::SCAP_FROM_FC) return;
     static bool     ever_read      = false;
     static uint32_t last_read_ms   = 0;
     static bool     ever_traced    = false;
@@ -2074,7 +2538,39 @@ static void serviceHoldup(uint32_t now_ms)
     ever_read    = true;
     last_read_ms = now_ms;
 
-    holdup_scap_v = readHoldupVolts();
+    if (config::SCAP_FROM_FC)
+    {
+        // #1409: the flight computer's last report, if it is current. The
+        // clock is read AFTER the arrival time: the frame lands on another
+        // task, and an arrival stamped after this call's now_ms would wrap the
+        // unsigned age and read as 49 days stale.
+        const uint32_t rx_ms  = fc_scap_rx_ms.load(std::memory_order_acquire);
+        const uint32_t rep    = fc_scap_report.load(std::memory_order_relaxed);
+        const uint32_t age_at = millis();
+        const holdup_policy::RemoteReading r =
+            holdup_policy::remoteReading((uint8_t)(rep >> 16), (uint16_t)(rep & 0xFFFFu),
+                                         age_at, rx_ms, config::FC_FRAME_STALE_MS);
+        if (!r.live)
+        {
+            // FC off, rebooting, too old to send it: nothing to judge and
+            // nothing wrong. Say so once when a verdict goes away.
+            if (last_state != holdup_policy::NONE)
+            {
+                ESP_LOGI("OC", "[HOLDUP] +%lu s no V_SCAP from the flight computer (off or silent) "
+                               "— verdict withheld until it reports (#1409)",
+                         (unsigned long)(now_ms / 1000u));
+            }
+            holdup_scap_v = NAN;
+            holdup_tracker.quiet();
+            last_state = holdup_policy::NONE;
+            return;
+        }
+        holdup_scap_v = r.volts;
+    }
+    else
+    {
+        holdup_scap_v = readHoldupVolts();
+    }
     const uint8_t st = holdup_tracker.update(holdup_scap_v, now_ms,
                                              config::HOLDUP_CHARGED_V,
                                              config::HOLDUP_LOW_ADVISORY_MS);
@@ -2118,6 +2614,73 @@ static void serviceHoldup(uint32_t now_ms)
         }
     }
     last_state = st;
+}
+
+// ---------------------------------------------------------------------------
+//  #1593: supply status inputs (Tinker-Mantis V10: PG_RAIL, VBUCK_OK)
+//
+//  Plain inputs with their own pull-up / divider (board_v10.h). Reported on
+//  the console only: the level at boot, every change as it is polled, and the
+//  counts in the stats lines. supply_status_policy.h has the rules; #1409 owns
+//  the RTC-latched cause and the flight-log fields. Boards without the lines
+//  (-1) compile all of it out.
+// ---------------------------------------------------------------------------
+static constexpr bool kSupplyStatusWired =
+    config::PG_RAIL_PIN >= 0 || config::VBUCK_OK_PIN >= 0;
+static SupplyStatus::Line supply_pg_rail;
+static SupplyStatus::Line supply_vbuck_ok;
+
+static void configSupplyInput(int pin)
+{
+    gpio_config_t cfg = {};
+    cfg.pin_bit_mask = 1ULL << pin;
+    cfg.mode         = GPIO_MODE_INPUT;
+    cfg.pull_up_en   = GPIO_PULLUP_DISABLE;     // R59 on PG_RAIL
+    cfg.pull_down_en = GPIO_PULLDOWN_DISABLE;   // R137/R138 on VBUCK_OK
+    cfg.intr_type    = GPIO_INTR_DISABLE;
+    gpio_config(&cfg);
+}
+
+// One line's poll: log a change at once, as a warning when the supply went away.
+static void pollSupplyLine(SupplyStatus::Line& line, int pin, const char* name,
+                           const char* high_means, const char* low_means, uint32_t now_ms)
+{
+    if (pin < 0) return;
+    const bool high = gpio_get_level((gpio_num_t)pin) != 0;
+    switch (SupplyStatus::sample(line, high, now_ms))
+    {
+        case SupplyStatus::Change::First:
+            ESP_LOGI("PWR", "[SUPPLY] %s (GPIO%d) %s at boot — %s", name, pin,
+                     high ? "HIGH" : "LOW", high ? high_means : low_means);
+            break;
+        case SupplyStatus::Change::Fell:
+            ESP_LOGW("PWR", "[SUPPLY] +%lu ms %s fell — %s (fall %lu)",
+                     (unsigned long)now_ms, name, low_means, (unsigned long)line.falls);
+            break;
+        case SupplyStatus::Change::Rose:
+            ESP_LOGI("PWR", "[SUPPLY] +%lu ms %s rose — %s",
+                     (unsigned long)now_ms, name, high_means);
+            break;
+        case SupplyStatus::Change::None:
+            break;
+    }
+}
+
+static void serviceSupplyStatus(uint32_t now_ms)
+{
+    if constexpr (!kSupplyStatusWired) return;
+    pollSupplyLine(supply_pg_rail, config::PG_RAIL_PIN, "PG_RAIL",
+                   "VBATT on", "VBATT OFF: the pack eFuse has cut the rail", now_ms);
+    pollSupplyLine(supply_vbuck_ok, config::VBUCK_OK_PIN, "VBUCK_OK",
+                   "buck supplying", "buck gone: running on the hold-up cap", now_ms);
+}
+
+static void initSupplyStatus()
+{
+    if constexpr (!kSupplyStatusWired) return;
+    if constexpr (config::PG_RAIL_PIN >= 0)  configSupplyInput(config::PG_RAIL_PIN);
+    if constexpr (config::VBUCK_OK_PIN >= 0) configSupplyInput(config::VBUCK_OK_PIN);
+    serviceSupplyStatus(millis());   // the boot levels
 }
 
 static bool commitPowerSample(float bus_v, float current_a)
@@ -2172,6 +2735,12 @@ static bool commitPowerSample(float bus_v, float current_a)
         rail_amps_ms   = rail_now_ms;
         cam_a   = readRailAmps(config::CAM_IMON_GPIO, config::CAM_IMON_R_OHM);
         servo_a = readRailAmps(config::SERVO_IMON_GPIO, config::SERVO_IMON_R_OHM);
+        cam_draw.update(cam_a);
+        cam_draw_ms.store(rail_now_ms, std::memory_order_relaxed);
+        cam_draw_bits.store(
+            (uint8_t)((cam_draw.monitored() ? OUT_STATUS_CAM_MONITORED_BIT : 0) |
+                      (cam_draw.drawing()   ? OUT_STATUS_CAM_DRAWING_BIT   : 0)),
+            std::memory_order_release);
     }
     psi.cam_current   = cam_a;
     psi.servo_current = servo_a;
@@ -2202,8 +2771,10 @@ static void ina230ConfigureForRailOn()
 static void readINA230Power()
 {
     // #1166: the hold-up cap rides this tick (one read a second of it), on
-    // both power states and whether or not the INA230 is answering.
+    // both power states and whether or not the INA230 is answering. So do
+    // the V10's supply status lines (#1593).
     serviceHoldup(millis());
+    serviceSupplyStatus(millis());
 
     if (!ina230_ok) return;
 
@@ -2258,6 +2829,25 @@ static void readINA230Power()
 #error "Stale sdkconfig: CONFIG_USJ_NO_AUTO_LS_ON_CONNECTION missing — light sleep will kill the USB console on the bench. rm sdkconfig && idf.py build (#519)"
 #endif
 #endif  // ESP_PLATFORM
+
+// ---------------------------------------------------------------------------
+//  Boot-flash guard for the Tinker-Beetle V2 — fail the BUILD, not the board.
+//
+//  The V2's out computer boots from the 4 MB of flash inside its
+//  ESP32-S3FH4R2, so its image has to declare 4 MB. A larger declaration is the
+//  one mistake nothing at runtime can report: the bootloader finds less flash
+//  than the image header claims and stops there, before app_main and before
+//  any log of ours (docs/board-versioning.md, "Boot NOR size per revision").
+//
+//  The declaration comes from sdkconfig.defaults.flash4mb, which the project
+//  CMakeLists adds for -DTR_BOARD_M2=1, and the stale-sdkconfig trap above
+//  applies to it: a build_m2 dir configured before that overlay existed keeps
+//  the base 8 MB and the 8 MB partition table, and builds without complaint.
+//  If this fires, delete build_m2/sdkconfig and build again.
+// ---------------------------------------------------------------------------
+#if defined(ESP_PLATFORM) && TR_BOARD_M2 && !defined(CONFIG_ESPTOOLPY_FLASHSIZE_4MB)
+#error "Stale sdkconfig: a Tinker-Beetle V2 (TR_BOARD_M2) image must declare 4 MB of flash (CONFIG_ESPTOOLPY_FLASHSIZE_4MB, from sdkconfig.defaults.flash4mb) — its ESP32-S3FH4R2 has no more, and the bootloader of an 8 MB image refuses it. rm build_m2/sdkconfig && idf.py -B build_m2 -DTR_BOARD_M2=1 build"
+#endif
 
 // ==========================================================================
 // SECTION: Clock sources, low-power mode, and boot USB-serial grace
@@ -2829,6 +3419,25 @@ static volatile uint32_t rx_ring_overflow_drops = 0; // ring full in ISR callbac
 // with the parser_iter_max_us measurement so we can tell whether bytes
 // were lost at the DMA→rx_ring stage or whether the parser fell behind.
 static volatile uint32_t rx_ring_peak_fill = 0;
+
+// #1659: flash stalls as the I2S RX ISR sees them. The ISR is IRAM-safe
+// (CONFIG_I2S_ISR_IRAM_SAFE), so it keeps running while a flash operation has
+// the cache off, and spi_flash_cache_enabled() then reads false. Erases are
+// the long ones; programs and NVS reads turn it off for far less than a buffer.
+// A stretch runs from the last callback that found the cache ON to the latest
+// one that found it off, which is right to within one DMA buffer (~2.9 ms)
+// either way; a flash op shorter than a buffer can go unseen. The max is reset
+// by each LogBufferStats record, but a stretch still open keeps growing from
+// its own start, so a stall that straddles two records reads in full in the
+// second.
+static bool     rx_cb_cache_off       = false;  // ISR only: the last callback found it off
+static int64_t  rx_cb_prev_us         = 0;      // ISR only
+static int64_t  rx_flash_off_since_us = 0;      // ISR only
+static volatile uint32_t rx_flash_stall_max_us = 0;
+// A previous callback older than this means the link was down (an OTA flip,
+// a channel rebuild), not that a stall began then. Above one DMA buffer at
+// either FC clock (2.9 ms at 88200, 5.8 at 44100).
+static constexpr int64_t kRxCbStaleUs = 20000;
 static uint64_t parser_resync_drops = 0;
 static uint64_t parser_len_drops = 0;
 
@@ -2859,7 +3468,8 @@ static uint32_t msg_count_end_flight = 0;
 static uint32_t msg_count_unknown = 0;
 // #569: types accepted by isKnownMessageType and written to the flight log by
 // the enqueue path, but with no live handler branch (GUIDANCE_TELEM_MSG,
-// FLIGHT_SETTINGS_MSG, LORA_MSG, GNSS_SAT_MSG, GNSS_RTCM_MSG, RAW_GNSS_EKF_MSG). They used to
+// FLIGHT_SETTINGS_MSG, LORA_MSG, GNSS_SAT_MSG, GNSS_RTCM_MSG, RAW_GNSS_EKF_MSG, GNSS_CHECK_MSG,
+// RAW_GNSS_ATT_MSG, IMU_TEMP_MSG, GNSS_CLOCK_MSG, PAD_CONTEXT_MSG, HEADING_FIT_MSG). They used to
 // fall through to msg_count_unknown++, so a guided flight showed a climbing
 // "unknown" rate that read as I2S corruption and masked genuinely unknown
 // frames.
@@ -2909,6 +3519,15 @@ static inline IRAM_ATTR void rxPush(uint8_t b)
         return;
     }
     rx_ring[rx_head] = b;
+    // The byte must land before the index that covers it. volatile orders
+    // rx_head against the other volatile accesses only, not against this plain
+    // store, and at -O2 GCC sinks the store below the rx_head write (it does in
+    // the Beetle V1 image). Harmless while every channel is created from loop_oc: this
+    // ISR then runs on core 1 with i2sParserTask and finishes before the parser
+    // resumes. The fence keeps the ring correct if either ever moves to core 0,
+    // and costs nothing on the S3, where it shares the memw the volatile store
+    // already gets.
+    __sync_synchronize();
     rx_head = next;
     // High-water tracking — non-atomic but only one ISR context produces.
     const size_t   t    = rx_tail;   // one read: the parser advances it under us
@@ -3477,8 +4096,14 @@ static void queueOutStatusResponse(bool ready)
     // #1137 item 4: byte 2 is the serving-window epoch (0 while idle).  An FC
     // that predates it reads payload_len >= 2 and simply never sees the byte,
     // so this is additive on the wire.
-    uint8_t payload[OUT_STATUS_PAYLOAD_BYTES] = { outStatusByte(ready, boot_token_powered), cmd,
-                           (cmd != 0U) ? cmd_serve_epoch : (uint8_t)0 };
+    // CENJARS 11-01: bits 2-3 carry the camera rail's running/dark verdict for
+    // the FC's RunCam start; an older FC reads `!= 0` and never sees them.
+    const uint8_t cam_bits = camDrawStatusBits(millis());
+    uint8_t payload[OUT_STATUS_PAYLOAD_BYTES] = {
+        outStatusByte(ready, boot_token_powered,
+                      (cam_bits & OUT_STATUS_CAM_MONITORED_BIT) != 0,
+                      (cam_bits & OUT_STATUS_CAM_DRAWING_BIT) != 0),
+        cmd, (cmd != 0U) ? cmd_serve_epoch : (uint8_t)0 };
     size_t frame_len = 0;
     if (!TR_I2C_Interface::packMessage(OUT_STATUS_RESPONSE,
                                        payload,
@@ -3989,7 +4614,8 @@ static InflightHold inflightHold()
 // #1553's fault-current trip (below) can also DROP it, from its task or the
 // INA_ALERT ISR; armConsentApplyPin() is the only way up, and it re-checks the
 // trip under the same lock.
-// Every other board sets ARM_CONSENT_PIN to -1 and compiles this out.
+// Every board other than the Beetle and the Mantis V10 sets ARM_CONSENT_PIN to
+// -1 and compiles this out.
 static ArmConsentPolicy::FireTestWindow arm_consent_fire_test;
 static uint8_t                          arm_consent_fire_test_ch = 0;
 static ArmConsentPolicy::Reason         arm_consent_reason = ArmConsentPolicy::Reason::None;
@@ -4089,7 +4715,10 @@ static void pyroFaultTask(void*)
         if (ok && overLimit(raw))
             pyroFaultTripLocked(raw, Source::Poll, now_ms);
         else if (ok)
+        {
             notePeak(pyro_fault, raw);
+            noteUnderLimit(pyro_fault);
+        }
         portEXIT_CRITICAL(&pyro_fault_mux);
 
         ulTaskNotifyTake(pdTRUE, 1);   // the next tick, or at once on an alert edge
@@ -4565,11 +5194,25 @@ static bool isKnownMessageType(uint8_t type)
         case ORIENT_CONFIG_MSG:
         case IMU_RATE_CONFIG_PENDING:
         case IMU_RATE_CONFIG_MSG:
+        case GNSS_LOG_CONFIG_PENDING:
+        case GNSS_LOG_CONFIG_MSG:
+        case ANTENNA_CONFIG_PENDING:
+        case ANTENNA_CONFIG_MSG:
         case LORA_MSG:
         case SNAPSHOT_MSG:           // FC→OC over I2S during INFLIGHT
         case GET_FLIGHT_SNAPSHOT:    // FC→OC over I2C at boot recovery
         case MAG_CAL_STATUS_MSG:     // FC→OC over I2S — issue #96
         case SENSOR_CAL_STATUS_MSG:  // FC→OC over I2S — sensor-cal readback (#132)
+        case ACC_CAL_APPLY_PENDING:  // #1629: the low-g hand calibration — OC→FC only,
+        case ACC_CAL_APPLY_MSG:      // listed like the other cal pairs
+        case ACC_CAL_READ:
+        case ACC_FACE_PENDING:
+        case ACC_CAL_STATUS_MSG:     // FC→OC over I2S — its readback and face windows
+        case HG_CAL_APPLY_PENDING:   // the high-g's six-face alignment — OC→FC only
+        case HG_CAL_APPLY_MSG:
+        case SDR_ALIGN_STATUS_MSG:   // FC→OC over I2S — the gnss-sdr-dev board's IMU mounting, relayed to the app only
+        case SDR_ALIGN_CMD_PENDING:  // the app's command to that board — OC→FC only
+        case SDR_ALIGN_CMD_MSG:
         case OTA_STATUS_MSG:         // FC→OC over I2S — OTA relay status (#8 Phase 4)
         case FLIGHT_SETTINGS_MSG:    // FC→OC over I2S at flight-start — issue #165
         case FC_IDENTITY:            // FC→OC over I2C — FC firmware version (#8 Phase 4)
@@ -4580,6 +5223,12 @@ static bool isKnownMessageType(uint8_t type)
         case GNSS_RTCM_MSG:          // FC→OC over I2S — the GNSS receiver's raw RTCM3 frames, log-only
         case RAW_GNSS_EKF_MSG:       // FC→OC over I2S at 10 Hz — the raw-GNSS shadow filter (#1600), log-only
         case PAD_CAL_STATUS_MSG:     // FC→OC over I2S at 1 Hz on the ground — pad calibration progress (#1600 phase 5)
+        case GNSS_CHECK_MSG:         // FC→OC over I2S at 10 Hz — the receiver's fixes against the IMU (#1508), log-only
+        case RAW_GNSS_ATT_MSG:       // FC→OC over I2S at 10 Hz — the raw-GNSS filter's attitude 1-sigma and IMU biases, log-only
+        case IMU_TEMP_MSG:           // FC→OC over I2S at 1 Hz — the IMU's die temperature, log-only
+        case GNSS_CLOCK_MSG:         // FC→OC over I2S at ~1 Hz — the GPS-to-MCU clock line, log-only
+        case PAD_CONTEXT_MSG:        // FC→OC over I2S once after launch — what a replay needs from the pad, log-only
+        case HEADING_FIT_MSG:        // FC→OC over I2S at ~1 Hz in flight — the heading from thrust, each fit, log-only
         case FC_STATUS_MSG:          // FC→OC over I2S at 5 Hz — the FC's own camera truth (#1154 item 4)
             return true;
         default:
@@ -4679,13 +5328,39 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         board_identity::decodePayload(
             reinterpret_cast<const char*>(payload), payload_len,
             incoming, sizeof(incoming), incoming_rev, sizeof(incoming_rev));
+        // Then the receiver it found, where the FC sends one (an older FC
+        // sends none, which reads as none).
+        char incoming_gnss[16] = {0};
+        board_identity::decodeGnss(reinterpret_cast<const char*>(payload), payload_len,
+                                   incoming_gnss, sizeof(incoming_gnss));
+        const uint8_t gnss = gnssTypeFromName(incoming_gnss);
         if (strncmp(incoming, fc_fw_version, sizeof(fc_fw_version)) != 0 ||
-            strncmp(incoming_rev, fc_board_rev, sizeof(fc_board_rev)) != 0)
+            strncmp(incoming_rev, fc_board_rev, sizeof(fc_board_rev)) != 0 ||
+            gnss != fc_gnss_type)
         {
+            const uint16_t imu_max_was = imuRateMaxNow();
             memcpy(fc_fw_version, incoming, sizeof(fc_fw_version));
             memcpy(fc_board_rev, incoming_rev, sizeof(fc_board_rev));
+            fc_gnss_type = gnss;
             fc_identity_dirty = true;
+            if (imuRateMaxNow() != imu_max_was)
+            {
+                ESP_LOGI("CFG", "FC GNSS receiver %s: IMU rates up to %u Hz",
+                         gnss != GNSS_TYPE_NONE ? gnssTypeName(gnss) : "none", (unsigned)imuRateMaxNow());
+                config_readback_dirty = true;
+            }
         }
+        return;
+    }
+
+    // The gnss-sdr-dev board's IMU mounting and calibration, as the FC relays
+    // the board's own report: to the app on file-ops behind 0xD2, and kept out
+    // of the flight log -- a bench readback, and the board's report itself is
+    // logged already, among the board's frames (GNSS_RTCM_MSG).
+    if (type == SDR_ALIGN_STATUS_MSG)
+    {
+        if (payload_len >= sizeof(SdrAlignStatusData))
+            ble_app.sendSdrAlignStatus(payload, sizeof(SdrAlignStatusData));
         return;
     }
 
@@ -4700,7 +5375,9 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         // Version byte first, then the length that version implies.  v1
         // (#915, 169 bytes) is a byte-exact prefix of v2 (#1231, 193 bytes:
         // + the live deployment configuration), which is a prefix of v3
-        // (#1472, 194 bytes: + the camera type), so an older sender is still
+        // (#1472, 194 bytes: + the camera type), which is a prefix of v4
+        // (201 bytes: + the GNSS antenna offset), which is a prefix of v5
+        // (209 bytes: + the guidance tilt limits), so an older sender is still
         // accepted — with nothing to serve for the blocks it lacks — rather
         // than refused.  The FC image is relayed through the OC, so an OC
         // updated ahead of its FC is the normal OTA order; refusing an older
@@ -4708,14 +5385,33 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         // list for that whole window.
         constexpr size_t kV1Bytes   = offsetof(ConfigReportData, pyro);
         constexpr size_t kV2Bytes   = offsetof(ConfigReportData, camera_type);
+        constexpr size_t kV3Bytes   = offsetof(ConfigReportData, antenna);
+        constexpr size_t kV4Bytes   = offsetof(ConfigReportData, guidance_tilt);
         constexpr size_t kVersionAt = offsetof(ConfigReportData, version);
         const uint8_t ver = (payload_len > kVersionAt) ? payload[kVersionAt] : 0xFF;
         ConfigReportData incoming = {};
         bool has_pyro = false;
         bool has_camera = false;
+        bool has_antenna = false;
+        bool has_guidance_tilt = false;
         if (ver == ConfigReportData::VERSION && payload_len >= sizeof(ConfigReportData))
         {
             memcpy(&incoming, payload, sizeof(incoming));
+            has_pyro = true;
+            has_camera = true;
+            has_antenna = true;
+            has_guidance_tilt = true;
+        }
+        else if (ver == 4U && payload_len >= kV4Bytes)
+        {
+            memcpy(&incoming, payload, kV4Bytes);   // guidance_tilt stays zeroed, and is never served
+            has_pyro = true;
+            has_camera = true;
+            has_antenna = true;
+        }
+        else if (ver == 3U && payload_len >= kV3Bytes)
+        {
+            memcpy(&incoming, payload, kV3Bytes);   // antenna stays zeroed, and is never served
             has_pyro = true;
             has_camera = true;
         }
@@ -4752,11 +5448,16 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             memcmp((const uint8_t*)&incoming + sizeof(incoming.time_us),
                    (const uint8_t*)&fc_config_report + sizeof(incoming.time_us),
                    sizeof(incoming) - sizeof(incoming.time_us)) != 0;
+#if TR_OC_ANTENNA_OFFSET
+        const AntennaReadback ant_was = antennaReadback();
+#endif
         portENTER_CRITICAL(&fc_config_report_mux);   // #1149 item 3
         fc_config_report = incoming;
         fc_config_report_valid = true;
         fc_config_report_has_pyro = has_pyro;
         fc_config_report_has_camera = has_camera;
+        fc_config_report_has_antenna = has_antenna;
+        fc_config_report_has_guidance_tilt = has_guidance_tilt;
         portEXIT_CRITICAL(&fc_config_report_mux);
         if (changed) fc_config_report_dirty = true;
 
@@ -4814,6 +5515,77 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             }
             cam_diverged = differs;
         }
+
+#if TR_OC_ANTENNA_OFFSET
+        // The GNSS antenna offset. First the report settles an antenna
+        // command the OC staged (ant_unconfirmed): confirmed when it carries
+        // the value, given up on once the command has left the queue and the
+        // FC still reports something else (it refused it, or never got it).
+        // Then the same comparison as above, and the same rule — the cache is
+        // not overwritten from here.  Then a self-heal like the orientation's
+        // (the status query's, F_ORIENT_FROM_NVS): an FC that reports no
+        // record of its own has never been told (a fresh board, or its NVS
+        // erased), so a measured offset the OC still holds is sent again —
+        // once per FC boot (ant_heal_sent), and never INFLIGHT.  An FC with a
+        // record keeps it, whatever the cache says.
+        if (has_antenna)
+        {
+            AntennaOffsetConfigData staged = {};
+            if (settleStagedAntenna(incoming.antenna, &staged))
+            {
+                ESP_LOGW("CFG", "FC did not take the GNSS antenna offset the OC sent (%u/%d/%d/%d): it reports "
+                                "%u/%d/%d/%d (known/x/y/z mm)",
+                         (unsigned)staged.known, (int)staged.x_mm, (int)staged.y_mm, (int)staged.z_mm,
+                         (unsigned)incoming.antenna.known, (int)incoming.antenna.x_mm,
+                         (int)incoming.antenna.y_mm, (int)incoming.antenna.z_mm);
+            }
+
+            static bool ant_diverged = false;
+            const AntennaOffsetConfigData cache = antennaCache();
+            const bool fc_remembers = (incoming.flags & (1U << ConfigReportData::F_ANTENNA_FROM_NVS)) != 0U;
+            const bool differs = memcmp(&incoming.antenna, &cache, sizeof(cache)) != 0;
+            if (differs && (!ant_diverged || changed))
+            {
+                ESP_LOGW("CFG", "FC GNSS antenna offset differs from OC cache — FC(%s)=%u/%d/%d/%d "
+                                "OC=%u/%d/%d/%d (known/x/y/z mm); the app is shown the %s",
+                         fc_remembers ? "nvs" : "dflt", (unsigned)incoming.antenna.known,
+                         (int)incoming.antenna.x_mm, (int)incoming.antenna.y_mm, (int)incoming.antenna.z_mm,
+                         (unsigned)cache.known, (int)cache.x_mm, (int)cache.y_mm, (int)cache.z_mm,
+                         antennaReadback().from_fc ? "FC's" : "OC's");
+            }
+            else if (!differs && ant_diverged)
+            {
+                ESP_LOGI("CFG", "FC GNSS antenna offset matches OC cache again");
+            }
+            ant_diverged = differs;
+
+            if (!fc_remembers && !ant_heal_sent && latest_rocket_state != INFLIGHT)
+            {
+                // Read again, not the copy compared above: the log lines can
+                // block on the console's lock, and a cmd 81 loop_oc handled
+                // meanwhile would be replaced in the queue by that older copy
+                // (the queue keeps the payload staged last).
+                const AntennaOffsetConfigData heal = antennaCache();
+                if (heal.known == 1U)
+                {
+                    ant_heal_sent = true;
+                    stageAntennaConfig(heal);
+                    ESP_LOGI("CFG", "FC has no GNSS antenna offset of its own: re-staged the OC's (board X %d, "
+                                    "Y %d, Z %d mm)",
+                             (int)heal.x_mm, (int)heal.y_mm, (int)heal.z_mm);
+                }
+            }
+        }
+
+        // The antenna rides the "config" frame, which a report change does
+        // not re-send on its own: the whole readback goes again when what it
+        // says moves (the IMU limit's path), so the app hears an offset the
+        // FC applied, or one it never did, without a reconnect. Compared
+        // after the settle and the heal, which move it too.
+        const AntennaReadback ant_now = antennaReadback();
+        if (ant_now.from_fc != ant_was.from_fc || memcmp(&ant_now.cfg, &ant_was.cfg, sizeof(ant_now.cfg)) != 0)
+            config_readback_dirty = true;
+#endif
         return;
     }
 
@@ -5124,6 +5896,18 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             ble_app.sendSensorCalStatus(payload, sizeof(SensorCalStatusData));
         }
     }
+    else if (type == ACC_CAL_STATUS_MSG)
+    {
+        // #1629: the low-g hand calibration's readback and face windows,
+        // forwarded to BLE on file-ops behind 0xD1 -- with the high-g's part
+        // after it when the FC sends one (AccelCalStatusFrame): all of it, so
+        // the app can tell an FC without the high-g from one with it.
+        if (payload_len >= sizeof(AccelCalStatusData))
+        {
+            const size_t n = payload_len < sizeof(AccelCalStatusFrame) ? payload_len : sizeof(AccelCalStatusFrame);
+            ble_app.sendAccelCalStatus(payload, n);
+        }
+    }
     else if (type == PAD_CAL_STATUS_MSG)
     {
         // #1600 phase 5: the pad calibration's progress, once a second on the
@@ -5152,10 +5936,12 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         //     no edge to fall from);
         //   - the guard means an ordinary operator stop, where we have already
         //     cleared the request, produces no log and no work.
-        if (payload_len >= sizeof(FcStatusData))
+        // v1 (5 bytes, an FC image from before #1409) or v2: the flags are
+        // in both, so the length gate is v1's, not sizeof.
+        if (payload_len >= FC_STATUS_V1_SIZE)
         {
             FcStatusData fcs{};
-            memcpy(&fcs, payload, sizeof(FcStatusData));
+            memcpy(&fcs, payload, FC_STATUS_V1_SIZE);
             const bool fc_cam = (fcs.flags & FCS_CAMERA_ENGAGED) != 0;
             if (fc_camera_engaged_prev && !fc_cam && camera_recording_requested)
             {
@@ -5166,6 +5952,17 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             }
             fc_camera_engaged_prev = fc_cam;
             fc_status_last_ms = millis();
+            fc_gnss_imu.store(fcStatusGnssImu(payload, payload_len), std::memory_order_relaxed);
+
+            // #1409: the hold-up cap, where the sense line is the FC's. A v1
+            // frame (an FC image from before #1409) has none: ABSENT.
+            if (config::SCAP_FROM_FC)
+            {
+                uint16_t mv = 0;
+                const uint8_t rep = fcStatusScapReport(payload, payload_len, &mv);
+                fc_scap_report.store(((uint32_t)rep << 16) | mv, std::memory_order_relaxed);
+                fc_scap_rx_ms.store(fc_status_last_ms, std::memory_order_release);
+            }
         }
     }
     else if (type == FC_BOOT_STATUS_MSG)
@@ -5192,6 +5989,9 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             if (fc_boot_status.step != FCB_COMPLETE)
             {
                 fc_boot_retire_pending = true;
+#if TR_OC_ANTENNA_OFFSET
+                ant_heal_sent = false;   // a new FC session: its first report may need the antenna again
+#endif
             }
             ESP_LOGI("OC", "[FC BOOT] step=%u degraded=0x%02X t=%u ms",
                      (unsigned)fc_boot_status.step,
@@ -5438,38 +6238,25 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // #383: SNAPSHOT_MSG bypasses the sensor-frame dedup (its payload
             // starts with the magic, not a timestamp — putting it in that
             // switch would misread the constant magic as a ts and drop every
-            // snapshot after the first). Guard the MRAM slot here instead: an
+            // snapshot after the first). Guard the stores here instead: an
             // I2S DMA replay delivers a snapshot a few hundred ms OLDER than
             // the one already stored, and overwriting would hand brownout
-            // recovery stale state. Reject slightly-older frames; a frame
-            // MUCH older (>10 s behind) can only be a new flight's near-zero
-            // clock — accept it and re-seed the baseline.
+            // recovery stale state. The rule, and what a clear does to its
+            // baseline, is snapshot_replay_filter.h. A clear (any non-INFLIGHT
+            // frame) is never dropped (#846 SAFETY), but one sent with no
+            // flight in progress carries the FC's uptime and no longer
+            // becomes the baseline the next flight's frames are held to.
             uint32_t elapsed_ms = 0;
             memcpy(&elapsed_ms, payload + offsetof(FlightSnapshotData, flight_elapsed_ms),
                    sizeof(elapsed_ms));
             uint8_t snap_state = 0;
             memcpy(&snap_state, payload + offsetof(FlightSnapshotData, rocket_state),
                    sizeof(snap_state));
-            static uint32_t last_snap_elapsed_ms = 0;
-            constexpr uint32_t NEW_FLIGHT_BACKSTEP_MS = 10'000;
-            // #846 SAFETY: a non-INFLIGHT frame is the FC's "clear" — it can
-            // only ever DISARM (the FC restores solely on INFLIGHT), so it
-            // must never be dropped as a replay. It routinely looks like one:
-            // clearFlightSnapshot() sends elapsed = FC uptime (a few seconds,
-            // launch_time_millis == 0 at boot), which lands inside the 10 s
-            // backstep below a real flight's elapsed. Dropping it left the
-            // store holding a genuine INFLIGHT frame that a later FC panic
-            // would restore ON THE GROUND with pyro channels re-armed.
-            // Elapsed-ms comparisons are meaningless across an FC reboot
-            // anyway; state is the only trustworthy discriminator here.
-            const bool is_clear = (snap_state != (uint8_t)INFLIGHT);
-            const bool stale_replay =
-                !is_clear &&
-                elapsed_ms < last_snap_elapsed_ms &&
-                (last_snap_elapsed_ms - elapsed_ms) <= NEW_FLIGHT_BACKSTEP_MS;
-            if (!stale_replay)
+            static SnapshotReplayFilter::State replay_filter;
+            if (SnapshotReplayFilter::keep(replay_filter,
+                                           snap_state == (uint8_t)INFLIGHT,
+                                           elapsed_ms))
             {
-                last_snap_elapsed_ms = elapsed_ms;
                 // #1150: the FC's snapshot carries the pad reference and the
                 // running maxima this OC lost if it reset in flight. Adopt
                 // them ONCE when INFLIGHT arrives with no reference of our
@@ -5564,23 +6351,26 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         }
         portEXIT_CRITICAL(&snapshot_cache_mux);
 
+        // The MRAM slot read back as neither the zeros of a retired slot nor a
+        // snapshot: possibly a torn flight frame, so never "no flight".
+        bool mram_garbled = false;
         if (had_cache && snapshotServable(snap_frame, cache_age))
         {
             have = true;
             snapshot_served = true;   // #846: consumed — see the boot re-seed
         }
-        else if (!had_cache &&
-                 logger.mramRawRead(config::SNAPSHOT_REGION_BASE,
-                                    snap_frame, sizeof(snap_frame)) &&
-                 snapshotServable(snap_frame, 0))
+        if (!have && !had_cache &&
+            logger.mramRawRead(config::SNAPSHOT_REGION_BASE,
+                               snap_frame, sizeof(snap_frame)))
         {
             // V7/V8 fallback. Age is unknown (the slot has no clock), so only
             // the frame's own flight_elapsed_ms bounds it — enough to refuse
             // a slot left INFLIGHT by a flight that has since timed out.
-            have = true;
+            if (snapshotServable(snap_frame, 0)) have = true;
+            else mram_garbled = snapshotSlotGarbled(snap_frame);
         }
-        else if (boot_token_restore && boot_token.have_frame &&
-                 snapshotServable(boot_token.snap, 0))
+        if (!have && boot_token_restore && boot_token.have_frame &&
+            snapshotServable(boot_token.snap, 0))
         {
             // #1176 third source, and on V9/V10 it is the ONLY one for a reboot
             // in the first half second of a flight: the log session is still
@@ -5613,28 +6403,40 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             ESP_LOGW("OC", "[RECOVERY] serving the snapshot carried in the "
                            "flight token");
         }
-        else if (had_cache)
+        // A cached in-flight frame that is too old to serve is worth a line;
+        // the FC's own LANDED clear, which every boot now leaves here, is not.
+        if (!have && had_cache && snapshotFrameState(snap_frame) == (uint8_t)INFLIGHT)
         {
-            ESP_LOGW("OC", "[RECOVERY] cached snapshot not servable (age %lu ms, "
-                           "or not an in-flight frame) — not serving it",
+            ESP_LOGW("OC", "[RECOVERY] cached in-flight snapshot not servable "
+                           "(age %lu ms, or past the flight time) — not serving it",
                      (unsigned long)cache_age);
         }
-        if (have)
+
+        const bool recovery_context = boot_rail_restored || boot_token_powered;
+        switch (SnapshotAnswerPolicy::decide(have, mram_garbled, recovery_context,
+                                             snapshot_stores_settled))
         {
+        case SnapshotAnswerPolicy::Reply::Serve:
             // Non-blocking write — if the TX ringbuffer is full, drop;
             // FC's masterRead retry path will handle it.
             i2c_interface.writeToSlave(snap_frame, sizeof(snap_frame), 0);
-        }
-        else
-        {
-            // No cache (nothing received this session, no boot re-seed) and
-            // no MRAM. The FC handles the missing reply safely — masterRead
-            // fails or the SOF scan finds nothing, it retries (#364), then
-            // cold-starts — but from the OC side the request would otherwise
-            // vanish without trace. Fires at most once per FC reset per retry.
-            ESP_LOGW("OC", "[RECOVERY] FC asked for a flight snapshot and "
-                           "none is available (no cached frame, no MRAM) — "
-                           "sending no reply");
+            break;
+        case SnapshotAnswerPolicy::Reply::NoFlight:
+            // Say so, so the FC stops asking at the first exchange. This used
+            // to stage nothing: the FC's read then returned the last staged
+            // status reply, which is not an answer, so every boot spent all
+            // five tries.
+            stageNoFlightAnswer();
+            break;
+        case SnapshotAnswerPolicy::Reply::Silent:
+            // Not certain there is no flight, so say nothing, as before: the
+            // FC retries (#364) and a logger retry or a clean second read can
+            // still serve it. Fires at most once per FC ask.
+            ESP_LOGW("OC", "[RECOVERY] FC asked for a flight snapshot and none "
+                           "is servable yet (%s) — sending no reply",
+                     mram_garbled ? "the MRAM slot read back garbled"
+                                  : "a recovery boot whose logger has not come up");
+            break;
         }
     }
     else if (type == I2C_TX_RESYNC)
@@ -5667,12 +6469,18 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
              type == LORA_MSG ||
              type == GNSS_SAT_MSG ||
              type == GNSS_RTCM_MSG ||
-             type == RAW_GNSS_EKF_MSG)
+             type == RAW_GNSS_EKF_MSG ||
+             type == RAW_GNSS_ATT_MSG ||
+             type == IMU_TEMP_MSG ||
+             type == GNSS_CLOCK_MSG ||
+             type == PAD_CONTEXT_MSG ||
+             type == HEADING_FIT_MSG ||
+             type == GNSS_CHECK_MSG)
     {
         // #569: log-only types — no live handler by design (they exist for
         // the flight log; GUIDANCE_TELEM streams at up to 500 Hz in guided
         // flight, GNSS_SAT at every GNSS epoch, GNSS_RTCM ~5 frames a second,
-        // RAW_GNSS_EKF 10 a second).
+        // RAW_GNSS_EKF and GNSS_CHECK 10 a second).
         // Count them separately so "unknown" stays a real corruption signal.
         msg_count_logonly++;
     }
@@ -5828,6 +6636,23 @@ static IRAM_ATTR bool i2sRecvCallback(const uint8_t* buf, size_t len, void* user
     // while the FC was still driving the line. Both ends driving BCLK is the
     // contention #1116/i2s-flip exists to avoid.
     dma_cb_raw_count = dma_cb_raw_count + 1;
+
+    // #1659: ahead of the pause gate too. A flash stall is a fact about the
+    // link whether or not the frames go on. Both calls are in IRAM.
+    const int64_t now_us = esp_timer_get_time();
+    if (!spi_flash_cache_enabled())
+    {
+        if (!rx_cb_cache_off)
+            rx_flash_off_since_us = (now_us - rx_cb_prev_us <= kRxCbStaleUs) ? rx_cb_prev_us : now_us;
+        rx_cb_cache_off = true;
+        const uint32_t span = (uint32_t)(now_us - rx_flash_off_since_us);
+        if (span > rx_flash_stall_max_us) rx_flash_stall_max_us = span;
+    }
+    else
+    {
+        rx_cb_cache_off = false;
+    }
+    rx_cb_prev_us = now_us;
 
     if (i2s_ingest_paused) return false;
 
@@ -6185,6 +7010,9 @@ static bool buildLoRaPayload(uint8_t out_payload[SIZE_OF_LORA_BUDGET], uint16_t 
         lora.cam_current   = p.cam_current;
         lora.servo_current = p.servo_current;
     }
+    // v6: the gnss-sdr-dev board's IMU aiding rides the SLOW frame too, for the
+    // apps' "GNSS IMU" dot on a base-station link (as "gi" on a direct one).
+    lora.gnss_imu = fcGnssImuNow();
 
     if (frame_type == LORA_FRAME_SLOW)
     {
@@ -6258,10 +7086,11 @@ static void serviceLoRa()
     }
 
     const uint32_t now_ms = millis();
-    const uint32_t period_ms = (config::LORA_TX_RATE_HZ > 0)
-        ? (1000U / config::LORA_TX_RATE_HZ)
-        : 40U;
-    if ((now_ms - last_lora_tx_ms) < period_ms)
+    const uint32_t period_ms = loraTxPeriodMs();
+    // Free-running: a period since the last attempt, exactly as before slots.
+    // Locked to the base station's grid: its next grid point has come (a late
+    // pass sends at once and stays on the grid).
+    if (!lora_slot_follow::txDue(lora_slot, now_ms, last_lora_tx_ms, period_ms))
     {
         return;
     }
@@ -6282,10 +7111,19 @@ static void serviceLoRa()
         return;
     }
     last_lora_tx_ms = now_ms;
+    // A failed attempt uses up its grid point, as it uses up the period today.
+    lora_slot_follow::advanceGrid(lora_slot, now_ms, period_ms);
     lora_in_rx_mode = false;  // Exiting RX for TX
     if (lora_comms.send(payload, payload_len))
     {
         lora_tx_ok++;
+
+        // Transmit slots: remember when this seq went, so an uplink 82 that
+        // names it can place the grid.  The seq that went on the wire (before
+        // the ++ below), and only a frame the radio took: a failed send keeps
+        // its seq for the retry.
+        lora_slot_follow::onFrameSent(lora_slot, lora_tx_seq, now_ms,
+                                      frame_type == LORA_FRAME_SLOW);
 
         // Persist the exact bytes that just went on the air as a LORA_MSG
         // (0xF1) record.  #850: that is now 55 B (FAST) or 22 B (SLOW), so
@@ -6399,6 +7237,8 @@ static void sendLoRaBeacon()
 
     const uint32_t now_ms = millis();
     if ((now_ms - last_beacon_ms) < 2000) return;
+    // Transmit slots: a locked rocket's beacon waits for a SLOW frame (below).
+    if (lora_slot.locked && !lora_slot.beacon_owed) return;
     if (!lora_comms.canSend()) return;
 
     // Beacon format: [0xBE][network_id][rocket_id][unit_name...]
@@ -6425,9 +7265,21 @@ static void sendLoRaBeacon()
         beacon[beacon_len++] = 0;
     }
 
+    // Transmit slots: while locked, only right after a SLOW frame and only if
+    // the beacon ends inside this rocket's slot.  A FAST frame (102 ms at
+    // SF8/BW250) plus a beacon overflows the 166 ms slot into the next
+    // rocket's; a SLOW frame (56 ms) plus a beacon fits.  Free-running: no say.
+    const uint32_t beacon_toa_ms = loraTimeOnAirMs(beacon_len, lora_sf, lora_bw_khz,
+                                                   lora_cr, config::LORA_PREAMBLE_LEN);
+    if (!lora_slot_follow::beaconAllowed(lora_slot, now_ms, beacon_toa_ms, loraTxPeriodMs()))
+    {
+        return;
+    }
+
     last_beacon_ms = now_ms;
     lora_in_rx_mode = false;
     lora_comms.send(beacon, beacon_len);
+    lora_slot_follow::onBeaconSent(lora_slot);
 }
 
 // ==========================================================================
@@ -6444,12 +7296,13 @@ static void sendLoRaBeacon()
 // disconnected, so any frames still queued at disconnect drain out harmlessly.
 // MUST exceed the connect burst, which sendCurrentConfig() enqueues in ONE
 // synchronous pass before any drain runs: config, config_pyro,
-// config_identity, fc_identity, imu_orient, guid_target, and the three #915
-// report frames = 9.  At the old cap of 8 the ninth enqueue evicted the
-// oldest — the main "config" frame — and the app silently never received it.
+// config_identity, fc_identity, imu_orient, guid_target, and the four report
+// frames (#915's three + config_tilt) = 10.  At the old cap of 8 the ninth
+// enqueue evicted the oldest — the main "config" frame — and the app silently
+// never received it.
 // Raise this WITH the burst, or the drop is invisible except for one warning
 // line on a console nobody is watching on the pad.  The report-dirty path
-// (extras + config_pyro = 4) could land in the SAME pass as a connect burst;
+// (extras + config_pyro = 5) could land in the SAME pass as a connect burst;
 // sendCurrentConfig() clears the dirty flag so the two never stack.
 static constexpr uint8_t  CFG_RB_CAP     = 12;
 static constexpr uint32_t CFG_RB_PACE_MS = 20;   // >= negotiated max conn interval
@@ -6500,16 +7353,19 @@ static void sendFcIdentity()
     // empty rather than becoming "unknown" — the app must be able to tell "this
     // board says it is a V9" from "this board has never been asked", and a
     // placeholder string would erase that difference.
-    char buf[160];
+    // The GNSS receiver the FC found rides along the same way: "" when none
+    // (GNSS-absent, rescue mode, or an FC that does not say), never a guess.
+    char buf[192];
     snprintf(buf, sizeof(buf),
              "{\"type\":\"fc_identity\",\"fc_fw\":\"%s\","
-             "\"fc_board\":\"%s\",\"oc_board\":\"%s\"}",
-             fc_fw, fc_board_rev, oc_board_rev);
+             "\"fc_board\":\"%s\",\"oc_board\":\"%s\",\"fc_gnss\":\"%s\"}",
+             fc_fw, fc_board_rev, oc_board_rev, gnssTypeName(fc_gnss_type));
     enqueueConfigReadback(String(buf));   // #398 item 3
-    ESP_LOGI("CFG", "Queued fc_identity (fc_fw=%s fc_board=%s oc_board=%s)",
+    ESP_LOGI("CFG", "Queued fc_identity (fc_fw=%s fc_board=%s oc_board=%s fc_gnss=%s)",
              fc_fw,
              fc_board_rev[0] ? fc_board_rev : "unprovisioned",
-             oc_board_rev[0] ? oc_board_rev : "unprovisioned");
+             oc_board_rev[0] ? oc_board_rev : "unprovisioned",
+             fc_gnss_type != GNSS_TYPE_NONE ? gnssTypeName(fc_gnss_type) : "none");
 }
 
 // Publish the FC's active board→rocket mounting orientation as its own
@@ -6591,7 +7447,7 @@ static void sendGuidTarget()
 
 // #915: the settings the "config" frame never carried, published from the
 // FC's own report so the app can SHOW and VERIFY them instead of displaying
-// profile values it has no way to check.  Split across three frames for the
+// profile values it has no way to check.  Split across four frames for the
 // same reason everything else here is kept small — sendConfigJSON silently
 // drops anything over the BLE notify MTU, so a single fat frame would vanish
 // without a trace.
@@ -6606,7 +7462,9 @@ static void sendConfigExtras()
     // #1149 item 3: a COPY, not a reference to the live global — the parser
     // task can replace it between any two of the reads below.
     bool r_valid = false;
-    const ConfigReportData r = snapshotConfigReport(&r_valid);
+    bool has_guidance_tilt = false;
+    const ConfigReportData r = snapshotConfigReport(&r_valid, nullptr, nullptr, nullptr,
+                                                    &has_guidance_tilt);
     (void)r_valid;
 
     // 1) Servo trim 2-4, fin travel, fin layout.
@@ -6647,9 +7505,34 @@ static void sendConfigExtras()
     g += ",\"gkp\":"; g += fmtf(r.guidance.kp_pos_per_s2, 2);
     g += ",\"gkd\":"; g += fmtf(r.guidance.kd_vel_per_s, 2);
     g += ",\"glw\":"; g += itos(r.guidance.guidance_law);
+    // The flight computer's own guidance on/off, while it is up: what it will
+    // fly.  The "config" frame's "ge" is this OC's copy -- its NVS from the
+    // last cmd 32 until the FC's frames flow -- and the app used to show the
+    // profile over both.  GTV Blue (2026-11-01) flew with guidance off while
+    // the app said on.  Absent with the rail off and from older OCs, which
+    // the apps show as "unverified" (the camera's #1472 rule).
+    if (pwr_pin_on) {
+        g += ",\"gen\":"; g += r.guidance.enable ? "true" : "false";
+    }
     g += "}";
     enqueueConfigReadback(g);
     ESP_LOGI("CFG", "Queued config_guid readback (%u bytes)", (unsigned)g.length());
+
+    // 2b) The guidance tilt-limit latch angles (cmd 65's tail), in a frame of
+    // their own: config_guid is already ~170 bytes against a 182-byte notify
+    // at the usual iPhone MTU, and two more keys would have it skipped
+    // outright.  Only from a v5 report — an older FC has no limits to show
+    // but its compiled ones, and the app keeps the profile's for it.  Keep it
+    // BEFORE config_roll: the apps' connect-time adopt runs when config_roll
+    // lands, and a later config_tilt would miss it.
+    if (has_guidance_tilt) {
+        String t = "{\"type\":\"config_tilt\"";
+        t += ",\"gtlb\":"; t += fmtf(r.guidance_tilt.tilt_limit_boost_deg, 1);
+        t += ",\"gtlc\":"; t += fmtf(r.guidance_tilt.tilt_limit_coast_deg, 1);
+        t += "}";
+        enqueueConfigReadback(t);
+        ESP_LOGI("CFG", "Queued config_tilt readback (%u bytes)", (unsigned)t.length());
+    }
 
     // 3) The roll profile.  num_waypoints == 0 is a real answer ("rate-only"),
     // not an absent one — the app must be able to tell that from "this rocket
@@ -6768,6 +7651,8 @@ static void sendCurrentConfig()
     // pass would enqueue 9 + 4 frames against the 12-deep readback ring and
     // evict the main "config" frame (see CFG_RB_CAP).
     fc_config_report_dirty = false;
+    // Likewise a re-publish for a new IMU limit: this burst states it.
+    config_readback_dirty = false;
 
     // Split config into two smaller JSON messages to stay within MTU limits.
     // Message 1: servo/PID/LoRa config ("config" type)
@@ -6798,10 +7683,32 @@ static void sendCurrentConfig()
     // Current apps take the camera from config_pyro (which says where it came
     // from) and treat this key as unverified.
     j += ",\"camt\":"; j += itos(cameraReadback().type);
-    j += ",\"irate\":"; j += itos(cfg_imu_rate);
-    // #1485: the fastest IMU rate this board flies. Absent from older
-    // firmware, which the apps read as 3840 (nothing older could do more).
-    j += ",\"irmax\":"; j += itos(config::IMU_RATE_MAX_HZ);
+    // The setting as the FC flies it: brought within the limit its receiver
+    // sets (8k Dynamic flies as 4k Dynamic with a mosaic-G5). The stored
+    // setting is kept, for when the receiver no longer lowers the limit.
+    j += ",\"irate\":"; j += itos(imuRateSettingClamp(cfg_imu_rate, imuRateMaxNow()));
+    // #1485: the fastest IMU rate this board flies, with the receiver its FC
+    // found and the GNSS log setting. Absent from older firmware, which the
+    // apps read as 3840 (nothing older could do more).
+    j += ",\"irmax\":"; j += itos(imuRateMaxNow());
+    // The GNSS log setting (cmd 79): 0 detailed, 1 reduced. Absent from
+    // firmware that has no such setting, which the apps read as "this rocket
+    // cannot change it".
+    j += ",\"glog\":"; j += itos(cfg_gnss_log);
+#if TR_OC_ANTENNA_OFFSET
+    // The GNSS antenna offset (cmd 81): 0 unknown or 1 measured, and the board
+    // frame's mm (0 when unknown); "antsrc" "fc" when it is the FC's report,
+    // "oc" when the cache stands in: until the FC has taken what was sent and
+    // remembers a setting (antennaReadback). Absent from firmware with no such
+    // setting, and from the Beetle's, whose FC keeps none: the apps then lock
+    // the setting.
+    const AntennaReadback ant = antennaReadback();
+    j += ",\"antk\":"; j += itos(ant.cfg.known);
+    j += ",\"antx\":"; j += itos(ant.cfg.x_mm);
+    j += ",\"anty\":"; j += itos(ant.cfg.y_mm);
+    j += ",\"antz\":"; j += itos(ant.cfg.z_mm);
+    j += ",\"antsrc\":\""; j += ant.from_fc ? "fc" : "oc"; j += "\"";
+#endif
     // LoRa settings
     j += ",\"lf\":";  j += fmtf(lora_freq_mhz, 3);   // #1155 item 9: 0.1 MHz hid a 902.25 -> "902.20" (channel centres end in .125/.25)
     j += ",\"lsf\":"; j += itos(lora_sf);
@@ -6812,12 +7719,23 @@ static void sendCurrentConfig()
     // "LoRa off" mute.  Both apps decode it lenient-optional, so absence
     // means "firmware predates the feature", not "transmitting".
     j += ",\"ltxd\":"; j += lora_tx_disabled ? "true" : "false";
+    // Transmit slots: locked to the base station's grid (RAM only, so false
+    // after any reboot).  For bench checks; the apps do not read it yet.
+    j += ",\"tsl\":"; j += lora_slot.locked ? "true" : "false";
     // #150: airtime-derived hop dwell for the current preset; 0 tells the
     // app hopping is unavailable at this modulation (option greys out).
     j += ",\"lhdw\":"; j += itos(currentHopDwell());
     j += "}";
     enqueueConfigReadback(j);   // #398 item 3: paced drain in loop_oc, no delay()
     ESP_LOGI("CFG", "Queued config readback (%u bytes)", (unsigned)j.length());
+#if TR_OC_ANTENNA_OFFSET
+    // Its own line, like the camera type's
+    if (ant.cfg.known)
+        ESP_LOGI("CFG", "GNSS antenna offset readback: board X %d, Y %d, Z %d mm (from %s)", (int)ant.cfg.x_mm,
+                 (int)ant.cfg.y_mm, (int)ant.cfg.z_mm, ant.from_fc ? "FC report" : "OC cache");
+    else
+        ESP_LOGI("CFG", "GNSS antenna offset readback: unknown (from %s)", ant.from_fc ? "FC report" : "OC cache");
+#endif
 
     // Message 2: pyro config ("config_pyro" type) — 4 channels, from the FC's
     // report when it can be (#1231), else the OC cache.
@@ -6995,6 +7913,7 @@ static bool applyLoRaTxMute(bool want_disabled, const char* src)
     prefs.begin("lora", false);
     prefs.putUChar("txdis", lora_tx_disabled ? 1 : 0);
     prefs.end();
+    if (lora_tx_disabled) loraSlotUnlock("LoRa muted");
 
     // Re-evaluate the hop schedule against the new mute: muting takes the
     // ON→OFF branch (radio back to lora_freq_mhz, rendezvous visit unwound),
@@ -7019,7 +7938,74 @@ static bool applyLoRaTxMute(bool want_disabled, const char* src)
 // SECTION: LoRa uplink command handling
 // ==========================================================================
 
-static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t payload_len)
+// Uplink 82: the base station's transmit grid for this rocket (see
+// lora_slot_follow_policy.h and LORA_CMD_TX_SLOT_ADJUST).  Payload
+// [ref_seq u16 LE][delta_ms i16 LE]; delta LORA_TX_SLOT_RELEASE releases.
+static void applyTxSlotAdjust(const uint8_t* payload, uint8_t target_rid)
+{
+    uint16_t ref_seq = 0;
+    int16_t  delta_ms = 0;
+    lora_slot_follow::decodeAdjust(payload, ref_seq, delta_ms);
+    const bool release = (delta_ms == LORA_TX_SLOT_RELEASE);
+
+    if (!lora_slot_follow::adjustAddressedToUs(target_rid, rocket_id, delta_ms))
+    {
+        // Only reachable as a broadcast (the RX filter drops other rids): a
+        // grid names one rocket's frame, so it is never for everyone.
+        ESP_LOGW("LORA", "[SLOT] broadcast adjust ignored (ref_seq=%u delta=%d): "
+                         "only a release may be broadcast",
+                 (unsigned)ref_seq, (int)delta_ms);
+        return;
+    }
+    // Slots are for the fixed channel with the transmitter on; those events
+    // also unlock, so a lock here would only be undone by the next one.
+    if (!release && lora_tx_disabled)
+    {
+        ESP_LOGW("LORA", "[SLOT] adjust ignored (ref_seq=%u delta=%d): LoRa transmit muted",
+                 (unsigned)ref_seq, (int)delta_ms);
+        return;
+    }
+    if (!release && !lora_hop_disabled)
+    {
+        ESP_LOGW("LORA", "[SLOT] adjust ignored (ref_seq=%u delta=%d): hop mode enabled",
+                 (unsigned)ref_seq, (int)delta_ms);
+        return;
+    }
+
+    const uint32_t now_ms = millis();
+    const lora_slot_follow::AdjustOutcome o = lora_slot_follow::applyAdjust(
+        lora_slot, ref_seq, delta_ms, now_ms, last_lora_tx_ms, loraTxPeriodMs());
+    switch (o.result)
+    {
+    case lora_slot_follow::AdjustResult::Locked:
+        ESP_LOGI("LORA", "[SLOT] adjust ref_seq=%u delta=%d ms -> phase shift %+ld ms, "
+                         "next frame in %ld ms (%s)",
+                 (unsigned)ref_seq, (int)delta_ms, (long)o.shift_ms,
+                 (long)(int32_t)(o.next_due_ms - now_ms),
+                 o.was_locked ? "still locked" : "LOCKED to the base station's grid");
+        break;
+    case lora_slot_follow::AdjustResult::Released:
+        ESP_LOGI("LORA", "[SLOT] release (rid %u) -> unlocked, free-running, a frame every %u ms",
+                 (unsigned)target_rid, (unsigned)loraTxPeriodMs());
+        // A release is also how the base station breaks up rockets it hears
+        // colliding, so every one draws a new phase, locked or not.
+        loraRandomizeTxPhase("release");
+        break;
+    case lora_slot_follow::AdjustResult::AlreadyFree:
+        ESP_LOGI("LORA", "[SLOT] release (rid %u): already free-running", (unsigned)target_rid);
+        loraRandomizeTxPhase("release");
+        break;
+    case lora_slot_follow::AdjustResult::RefNotFound:
+        ESP_LOGW("LORA", "[SLOT] adjust ignored: ref_seq=%u not among the last %u frames "
+                         "(now at seq %u) -- the base station re-sends",
+                 (unsigned)ref_seq, (unsigned)lora_slot_follow::kRingSize,
+                 (unsigned)lora_tx_seq);
+        break;
+    }
+}
+
+static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t payload_len,
+                                 uint8_t target_rid)
 {
     ESP_LOGI("LORA", "UPLINK RX cmd=%u payload_len=%u", cmd, (unsigned)payload_len);
 
@@ -7309,6 +8295,10 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
                           (double)lora_freq_mhz, (unsigned)lora_sf,
                           (double)lora_bw_khz, (unsigned)lora_cr, (int)lora_tx_power);
 
+            // A new modulation changes every frame's airtime: the slots the
+            // base station laid out no longer hold until it re-measures.
+            loraSlotUnlock("LoRa retune, cmd 10");
+
             // #569: reconfigure() leaves the radio in STANDBY (it clears
             // rx_mode_ internally and does not re-enter RX). Every other
             // reconfigure site (cmd 16, rendezvous, hop visit) follows with
@@ -7386,6 +8376,8 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
                 hop_enable_apply_at_ms = millis() + HOP_ENABLE_DEFER_MS;
                 ESP_LOGI("LORA", "UPLINK Hop disable: ENABLED — activating in %u ms (after BS retry train)",
                          (unsigned)HOP_ENABLE_DEFER_MS);
+                // Transmit slots are a fixed-channel arrangement.
+                loraSlotUnlock("hop mode enabled");
             }
             else
             {
@@ -7408,6 +8400,11 @@ static void processUplinkCommand(uint8_t cmd, const uint8_t* payload, size_t pay
         // symmetric so the app's toggle behaves the same whether it is talking
         // to the rocket directly or relaying through the BS.
         (void)applyLoRaTxMute(payload[0] != 0, "UPLINK");
+    }
+    else if (cmd == LORA_CMD_TX_SLOT_ADJUST && payload_len >= 4)
+    {
+        // Transmit slots: where the base station wants this rocket's grid.
+        applyTxSlotAdjust(payload, target_rid);
     }
     else if (cmd == 12 && payload_len >= sizeof(ServoConfigData))
     {
@@ -7734,7 +8731,7 @@ static void serviceLoRaUplink()
                 if (rx_len >= (size_t)(6 + payload_len))
                 {
                     logUplinkRx(ls, cmd, LORA_UL_ACCEPTED);
-                    processUplinkCommand(cmd, &rx_buf[6], payload_len);
+                    processUplinkCommand(cmd, &rx_buf[6], payload_len, pkt_rid);
                     lora_uplink_rx_count++;
                     last_uplink_rx_ms = millis();
                     if (hop_active_) hop_session_uplink_count++;
@@ -8336,6 +9333,7 @@ static void printStats()
         // #1166: hold-up cap voltage + verdict (NaN / 0 = not on this board).
         ble_telem.scap_voltage = holdup_scap_v;
         ble_telem.holdup_state = holdup_tracker.state;
+        ble_telem.gnss_imu = fcGnssImuNow();
         fillModemTelem(ble_telem);
         fillPyroFaultTelem(ble_telem);   // #1553
         ble_telem.latitude = NAN;
@@ -8534,10 +9532,33 @@ static void printStats()
     prev_msg_count_unknown = msg_count_unknown;
     prev_msg_count_logonly = msg_count_logonly;   // #569
 
+    // I2S RX-side stall instrumentation (#104 follow-up).  Snapshot the
+    // counters first, then reset them so the next window measures peaks
+    // since this print only.  Together they catch the FC→OC→bin loss path:
+    //   rx_ovf      - bytes silently lost at DMA→rx_ring boundary
+    //                 (the silent killer; nothing else flags this)
+    //   rx_peak     - high-water of rx_ring fill since last print
+    //                 (high but not overflowing = parser barely keeping up)
+    //   parser_max  - longest single parseRxStream() call since last print
+    //                 (catches parser stalls that the LFS/NAND timers miss)
+    //   flash_stall - longest flash-cache-off stretch the RX ISR saw (#1659)
+    // Taken before the LogBufferStats record below, which logs the same
+    // window (#1659): until then they reached only the console.
+    static uint32_t s_prev_rx_ovf = 0;
+    const uint32_t  cur_rx_ovf  = rx_ring_overflow_drops;
+    const uint32_t  d_rx_ovf    = cur_rx_ovf - s_prev_rx_ovf;
+    s_prev_rx_ovf = cur_rx_ovf;
+    const uint32_t  cur_rx_peak = rx_ring_peak_fill;
+    rx_ring_peak_fill = 0;
+    const uint32_t  cur_parser  = parser_iter_max_us;
+    parser_iter_max_us = 0;
+    const uint32_t  cur_flash_stall = rx_flash_stall_max_us;
+    rx_flash_stall_max_us = 0;
+
     // Persist a LogBufferStats snapshot once per stats interval (~1 Hz) into
     // the flight log so post-flight tooling can read the per-flight peak
-    // without needing VERBOSE_DEBUG serial captures.  Cheap (28 B payload +
-    // 8 B frame overhead = 36 B/s) and enqueueFrame() internally drops the
+    // without needing VERBOSE_DEBUG serial captures.  Cheap (52 B payload +
+    // 8 B frame overhead = 60 B/s) and enqueueFrame() internally drops the
     // frame when no session/file is open, so off-session traffic is zero.
     {
         LogBufferStatsData lbs = {};
@@ -8548,6 +9569,13 @@ static void printStats()
         lbs.ring_overruns = s.ring_overruns;
         lbs.ring_drop_oldest_bytes = s.ring_drop_oldest_bytes;
         lbs.ring_bad_sof_clears = s.ring_bad_sof_clears;
+        // #1659: the link's receive side, the same window as LOG TIMING.
+        lbs.rx_peak = cur_rx_peak;
+        lbs.rx_overflow_bytes = cur_rx_ovf;
+        lbs.rx_bad_crc = frames_bad_crc;
+        lbs.rx_resync_bytes = (uint32_t)parser_resync_drops;
+        lbs.parser_max_us = cur_parser;
+        lbs.flash_stall_max_us = cur_flash_stall;
 
         uint8_t lbs_frame[MAX_FRAME];
         size_t  lbs_frame_len = 0;
@@ -8558,6 +9586,38 @@ static void printStats()
                                            lbs_frame_len))
         {
             (void)logger.enqueueFrame(lbs_frame, lbs_frame_len);
+        }
+    }
+
+    // #1658: and which computer this is, so a log names the computer that
+    // wrote it even when no phone downloaded it. Every interval rather than
+    // once at file open: the pre-launch ring keeps only about a second, so a
+    // one-shot frame would be gone after a pad wait. 76 B/s; dropped, like the
+    // record above, when no session is open.
+    {
+        OcIdentityData oid = {};   // zeroed: the string fields come out NUL-padded
+        oid.time_us = (uint32_t)esp_timer_get_time();
+        oid.version = OC_IDENTITY_VERSION;
+        oid.network_id = network_id;
+        oid.rocket_id = rocket_id;
+        // As the FC fills FlightSettingsData::board_rev_code: the provisioned
+        // board, else what this image was built for, marked as only a claim.
+        oid.board_rev_code = oc_board_rev[0]
+            ? board_identity::encodeRevCode(oc_board_rev, false)
+            : board_identity::encodeRevCode(TR_BOARD_REV_STR, true);
+        memcpy(oid.unit_id, unit_id_hex, strnlen(unit_id_hex, sizeof(oid.unit_id)));
+        memcpy(oid.unit_name, unit_name, strnlen(unit_name, sizeof(oid.unit_name)));
+        if (const esp_app_desc_t* d = esp_app_get_description())
+            memcpy(oid.fw_version, d->version, strnlen(d->version, sizeof(oid.fw_version)));
+
+        uint8_t oid_frame[MAX_FRAME];
+        size_t  oid_frame_len = 0;
+        if (TR_I2C_Interface::packMessage(OC_IDENTITY_MSG,
+                                           (const uint8_t*)&oid, sizeof(oid),
+                                           oid_frame, sizeof(oid_frame),
+                                           oid_frame_len))
+        {
+            (void)logger.enqueueFrame(oid_frame, oid_frame_len);
         }
     }
 
@@ -8591,6 +9651,12 @@ static void printStats()
                   (unsigned long long)parser_resync_drops,
                   (unsigned long long)parser_len_drops,
                   (unsigned long)frames_bad_crc);
+    if constexpr (kSupplyStatusWired)
+    {
+        ESP_LOGI("PWR", "[SUPPLY] PG_RAIL=%d VBUCK_OK=%d falls=%lu/%lu (#1593)",
+                 supply_pg_rail.high ? 1 : 0, supply_vbuck_ok.high ? 1 : 0,
+                 (unsigned long)supply_pg_rail.falls, (unsigned long)supply_vbuck_ok.falls);
+    }
     // #1155 item 15: page/block were never updated after begin() and printed
     // "page=0 block=1" for the whole flight — a wedged-writer look-alike.
     ESP_LOGI("LOG", "logging=%c file=%s prog_fail=%lu erase_fail=%lu",
@@ -8721,25 +9787,6 @@ static void printStats()
     }
     } // End VERBOSE_DEBUG
 
-    // I2S RX-side stall instrumentation (#104 follow-up).  Snapshot the
-    // counters first, then reset them so the next window measures peaks
-    // since this print only.  Three signals together catch the
-    // FC→OC→bin loss path:
-    //   rx_ovf      - bytes silently lost at DMA→rx_ring boundary
-    //                 (the silent killer; nothing else flags this)
-    //   rx_peak     - high-water of rx_ring fill since last print
-    //                 (high but not overflowing = parser barely keeping up)
-    //   parser_max  - longest single parseRxStream() call since last print
-    //                 (catches parser stalls that the LFS/NAND timers miss)
-    static uint32_t s_prev_rx_ovf = 0;
-    const uint32_t  cur_rx_ovf  = rx_ring_overflow_drops;
-    const uint32_t  d_rx_ovf    = cur_rx_ovf - s_prev_rx_ovf;
-    s_prev_rx_ovf = cur_rx_ovf;
-    const uint32_t  cur_rx_peak = rx_ring_peak_fill;
-    rx_ring_peak_fill = 0;
-    const uint32_t  cur_parser  = parser_iter_max_us;
-    parser_iter_max_us = 0;
-
     // Always-on LFS/NAND stall instrumentation — prints the peak duration of
     // each potentially-slow LittleFS/NAND op observed since the last stats
     // window.  Complements the per-op ESP_LOGW("STALL: …") that fires live
@@ -8748,7 +9795,7 @@ static void printStats()
              "write=%lu sync=%lu erase=%lu open=%lu close=%lu "
              "activate=%lu clr_ring=%lu iter=%lu us  syncs=%lu erases=%lu ring_peak=%lu "
              "bad_blocks=%lu skips=%lu  "
-             "rx_ovf=%lu rx_peak=%lu parser_max=%lu spiw=%lu spih=%lu us  "
+             "rx_ovf=%lu rx_peak=%lu parser_max=%lu flash_stall=%lu spiw=%lu spih=%lu us  "
              "dpg=%lu dby=%lu pop=%lu wsum=%lu m388=%lu/%lu us",
              (unsigned long)s.write_max_us,
              (unsigned long)s.sync_max_us,
@@ -8766,6 +9813,7 @@ static void printStats()
              (unsigned long)d_rx_ovf,
              (unsigned long)cur_rx_peak,
              (unsigned long)cur_parser,
+             (unsigned long)cur_flash_stall,     // #1659
              (unsigned long)s.spi_wait_max_us,   // #398: parser starvation source
              (unsigned long)s.spi_hold_max_us,   // #398
              (unsigned long)s.drain_pages,       // #510: window SUMS — a burst of
@@ -8838,6 +9886,7 @@ static void printStats()
     // #1166: hold-up cap voltage + verdict (NaN / 0 = not on this board).
     ble_telem.scap_voltage = holdup_scap_v;
     ble_telem.holdup_state = holdup_tracker.state;
+    ble_telem.gnss_imu = fcGnssImuNow();
     fillModemTelem(ble_telem);
     fillPyroFaultTelem(ble_telem);   // #1553
     if (latest_gnss_valid)
@@ -8855,7 +9904,12 @@ static void printStats()
                                                      : (uint8_t)(ha + 0.5f);
         }
     }
-    ble_telem.state = rocketStateToString(latest_rocket_state);
+    // While the FC reboots on the ground, the apps see a fresh boot, not the
+    // previous session's state (fc_reboot_display_policy.h).
+    const bool fc_ground_reboot =
+        FcRebootDisplay::groundReboot(latest_rocket_state, ble_telem.boot_valid);
+    ble_telem.state = rocketStateToString(
+        FcRebootDisplay::publishedState(latest_rocket_state, ble_telem.boot_valid));
     ble_telem.camera_recording = camera_recording_requested;
     ble_telem.logging_active = s.logging_active;
     ble_telem.active_file = logger.currentFilename();
@@ -8929,10 +9983,12 @@ static void printStats()
     // on an FC that has genuinely stopped.  SYNCING rather than STALE before
     // the first frame ever arrives: "no rocket data yet" is a different thing
     // from "rocket data has gone stale", and it is what the app already shows
-    // during the FC's ~25 s boot.
+    // during the FC's ~25 s boot. An FC that reboots on the ground while the OC
+    // stays up is the same case: its earlier frames are the previous session's,
+    // and the link is fine.
     {
         const uint32_t now_ms = millis();
-        if (!latest_non_sensor_valid)
+        if (!latest_non_sensor_valid || fc_ground_reboot)
         {
             ble_telem.data_status = TR_BLE_To_APP::TelemetryData::DataStatus::SYNCING;
             ble_telem.data_age_ms = 0;
@@ -9071,6 +10127,33 @@ static void loadCachedPeripheralConfigFromNvs()
                  (unsigned)imuRatePeakHz(cfg_imu_rate));
     else
         ESP_LOGI("CFG", "NVS IMU logging rate: %u Hz", (unsigned)cfg_imu_rate);
+
+    // Load cached GNSS log setting. Readback/cache and the IMU limit only:
+    // the FC owns applying it (its own NVS), as with the rate above.
+    prefs.begin("gnsslog", false);
+    {
+        const uint8_t nvs_log = prefs.getUChar("set", cfg_gnss_log);
+        if (gnssLogSettingValid(nvs_log)) cfg_gnss_log = nvs_log;
+        else ESP_LOGW("CFG", "NVS GNSS log setting %u invalid — keeping detailed", (unsigned)nvs_log);
+    }
+    prefs.end();
+    ESP_LOGI("CFG", "NVS GNSS log: %s", gnssLogName(cfg_gnss_log));
+
+    // Load the cached GNSS antenna offset, readback only (the FC applies its own).
+    prefs.begin("antenna", false);
+    if (prefs.isKey("ofs"))
+    {
+        AntennaOffsetConfigData a = {};
+        if (prefs.getBytes("ofs", &a, sizeof(a)) == sizeof(a) && antennaOffsetValid(a)) setAntennaCache(a);
+        else ESP_LOGW("CFG", "NVS GNSS antenna offset invalid — keeping unknown");
+    }
+    prefs.end();
+    const AntennaOffsetConfigData ant_boot = antennaCache();
+    if (ant_boot.known)
+        ESP_LOGI("CFG", "NVS GNSS antenna offset: board X %d, Y %d, Z %d mm", (int)ant_boot.x_mm,
+                 (int)ant_boot.y_mm, (int)ant_boot.z_mm);
+    else
+        ESP_LOGI("CFG", "NVS GNSS antenna offset: unknown");
 
     // #1271: outstanding blind-window losses, carried across the power cycle
     // between the lost flight and the operator connecting to download. This
@@ -9323,7 +10406,7 @@ static bool initLoggingSubsystem()
                 ESP_LOGW("PWR", "This chip has %d MB of in-package PSRAM that the "
                                 "selected board map does not use. Expected on a V7/V8 "
                                 "board (MRAM is fitted); if this IS a V9/V10 board or "
-                                "the mini (M1), it was built with the wrong "
+                                "the Beetle (M2), it was built with the wrong "
                                 "-DTR_BOARD_* flag.", psram_mb);
             }
         }
@@ -9340,7 +10423,7 @@ static bool initLoggingSubsystem()
             ESP_LOGW("PWR", "  In-flight reboot recovery (#104): RAM cache + NAND");
             ESP_LOGW("PWR", "  tail-scan (#846) — no longer MRAM-dependent.");
             ESP_LOGW("PWR", "  Dirty-ring replay (#274): UNAVAILABLE.");
-            ESP_LOGW("PWR", "  Expected on V9/V10 and the mini (M1). On a V8 board this");
+            ESP_LOGW("PWR", "  Expected on V9/V10 and the Beetle (M2). On a V8 board this");
             ESP_LOGW("PWR", "  means the image was built with the wrong -DTR_BOARD_* flag.");
             ESP_LOGW("PWR", "========================================");
             // #822: PSRAM is the ring's intended home on V9/V10. Landing on
@@ -9659,6 +10742,12 @@ static bool initLoggingSubsystem()
                 }
             }
         }
+
+        // The stores this boot serves from have had their chance: the MRAM
+        // slot is readable from here on, or the re-seed above has run, whatever
+        // it found. From now on the OC may answer "no flight" even on a
+        // recovery boot (snapshot_answer_policy.h).
+        snapshot_stores_settled = logger.isMramEnabled() || flightlog.isInitialized();
 
         // -------------------------------------------------------------------
         // DIAGNOSTIC ONE-SHOT — wipes the entire filesystem at boot.
@@ -10100,7 +11189,9 @@ static void setup_oc()
     //
     // The mini's rework-4 arm requires BOTH processors: FC_ARM (FC GPIO44) and
     // OC_ARM_EN (this pin) each feed a series element, and the arm FET conducts
-    // only when both are high. Two boot defaults worked against that. FC GPIO44
+    // only when both are high. The Tinker-Mantis V10 has the same chain, with
+    // FC_ARM on P4 GPIO33 and this pin on GPIO14 (#1593). Two boot defaults
+    // worked against that on the mini. FC GPIO44
     // is U0RXD, so it carries the ROM console's weak pull-up from power-on
     // until the FC configures the pad — and this pin FLOATED from reset,
     // because nothing ever drove it. A floating gate on a consent transistor is
@@ -10182,6 +11273,25 @@ static void setup_oc()
                 pinMode(config::GPS_PWR_PIN, OUTPUT);
                 digitalWrite(config::GPS_PWR_PIN, HIGH);
             }
+        }
+
+        // The Tinker-Beetle V2's ESP_I2S_WS is on MTCK (GPIO39), which the chip
+        // pulls up after every reset (config::LINK_NET_ON_MTCK has the rule).
+        // Turn the pull off: left on it feeds about 60 uA into the flight
+        // computer's unpowered pad for the whole pad standby, until the first
+        // power-off parks the link pins. An input with no pulls is what the
+        // other link pads reset to, and it is right with the rail up too: a
+        // tier-1 restore above means the flight computer is driving this net,
+        // and the I2S driver takes the pad over when the link starts. After
+        // tier 1 so the rail's ~0.8 s race does not wait on it. if constexpr:
+        // no other board has a link net on this pad, and this compiles to
+        // nothing there.
+        if constexpr (config::LINK_NET_ON_MTCK)
+        {
+            gpio_set_direction((gpio_num_t)config::S3_MTCK_GPIO, GPIO_MODE_INPUT);
+            gpio_set_pull_mode((gpio_num_t)config::S3_MTCK_GPIO, GPIO_FLOATING);
+            ESP_LOGI("OC", "link pad GPIO%d (MTCK): reset pull-up off",
+                     (int)config::S3_MTCK_GPIO);
         }
 
         // ── #1176 TIER 2: the durable flight token ───────────────────────────
@@ -10695,6 +11805,7 @@ static void setup_oc()
     // also cost the camera/servo current readings.
     initRailCurrentAdc();
     initHoldupAdc();   // #1166: V_SCAP on the same ADC unit, its own attenuation
+    initSupplyStatus();   // #1593: the V10's PG_RAIL / VBUCK_OK, levels at boot
 
     // #519: the OC owns its connection-parameter policy — slow (200 ms, latency 4)
     // while the rail is off to save idle power, fast (30 ms) once it comes on for
@@ -11229,11 +12340,15 @@ static void loop_oc()
             {
                 // W1 — ARMED, on reaching PRELAUNCH. A pad state; it never
                 // auto-restores, it only marks that a session was set up.
+                // #1659: then make room for W2 on the active NVS page, so the
+                // launch-edge write never pays for a sector erase in the boost.
                 if (latest_rocket_state == PRELAUNCH &&
                     prev_rs_lockout != PRELAUNCH && token_nvs_ok)
                 {
                     if (!tokenSetState(FlightTokenPolicy::kTokArmed, false, nullptr))
                         ESP_LOGE("PWR", "#1176: ARMED token write FAILED");
+                    else
+                        tokenTurnPageForFlight();
                 }
                 // W2 — INFLIGHT, on the PRELAUNCH -> INFLIGHT edge.
                 //
@@ -11637,6 +12752,19 @@ static void loop_oc()
         ble_was_connected = ble_now;
     }
 
+    // The FC's receiver or the GNSS log setting (cmd 79) moved the IMU limit
+    // the "config" frame states: the whole readback again, as cmd 20 sends
+    // it (fc_identity included), once the ring has drained. Two bursts in it
+    // at once would evict the first one's frames (CFG_RB_CAP); a connect
+    // burst still going out is what usually precedes this, and it already
+    // carries the new limit.
+    if (config_readback_dirty && cfg_rb_count == 0 &&
+        ble_app.isConnected() && ble_app.isReadyForNotify())
+    {
+        fc_identity_dirty = false;
+        sendCurrentConfig();   // clears config_readback_dirty
+    }
+
     // Re-publish the FC version to the app when it changes mid-connection: an FC
     // OTA reboots the FC (new version) but never drops the OC<->app BLE link, so
     // the connect-time fc_identity won't refresh on its own. This is what lets
@@ -12020,16 +13148,14 @@ static void loop_oc()
             else
             {
 
-            // Frame-aligned BLE transfer: pack complete binary frames into each
-            // BLE notification so that a dropped notification only loses whole
-            // frames — no frame boundaries are corrupted.
+            // The stream is the stored file, byte for byte: the listing (cmd 2)
+            // reports its stored size and both apps reject a download that
+            // falls short of it. Whole log frames are still packed into one
+            // notification where they fit; bytes outside a frame (and a partial
+            // frame at the end) go out as they are — tr_ble::nextSegment.
             //
             // Frame format: [AA][55][AA][55][type(1)][len(1)][payload(len)][CRC(2)]
-            // Max frame = 4+1+1+255+2 = 263 bytes, always fits in one notification.
-            //
-            // The iOS app just appends each notification's data.  A dropped
-            // notification means a few missing frames rather than a corrupted
-            // region of zero-filled gaps with broken CRCs.
+            // Max frame = 4+1+1+255+2 = 263 bytes, the most the carry-over holds.
 
             const size_t MAX_FRAME_SIZE = 263;
             const size_t FLASH_READ_SIZE = 4096;
@@ -12042,6 +13168,8 @@ static void loop_oc()
             size_t ble_used = 0;          // Bytes accumulated in ble_buf
             uint32_t bytes_sent = 0;      // Total BLE bytes sent
             uint32_t frames_sent = 0;
+            uint32_t loose_bytes = 0;     // sent outside a whole frame
+            uint32_t loose_runs = 0;
             uint32_t start_ms = millis();
             bool eof = false;
 
@@ -12104,27 +13232,37 @@ static void loop_oc()
                 size_t buf_len = carryover + flash_bytes_read;
                 size_t pos = 0;
 
-                // Scan for complete frames
-                while (pos + 8 <= buf_len)  // Min frame: SOF(4)+type(1)+len(1)+CRC(2)
+                // Every stored byte goes out: a whole frame, or the bytes up to
+                // the next frame start, or (at end of file) whatever is left.
+                // This loop used to step over any byte that did not start a
+                // frame and drop a partial frame left at the end, so the stream
+                // came up short of the listed size and the apps refused the
+                // file (a V5 flight: 6,901,811 listed, 6,901,781 streamed).
+                for (;;)
                 {
-                    // Look for SOF: AA 55 AA 55
-                    if (read_buf[pos]   != 0xAA || read_buf[pos+1] != 0x55 ||
-                        read_buf[pos+2] != 0xAA || read_buf[pos+3] != 0x55)
+                    const tr_ble::Segment seg =
+                        tr_ble::nextSegment(read_buf + pos, buf_len - pos, eof);
+                    if (seg.len == 0)
                     {
-                        pos++;
-                        continue;
+                        break;  // the rest waits for the next read (carry-over)
+                    }
+                    const size_t frame_size = seg.len;
+                    if (!seg.frame)
+                    {
+                        // Not a log frame. Name where it sits in the file (the
+                        // first few), so a short download can be traced to it.
+                        if (loose_runs < 8)
+                        {
+                            ESP_LOGW("BLE", "%u bytes outside a frame at file offset %lu%s",
+                                     (unsigned)frame_size,
+                                     (unsigned long)(file_offset - (buf_len - pos)),
+                                     eof && pos + frame_size == buf_len ? " (end of file)" : "");
+                        }
+                        loose_runs++;
+                        loose_bytes += frame_size;
                     }
 
-                    // Read payload length from frame header
-                    uint8_t payload_len = read_buf[pos + 5];
-                    size_t frame_size = 4 + 1 + 1 + payload_len + 2;
-
-                    if (pos + frame_size > buf_len)
-                    {
-                        break;  // Incomplete frame — will carry over to next read
-                    }
-
-                    // Complete frame found. #1160: decide how it goes out. The
+                    // #1160: decide how the segment goes out. The
                     // old rule flushed only while the stage was non-empty, so a
                     // frame larger than chunk_data_size arriving at an EMPTY
                     // stage was appended and sent whole — an over-MTU
@@ -12155,7 +13293,7 @@ static void loop_oc()
 
                     if (plan.direct_pieces == 0)
                     {
-                        // Append frame to BLE buffer
+                        // Append the segment to the BLE buffer
                         memcpy(ble_buf + ble_used, read_buf + pos, frame_size);
                         ble_used += frame_size;
                     }
@@ -12173,7 +13311,7 @@ static void loop_oc()
                             ble_us += (uint32_t)(micros() - t_ble);
                             if (!sent)
                             {
-                                ESP_LOGE("BLE", "BLE send failed mid-transfer (piece %u/%u of a %u B frame), aborting download",
+                                ESP_LOGE("BLE", "BLE send failed mid-transfer (piece %u/%u of a %u B segment), aborting download",
                                          (unsigned)(i + 1), (unsigned)plan.direct_pieces, (unsigned)frame_size);
                                 send_failed = true;
                                 break;
@@ -12183,13 +13321,13 @@ static void loop_oc()
                         }
                         if (send_failed) break;
                     }
-                    frames_sent++;
+                    if (seg.frame) frames_sent++;
                     pos += frame_size;
                 }
 
                 if (send_failed) break;   // #524: abort the transfer, don't limp on
 
-                // Move unparsed bytes to start of buffer for next iteration
+                // Move the bytes still waiting to the start of the buffer
                 carryover = buf_len - pos;
                 if (carryover > 0 && pos > 0)
                 {
@@ -12228,9 +13366,11 @@ static void loop_oc()
 
             uint32_t elapsed_ms = millis() - start_ms;
             float kbps = (elapsed_ms > 0) ? (bytes_sent / 1024.0f) / (elapsed_ms / 1000.0f) : 0;
-            ESP_LOGI("BLE", "Download complete: %lu frames, %lu bytes in %.1fs (%.1f KB/s)",
+            ESP_LOGI("BLE", "Download complete: %lu frames, %lu bytes in %.1fs (%.1f KB/s); "
+                            "%lu bytes outside a frame in %lu runs",
                           (unsigned long)frames_sent, (unsigned long)bytes_sent,
-                          elapsed_ms / 1000.0f, kbps);
+                          elapsed_ms / 1000.0f, kbps,
+                          (unsigned long)loose_bytes, (unsigned long)loose_runs);
 
             // #524 diagnostic — where did the time go, and why can't we put more
             // packets in each connection event?
@@ -12820,13 +13960,19 @@ static void loop_oc()
         }
         else if (ble_cmd == 65)
         {
-            // Full guidance config (GuidanceConfigData): relay the whole struct to the FC
+            // Full guidance config (GuidanceConfigFrame): relay the whole frame to the FC.
+            // A 45-byte frame from an app that predates the tilt limits is
+            // relayed with its tail zero-filled; the FC reads that as "keep
+            // the limits you have" (GuidanceConfigFrame).
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= sizeof(GuidanceConfigData))
             {
-                                setPendingCommandWithConfig(GUIDANCE_CONFIG_PENDING, GUIDANCE_CONFIG_MSG, payload, sizeof(GuidanceConfigData));
-                ESP_LOGI("BLE", "Guidance config queued for RocketComputer");
+                uint8_t frame[sizeof(GuidanceConfigFrame)] = {};
+                memcpy(frame, payload, plen < sizeof(frame) ? plen : sizeof(frame));
+                setPendingCommandWithConfig(GUIDANCE_CONFIG_PENDING, GUIDANCE_CONFIG_MSG, frame, sizeof(frame));
+                ESP_LOGI("BLE", "Guidance config queued for RocketComputer (%u-byte app frame)",
+                         (unsigned)plen);
             }
         }
         else if (ble_cmd == 66)
@@ -12888,7 +14034,12 @@ static void loop_oc()
             // Dynamic"), IMU_RATE_DYNAMIC_8K (1) or a whitelisted ISM6HG256
             // ODR, up to this board's IMU_RATE_MAX_HZ.  Relayed to the FC,
             // which applies the ODR live (except INFLIGHT) and persists it in
-            // FC NVS.  The FC checks the same limit for the same board.
+            // FC NVS.  The FC checks the same limit for the same board.  Where
+            // its receiver lowers the limit (imuRateMaxNow: the mosaic-G5) both
+            // keep the setting as sent and the FC flies the fastest that fits,
+            // which the readback's "irate" reports: checking the lower limit
+            // here would refuse what the FC keeps, or keep what it refuses
+            // before its identity push has named the receiver.
             const uint8_t* payload = ble_app.getCommandPayload();
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 2)
@@ -12919,6 +14070,82 @@ static void loop_oc()
                     ESP_LOGW("BLE", "IMU logging rate setting %u rejected "
                                     "(not dynamic or an ODR step up to %u Hz)",
                              (unsigned)rate_hz, (unsigned)config::IMU_RATE_MAX_HZ);
+                }
+            }
+        }
+        else if (ble_cmd == 79)
+        {
+            // GNSS log setting: [setting:1] — GNSS_LOG_DETAILED (0, every SBF
+            // block of a mosaic-G5) or GNSS_LOG_REDUCED (1, its raw
+            // measurements once a second, which lets the IMU fly 8k).
+            // Relayed to the FC, which applies it (except INFLIGHT) and keeps
+            // it in FC NVS. With a mosaic-G5 it moves the IMU limit, so the
+            // readback goes out again and the apps' rate menus follow.
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= 1)
+            {
+                const uint8_t setting = payload[0];
+                if (gnssLogSettingValid(setting))
+                {
+                    const uint16_t imu_max_was = imuRateMaxNow();
+                    cfg_gnss_log = setting;
+                    stageGnssLogConfig();
+                    Preferences p2;
+                    p2.begin("gnsslog", false);
+                    p2.putUChar("set", cfg_gnss_log);
+                    p2.end();
+                    ESP_LOGI("BLE", "GNSS log: %s -> FlightComputer", gnssLogName(setting));
+                    if (imuRateMaxNow() != imu_max_was)
+                    {
+                        ESP_LOGI("CFG", "GNSS log %s with the %s: IMU rates up to %u Hz",
+                                 gnssLogName(setting), gnssTypeName(fc_gnss_type), (unsigned)imuRateMaxNow());
+                        config_readback_dirty = true;
+                    }
+                }
+                else
+                {
+                    ESP_LOGW("BLE", "GNSS log setting %u rejected (not detailed or reduced)",
+                             (unsigned)setting);
+                }
+            }
+        }
+        else if (ble_cmd == 81)
+        {
+            // GNSS antenna offset: [known:1][x_mm:2][y_mm:2][z_mm:2], LE — the
+            // antenna's phase centre from the FC's IMU in the board's own frame
+            // (known 1), or unknown (known 0, every component 0). Relayed to the
+            // FC, which keeps it in FC NVS and gives it to the mosaic image's
+            // navigation filter on the ground (one it gets INFLIGHT is held
+            // until it is not). The readback serves this value until an FC
+            // report carries it (or the FC is found not to take it), then the
+            // FC's report, so the app hears what the FC applied.
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(AntennaOffsetConfigData))
+            {
+                AntennaOffsetConfigData a;
+                memcpy(&a, payload, sizeof(a));
+                if (antennaOffsetValid(a))
+                {
+                    setAntennaCache(a);
+                    stageAntennaConfig(a);
+                    Preferences p2;
+                    p2.begin("antenna", false);
+                    p2.putBytes("ofs", &a, sizeof(a));
+                    p2.end();
+                    if (a.known)
+                        ESP_LOGI("BLE", "GNSS antenna offset: board X %d, Y %d, Z %d mm -> FlightComputer",
+                                 (int)a.x_mm, (int)a.y_mm, (int)a.z_mm);
+                    else
+                        ESP_LOGI("BLE", "GNSS antenna offset: unknown -> FlightComputer");
+                    config_readback_dirty = true;
+                }
+                else
+                {
+                    ESP_LOGW("BLE", "GNSS antenna offset rejected (known %u, %d/%d/%d mm: over %d mm, or not 0 "
+                                    "when unknown)",
+                             (unsigned)a.known, (int)a.x_mm, (int)a.y_mm, (int)a.z_mm, (int)ANTENNA_OFFSET_MAX_MM);
                 }
             }
         }
@@ -13093,6 +14320,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 1)
             {
+                const bool changed = (payload[0] != network_id);
                 network_id = payload[0];
                 Preferences prefs;
                 prefs.begin("identity", false);
@@ -13100,6 +14328,14 @@ static void loop_oc()
                 prefs.end();
                 sendCurrentConfig();
                 ESP_LOGI("BLE", "Network ID set: %u", (unsigned)network_id);
+                // Transmit slots: the grid was laid out for the old identity,
+                // and a rocket renamed off a shared ID may sit on another's
+                // grid point — drop it and move to a random phase.
+                if (changed)
+                {
+                    loraSlotUnlock("network ID changed");
+                    loraRandomizeTxPhase("network ID changed");
+                }
             }
         }
         else if (ble_cmd == 42)
@@ -13109,6 +14345,7 @@ static void loop_oc()
             const size_t plen = ble_app.getCommandPayloadLength();
             if (plen >= 1 && payload[0] > 0 && payload[0] < 255)
             {
+                const bool changed = (payload[0] != rocket_id);
                 rocket_id = payload[0];
                 Preferences prefs;
                 prefs.begin("identity", false);
@@ -13116,6 +14353,14 @@ static void loop_oc()
                 prefs.end();
                 sendCurrentConfig();
                 ESP_LOGI("BLE", "Rocket ID set: %u", (unsigned)rocket_id);
+                // Transmit slots: a rocket that shared an ID with another may
+                // have followed that ID's adjusts onto the other's grid point
+                // (bench 2026-10-21) — drop the lock and move to a random phase.
+                if (changed)
+                {
+                    loraSlotUnlock("rocket ID changed");
+                    loraRandomizeTxPhase("rocket ID changed");
+                }
             }
         }
         // ---- Magnetometer hard-iron calibration (issue #96) ----
@@ -13218,6 +14463,74 @@ static void loop_oc()
         {
             setPendingCommand(SENSOR_CAL_READ);
             ESP_LOGI("BLE", "Sensor cal READ -> FlightComputer");
+        }
+        // #1629 — the low-g accelerometer's six-face hand calibration
+        // (tools/accel_cal_six_face.py): store and apply the solved offset
+        // (12-byte AccelCalApplyData, board frame m/s^2; all zero clears it).
+        else if (ble_cmd == 76)
+        {
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(AccelCalApplyData))
+            {
+                setPendingCommandWithConfig(ACC_CAL_APPLY_PENDING, ACC_CAL_APPLY_MSG, payload, sizeof(AccelCalApplyData));
+                ESP_LOGI("BLE", "Accel cal APPLY queued for FlightComputer");
+            }
+            else
+            {
+                ESP_LOGW("BLE", "Accel cal APPLY: payload too short (%u < %u)",
+                              (unsigned)plen, (unsigned)sizeof(AccelCalApplyData));
+            }
+        }
+        // The gnss-sdr-dev board's IMU on its flight board: save, clear or
+        // restart its mounting, or ask for its report (2-byte SdrAlignCmdData:
+        // op, the app's id). The FC sends it to the board and relays the
+        // board's answer (SDR_ALIGN_STATUS_MSG, 0xD2).
+        else if (ble_cmd == 83)
+        {
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(SdrAlignCmdData))
+            {
+                setPendingCommandWithConfig(SDR_ALIGN_CMD_PENDING, SDR_ALIGN_CMD_MSG, payload, sizeof(SdrAlignCmdData));
+                ESP_LOGI("BLE", "SDR board IMU op %u (id %u) queued for FlightComputer",
+                         (unsigned)payload[0], (unsigned)payload[1]);
+            }
+            else
+            {
+                ESP_LOGW("BLE", "SDR board IMU command: payload too short (%u < %u)",
+                         (unsigned)plen, (unsigned)sizeof(SdrAlignCmdData));
+            }
+        }
+        // #1629 — read the stored low-g offset and the last face window back.
+        else if (ble_cmd == 77)
+        {
+            setPendingCommand(ACC_CAL_READ);
+            ESP_LOGI("BLE", "Accel cal READ -> FlightComputer");
+        }
+        // #1629 — average the low-g accelerometer over one face, the board still.
+        else if (ble_cmd == 78)
+        {
+            setPendingCommand(ACC_FACE_PENDING);
+            ESP_LOGI("BLE", "Accel cal FACE -> FlightComputer");
+        }
+        // The high-g's six-face alignment to the low-g: store and apply the
+        // fitted matrix and bias, or clear the matrix (49-byte
+        // HighGCalApplyData). Read back with 77, as the low-g offset is.
+        else if (ble_cmd == 80)
+        {
+            const uint8_t* payload = ble_app.getCommandPayload();
+            const size_t plen = ble_app.getCommandPayloadLength();
+            if (plen >= sizeof(HighGCalApplyData))
+            {
+                setPendingCommandWithConfig(HG_CAL_APPLY_PENDING, HG_CAL_APPLY_MSG, payload, sizeof(HighGCalApplyData));
+                ESP_LOGI("BLE", "High-g cal APPLY queued for FlightComputer");
+            }
+            else
+            {
+                ESP_LOGW("BLE", "High-g cal APPLY: payload too short (%u < %u)",
+                              (unsigned)plen, (unsigned)sizeof(HighGCalApplyData));
+            }
         }
         else if (ble_cmd == 69)
         {

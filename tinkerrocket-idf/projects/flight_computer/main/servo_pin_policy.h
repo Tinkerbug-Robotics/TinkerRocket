@@ -4,14 +4,14 @@
 // main.cpp is this predicate over config::SERVO_PIN_1..4.
 //
 // The board headers spell "no pin" two ways. V7/V8/V9 declare the servo pins
-// as uint8_t GPIO numbers, where 255 is the unmapped sentinel. M1 (the
-// rocket-computer-mini, which has no servos) declares all four as
+// as uint8_t GPIO numbers, where 255 is the unmapped sentinel. The
+// Tinker-Beetle (M2, as the V1 before it; no servos) declares all four as
 // `static constexpr int ... = -1`, the spelling it also uses for its other
 // absent pins (SERVO_ACT_PIN).
 //
 // main.cpp used to test each pin with `!= 255U`. Under the usual arithmetic
 // conversions an int -1 is converted to unsigned (0xFFFFFFFF), which is not
-// 255, so M1 read as fully mapped: setup_fc ran servo_control.begin() with
+// 255, so the Beetle V1 read as fully mapped: setup_fc ran servo_control.begin() with
 // every pin narrowed to uint8_t 255, all four ledc_channel_config() calls
 // failed, and the branch that forces servo_enabled off on a board without
 // servo pins never ran.

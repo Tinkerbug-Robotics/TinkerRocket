@@ -38,10 +38,11 @@ static constexpr size_t kMaxRev = 7;
 ///
 /// This is what lets the compile-time constants be compared against a
 /// provisioned value without either side having to agree on prose.
-/// TR_BOARD_REV_STR is "V9/V10" on one build and "M1 (rocket-computer-mini)"
-/// on another; both reduce to a token. "V9/V10" reduces to "V9", which is
-/// deliberate — those two revisions share an image, so a V10 board provisioned
-/// as "V10" is a genuine mismatch worth showing rather than hiding.
+/// TR_BOARD_REV_STR is "V10" on one build and "M2 (Tinker-Beetle V2)" on
+/// another; both reduce to a token. Images built before #1593 said "V9/V10",
+/// which reduces to "V9" — deliberately: that image cannot arm a V10, so a V10
+/// board provisioned as "V10" running it is a genuine mismatch worth showing
+/// rather than hiding.
 ///
 /// Returns the number of characters written (0 when there is nothing usable).
 inline size_t normalizeRev(const char* in, char* out, size_t out_len)
@@ -85,8 +86,17 @@ inline bool revsMatch(const char* a, const char* b)
 /// version as a C string and simply never looks past the NUL. Nothing breaks.
 /// New OC, old FC: no second field, so the revision reads empty, which is
 /// exactly "unprovisioned" — the honest answer for a board that has not been.
+///
+/// `gnss` (optional, a gnssTypeName() from RocketComputerTypes.h) adds a third
+/// field: which GNSS receiver the FC found, "<version>\0<rev>\0<gnss>". A NUL
+/// always ends the revision then, even an empty one ("<version>\0\0<gnss>"),
+/// because an OC's decodePayload reads the revision up to the next NUL and
+/// skips leading non-alphanumerics: "V9mosaic-G5" would read as "V9MOSAIC",
+/// and an unprovisioned board's "mosaic-G5" as "MOSAIC". Every OC that
+/// predates the field stops at that NUL and never looks further. Null or
+/// empty `gnss` writes exactly the two-field payload.
 inline size_t encodePayload(const char* version, const char* rev,
-                            char* out, size_t out_len)
+                            char* out, size_t out_len, const char* gnss = nullptr)
 {
     if (out == nullptr || out_len == 0) return 0;
     size_t n = 0;
@@ -97,7 +107,44 @@ inline size_t encodePayload(const char* version, const char* rev,
     char norm[kMaxRev + 1];
     const size_t rn = normalizeRev(rev, norm, sizeof(norm));
     for (size_t i = 0; i < rn && n < out_len; ++i) out[n++] = norm[i];
+    if (gnss == nullptr || gnss[0] == '\0') return n;
+    // The whole third field or none of it: a cut name could read as another.
+    size_t gn = 0;
+    while (gnss[gn] != '\0') ++gn;
+    if (n + 1 + gn > out_len) return n;
+    out[n++] = '\0';
+    for (size_t i = 0; i < gn; ++i) out[n++] = gnss[i];
     return n;
+}
+
+/// The third field of a received payload (see encodePayload): the GNSS
+/// receiver's name, as the FC sent it. Empty when the payload has no third
+/// field (an FC that predates it, or one that found no receiver), and when
+/// the name does not fit `out` whole: a cut name could read as another. Only
+/// letters, digits and '-' pass, so the name can go into the app's JSON as it
+/// is; anything else empties the field too.
+inline void decodeGnss(const char* payload, size_t len, char* out, size_t out_len)
+{
+    if (out == nullptr || out_len == 0) return;
+    out[0] = '\0';
+    if (payload == nullptr) return;
+    size_t i = 0;
+    for (int field = 0; field < 2; ++field)   // past the version and the revision
+    {
+        while (i < len && payload[i] != '\0') ++i;
+        if (i >= len) return;
+        ++i;
+    }
+    size_t n = 0;
+    for (; i < len && payload[i] != '\0'; ++i)
+    {
+        const char c = payload[i];
+        const bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') ||
+                        (c >= 'A' && c <= 'Z') || c == '-';
+        if (!ok || n + 1 >= out_len) { out[0] = '\0'; return; }
+        out[n++] = c;
+    }
+    out[n] = '\0';
 }
 
 /// Split a received payload back into its two fields. `rev_out` is left empty

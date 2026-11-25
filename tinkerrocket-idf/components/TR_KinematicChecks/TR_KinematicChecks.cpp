@@ -36,10 +36,31 @@ constexpr float    G_MS2                  = 9.80665f;
 // dropout still pass.  Ejection spikes are O(10-100 km/s), max plausible
 // rocket dynamic is ~200 m/s, so 300 m/s gives wide headroom both ways.
 constexpr float    MAX_BARO_RATE_MS         = 300.0f;
+// ...and only a step of more than this from the last accepted sample is a
+// spike.  At the BMP585's ~2 ms spacing the rate alone trips on a 0.6 m step,
+// and a vented bay's static port passes the airflow's pressure noise: ~0.3 %
+// of the dynamic pressure, 10-20 Pa rms (0.9-1.7 m) per sample at 70-100 m/s.
+// On BARC 2026-10-24 the rate alone dropped 30-50 % of the 65 mm roll-control
+// flight's coast samples and up to 78 % of Rolly Polly V's main bay's, all of
+// it real, zero-mean pressure.  5 m is the EKF barometer gate's deadband
+// (config::BARO_SPIKE_THRESH_M); the 65 mm flight's largest noise step was
+// 3.6 m, and ejection charges step tens to hundreds of metres.
+constexpr float    MIN_BARO_SPIKE_STEP_M    = 5.0f;
 // After this many consecutive rejects the gate accepts the next sample
 // unconditionally and reseeds, preventing a permanently wedged sensor
 // from blinding the detector for the rest of the flight.
 constexpr uint8_t  MAX_CONSEC_BARO_REJECTS  = 10;
+// #1754: how many accepted barometer readings max_altitude follows the
+// altitude filter for, both ways, after the filter starts unseeded (a boot,
+// or an in-flight reboot restored before apogee). The rate gate takes its
+// first reading unchecked, so one bad sample becomes the filter's start and,
+// through the max_altitude == 0 bypass, the maximum too; the gate then refuses
+// the next MAX_CONSEC_BARO_REJECTS good readings, and the 11th pulls the filter
+// ~0.9 of the error in one step. More than 50 m and the spike window below
+// refused it, stalling the maximum under the climb (apogee on the descent), or
+// a high start left it above the rocket. Following for the filter's settle
+// closes both; on the pad it is a few readings at about 0 m.
+constexpr uint8_t  MAX_FOLLOW_BARO_SAMPLES  = 25;
 
 // Apogee sub-detector leaky-counter thresholds (#166).
 // Each test runs +1 on pass / -1 on miss (clamped) so a single false
@@ -59,7 +80,19 @@ constexpr float    GPS_VEL_APOGEE_DESCENT_MPS = 1.0f;
 // (~55 ms/fix, worst observed gap ~136 ms), so a fix older than this is stale
 // for an apogee decision (a 5 s-old fix would be from the launch rail).  Much
 // tighter than the landing vote's 5 s gate, which is a slower ground event.
+// The default of gps_apogee_fresh_ms_; a receiver whose fix comes less often
+// gets a longer one from its caller (setGpsApogeeFreshMs: the gnss-sdr-dev
+// board's once-a-second fix, 1.5 s).
 constexpr uint32_t GPS_APOGEE_FRESH_MS     = 500;
+// The vote by sensor: with fewer than two sensors available, the one left may
+// call apogee alone once it reads a descent this fast.  It allows for the
+// accelerometer's own error at apogee on a high flight (about 10 m/s on a
+// 12.8 km, Mach 2 boost: test_inertial_vertical), so its call comes about
+// 1.5 s after the apogee it sees; GNSS takes the same bar.  Detection, not a
+// prediction: nothing here estimates when apogee will come.
+constexpr float    SINGLE_SENSOR_DESCENT_MPS = 15.0f;
+static_assert(GPS_APOGEE_FRESH_MS == 500, "TR_KinematicChecks.h's gps_apogee_fresh_ms_ default is 500");
+static_assert(GPS_APOGEE_COUNT_HI == 4, "TR_KinematicChecks.h's gps_apogee_count_hi_ default is 4");
 
 // Launch accel-only fallback (#258, ungated in #1102): latch launch on
 // sustained high-G alone -- LAUNCH_ACCEL_FALLBACK_COUNT consecutive samples
@@ -262,7 +295,7 @@ constexpr uint8_t  QUIESCENT_COUNT_MAX      = 45;
 // detectors by definition; and gps_stationary, despite its name, is an EKF
 // SPEED proxy -- and the EKF is driven by the IMU, so on a dead-IMU flight it
 // holds the boost velocity (~260 m/s on the 2026-07-21 HIL bench) and can
-// never pass.  That left the 600 s MAX_FLIGHT_TIME_MS timeout as the only way
+// never pass.  That left the 600 s flight timeout as the only way
 // a dead-IMU flight reached LANDED, with the servos driving, post_flight_lockout
 // unset and the log unfinalised for ten minutes after touchdown.
 //
@@ -296,11 +329,14 @@ TR_KinematicChecks::TR_KinematicChecks()
     pitch_apogee_flag = false;
     apogee_flag = false;
     apogee_backstop_flag = false;
+    apogee_single_sensor_flag = false;
     launch_count = 0;
     launch_count_hi = 0;
     launch_count_baro = 0;
     launch_baro_start_alt_ = 0.0f;
     max_altitude = 0.0f;
+    max_altitude_restored_ = 0.0f;
+    max_follow_left_ = 0;
     max_speed = 0.0f;
     landing_check_time = 0;
     landing_look_back_alt = 0.0;
@@ -309,6 +345,8 @@ TR_KinematicChecks::TR_KinematicChecks()
     vel_apogee_count_ = 0;
     pitch_apogee_count_ = 0;
     backstop_descent_count_ = 0;
+    single_accel_count_ = 0;
+    single_gps_count_ = 0;
     impact_seen_count = 0;
     impact_flag = false;
     baro_stable_flag = false;
@@ -336,6 +374,7 @@ TR_KinematicChecks::TR_KinematicChecks()
 
     // KF init
     kf_init_ = false;
+    kf_start_ms_ = 0;
     alt_est = 0.0f;
     d_alt_est_ = 0.0f;
     P00_ = 10.0f;  P01_ = 0.0f;
@@ -365,11 +404,14 @@ void TR_KinematicChecks::reset()
     pitch_apogee_flag = false;
     apogee_flag = false;
     apogee_backstop_flag = false;
+    apogee_single_sensor_flag = false;
     launch_count = 0;
     launch_count_hi = 0;
     launch_count_baro = 0;
     launch_baro_start_alt_ = 0.0f;
     max_altitude = 0.0f;
+    max_altitude_restored_ = 0.0f;
+    max_follow_left_ = 0;
     max_speed = 0.0f;
     landing_check_time = 0;
     landing_look_back_alt = 0.0;
@@ -377,6 +419,8 @@ void TR_KinematicChecks::reset()
     vel_apogee_count_ = 0;
     pitch_apogee_count_ = 0;
     backstop_descent_count_ = 0;
+    single_accel_count_ = 0;
+    single_gps_count_ = 0;
     impact_seen_count = 0;
     impact_flag = false;
     baro_stable_flag = false;
@@ -402,6 +446,7 @@ void TR_KinematicChecks::reset()
     burnout_seen_ = false;
     burnout_seen_ms_ = 0;
     kf_init_ = false;
+    kf_start_ms_ = 0;
     alt_est = 0.0f;
     d_alt_est_ = 0.0f;
     P00_ = 10.0f;  P01_ = 0.0f;
@@ -423,7 +468,9 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                                          bool  ekf_healthy,
                                          bool  baro_healthy,
                                          bool  imu_healthy,
-                                         bool  gnss_may_vote)
+                                         bool  gnss_may_vote,
+                                         bool  baro_reading_fresh,
+                                         const InertialVote* inertial)
 {
     // Snapshot apogee_flag so the rising-edge reset below sees the
     // state *before* this tick's apogee voting fires (#192).
@@ -433,16 +480,20 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // Reject obvious spikes (ejection charges, sensor glitches) before they
     // poison the KF or trip the landing fast path.  The rate test self-scales
     // with dt so a single missed sample doesn't make the next legitimate
-    // reading look like a spike.  After MAX_CONSEC_BARO_REJECTS in a row the
-    // next sample is accepted unconditionally so a wedged sensor reseeds.
+    // reading look like a spike, and a step inside MIN_BARO_SPIKE_STEP_M is
+    // never one (static-port noise at speed).  After MAX_CONSEC_BARO_REJECTS
+    // in a row the next sample is accepted unconditionally so a wedged sensor
+    // reseeds.
     if (new_baro)
     {
         if (baro_gate_init_)
         {
             uint32_t dms = millis() - last_baro_gate_ms_;
             float dt = (dms < 1u) ? 0.001f : (dms * 0.001f);
-            float rate = fabs(pressure_altitude - palt_accepted_) / dt;
-            if (rate > MAX_BARO_RATE_MS &&
+            float step = fabs(pressure_altitude - palt_accepted_);
+            float rate = step / dt;
+            if (step > MIN_BARO_SPIKE_STEP_M &&
+                rate > MAX_BARO_RATE_MS &&
                 consec_baro_rejects_ < MAX_CONSEC_BARO_REJECTS)
             {
                 consec_baro_rejects_++;
@@ -474,7 +525,10 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // Predict step runs every call; update step only when new_baro is true
     // to avoid double-counting stale measurements.
     // Runs before launch check so d_alt_est_ is current for altitude rate confirmation.
+    const bool kf_was_init = kf_init_;
     updateAltKF(pressure_altitude, new_baro);
+    if (!kf_was_init && kf_init_ && max_altitude == 0.0f)
+        max_follow_left_ = MAX_FOLLOW_BARO_SAMPLES;   // #1754: unseeded start
 
     // ### Check for Launch Conditions ###
 
@@ -554,7 +608,13 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // 50 m spike-reject window let through, ratcheting max_altitude above the
     // true climb and tripping the baro apogee detector during ascent — #142).
     // First reading always accepted.
-    if (max_altitude == 0.0f || fabs(alt_est - max_altitude) < 50.0f) {
+    // #1754: for the filter's first MAX_FOLLOW_BARO_SAMPLES accepted readings
+    // after an unseeded start the maximum follows it both ways (never below
+    // 0), so a bad first reading cannot leave it stalled behind the window.
+    if (max_follow_left_ > 0) {
+        max_altitude = std::max(0.0f, alt_est);
+        if (new_baro) max_follow_left_--;
+    } else if (max_altitude == 0.0f || fabs(alt_est - max_altitude) < 50.0f) {
         max_altitude = std::max(max_altitude, alt_est);
     }
 
@@ -708,7 +768,14 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         // band: that is what lets a rocket that landed hundreds of metres off
         // the pad reference — never able to satisfy baro_stable — still finish
         // its flight.
-        const bool quiescent_alt_ok = (!baro_healthy ||
+        //
+        // "Unusable" means dead or stale, not out of range (V10 pre-flight
+        // review): above about 10.4 km the reading is under the 25 kPa floor
+        // and baro_healthy goes false, but the barometer still reads, and a
+        // steady drogue descent up there passes both IMU gates.  Without the
+        // altitude test the count could reach 30 and call LANDED in the air,
+        // making the main safe.  So a fresh reading keeps the test.
+        const bool quiescent_alt_ok = (!(baro_healthy || baro_reading_fresh) ||
                                        landing_altitude_change < BARO_STABLE_DELTA_MAX);
         const bool quiescent_pass = (apogee_flag &&
                                      imu_healthy &&   // #1137: both gyro and
@@ -846,8 +913,16 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             burnout_seen_ms_ = millis();
         }
 
+        // The vote by sensor (InertialVote): the accelerometer's and the
+        // gyro's own estimates stand in for the filter's.
+        const bool by_sensor = inertial != nullptr && inertial->in_use;
+        const bool inertial_ok = by_sensor && inertial->healthy;
+
         // --- Test 1: Velocity (EKF vertical velocity negative) ---
-        const bool vel_pass = (position[2] > 15.0f && velocity[2] < 0.0f);
+        // By sensor: the accelerometer's own vertical velocity.
+        const bool vel_pass = by_sensor
+            ? (inertial_ok && inertial->height_m > 15.0f && inertial->vz_up_mps < 0.0f)
+            : (position[2] > 15.0f && velocity[2] < 0.0f);
         if (vel_pass) {
             if (vel_apogee_count_ < APOGEE_COUNT_MAX) vel_apogee_count_++;
         } else {
@@ -903,15 +978,47 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             } else {
                 if (gps_apogee_count_ > 0) gps_apogee_count_--;
             }
-            if (gps_apogee_count_ >= GPS_APOGEE_COUNT_HI) gps_apogee_flag = true;
+            if (gps_apogee_count_ >= gps_apogee_count_hi_) gps_apogee_flag = true;
             else if (gps_apogee_count_ == 0)              gps_apogee_flag = false;
+        }
+
+        // --- The vote by sensor: each velocity sensor's clear descent ---
+        // Counted whatever the quorum, so a sensor left alone mid-descent
+        // can call at once; used only when it is alone (below).
+        if (by_sensor)
+        {
+            const bool accel_down = inertial_ok && inertial->height_m > 15.0f &&
+                                    inertial->vz_up_mps < -SINGLE_SENSOR_DESCENT_MPS;
+            if (accel_down) {
+                if (single_accel_count_ < APOGEE_COUNT_MAX) single_accel_count_++;
+            } else if (single_accel_count_ > 0) {
+                single_accel_count_--;
+            }
+            if (!gnss_may_vote)
+                single_gps_count_ = 0;
+            else if (new_gps && gps_available_)
+            {
+                if (gps_vel_u < -SINGLE_SENSOR_DESCENT_MPS) {
+                    if (single_gps_count_ < GPS_APOGEE_COUNT_MAX) single_gps_count_++;
+                } else if (single_gps_count_ > 0) {
+                    single_gps_count_--;
+                }
+            }
         }
 
         // --- Test 4: Pitch below horizontal ---
         // NED convention: +90° = nose up, 0° = horizontal, negative = past horizontal.
         // -5° threshold avoids false trigger from coast oscillation.
-        const bool pitch_pass = (pitch_rad < -0.087f);
-        if (pitch_pass) {
+        // By sensor: the gyro's own pitch, and only while the rocket is
+        // solidly in the atmosphere.  In thin air nothing holds the nose on
+        // its path, so pitch says little about apogee; held at zero there,
+        // like GPS before admission, so no thin-air history votes later.
+        const bool pitch_may_vote = !by_sensor || (inertial_ok && inertial->pitch_may_vote);
+        const bool pitch_pass = pitch_may_vote &&
+                                (by_sensor ? inertial->pitch_rad : pitch_rad) < -0.087f;
+        if (!pitch_may_vote) {
+            pitch_apogee_count_ = 0;
+        } else if (pitch_pass) {
             if (pitch_apogee_count_ < APOGEE_COUNT_MAX) pitch_apogee_count_++;
         } else {
             if (pitch_apogee_count_ > 0) pitch_apogee_count_--;
@@ -928,13 +1035,22 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
         // EKF-derived, so an unhealthy EKF excludes BOTH (no double-counting a
         // single sick filter).  With < 2 healthy voters the vote cannot fire —
         // the Layer-2 baro backstop below covers that degraded case.
+        //
+        // By sensor (InertialVote, owner's design 2026-11-19): the voters are
+        // the four sensors -- barometer, GNSS, accelerometer, gyro -- and the
+        // filter is none of them.  The floor of two then means two SENSORS.
+        // Above the barometer's range only GNSS and the accelerometer remain,
+        // and both must agree; with one of them gone, the one sensor left
+        // calls alone (below the quorum).
         if (!apogee_flag)
         {
             uint8_t available = 0;
             uint8_t passed = 0;
 
-            // Velocity (EKF) — available only when the EKF is healthy
-            if (ekf_healthy)
+            // Velocity (EKF) — available only when the EKF is healthy.
+            // By sensor: the accelerometer, while InertialVertical is.
+            const bool vel_available = by_sensor ? inertial_ok : ekf_healthy;
+            if (vel_available)
             {
                 available++;
                 if (vel_u_apogee_flag) passed++;
@@ -958,10 +1074,11 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             // sustained descending samples, so a transient can't fire it.  Being non-EKF, it restores
             // voter diversity exactly when the EKF voters and/or baro are at
             // risk — baro mach-locked-out (the #262 common-mode case) or a
-            // degraded EKF.  Gated on GPS_APOGEE_FRESH_MS freshness (500 ms
-            // since #262 — this comment used to claim 5 s).
+            // degraded EKF.  Gated on freshness: gps_apogee_fresh_ms_,
+            // GPS_APOGEE_FRESH_MS (500 ms since #262 — this comment used to
+            // claim 5 s) unless the caller set the receiver's own.
             const bool gps_fresh = gps_available_ &&
-                                   (millis() - last_gps_time_ms_) < GPS_APOGEE_FRESH_MS;
+                                   (millis() - last_gps_time_ms_) < gps_apogee_fresh_ms_;
             // Not admitted yet (GnssAscentGate): not a voter at all, so it
             // neither passes nor raises the bar for the others.
             if (gps_fresh && gnss_may_vote)
@@ -970,8 +1087,10 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                 if (gps_apogee_flag) passed++;
             }
 
-            // Pitch (EKF) — available only when the EKF is healthy
-            if (ekf_healthy)
+            // Pitch (EKF) — available only when the EKF is healthy.
+            // By sensor: the gyro, while InertialVertical is healthy and
+            // the rocket solidly in the atmosphere.
+            if (by_sensor ? (inertial_ok && inertial->pitch_may_vote) : ekf_healthy)
             {
                 available++;
                 if (pitch_apogee_flag) passed++;
@@ -990,6 +1109,28 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
             if (available >= 2 && passed >= 2 && passed >= need)
             {
                 apogee_flag = true;
+            }
+
+            // --- The vote by sensor: one sensor left ---
+            // With fewer than two sensors available the floor of two can
+            // never be met: above the barometer's range with GNSS lost, or
+            // with the IMU down and the barometer out.  Rather than wait for
+            // a sensor to come back (the barometer, on the way down through
+            // 10.4 km at about 210 m/s), the one sensor left may call apogee
+            // alone once it reads a clear descent.  The barometer's own
+            // single-sensor call is the Layer-2 backstop below; pitch never
+            // calls alone, as it does not measure a descent.  Two available
+            // sensors that disagree still wait: one of them is wrong, and
+            // nothing here can tell which.
+            if (by_sensor && !apogee_flag && available == 1)
+            {
+                const bool accel_alone = vel_available && single_accel_count_ >= APOGEE_COUNT_HI;
+                const bool gps_alone = gps_fresh && gnss_may_vote && single_gps_count_ >= gps_apogee_count_hi_;
+                if (accel_alone || gps_alone)
+                {
+                    apogee_flag = true;
+                    apogee_single_sensor_flag = true;
+                }
             }
         }
     } // end burnout gate
@@ -1024,7 +1165,28 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
     // recovery path.  Latches apogee_flag exactly like the vote, enabling the
     // full drogue + main sequence; apogee_backstop_flag records that Layer 2
     // (not the vote) was the path that fired, for post-flight diagnostics.
+    //
+    // V10 pre-flight review (2026-11-18): "cannot occur while climbing" is not
+    // true of the static port.  Its error grows with dynamic pressure through
+    // the boost and jumps near Mach 1, and on the project's own port model (5 %
+    // of q) the indicated altitude fell 30 m below its peak at T+0.94 s, 294 m/s
+    // up, motor burning: apogee, drogue and main under thrust.  So while the
+    // IMU is healthy the backstop waits for what the vote waits for -- burnout
+    // plus the baro settle window, and no mach lockout (which a live IMU's
+    // filter drives correctly).  With a dead IMU neither signal can be trusted
+    // (see above), and the backstop stays ungated as #556 made it -- except
+    // for the altitude filter's own first second (#1754): after an in-flight
+    // reboot a grossly wrong first reading (kilometres high) pulls the filter
+    // down through the rocket with its rate far below zero, which reads as a
+    // 30 m descent.  The filter starts on the pad, so a normal flight never
+    // sees this gate.
+    const bool backstop_baro_trusted =
+        (!imu_healthy && kf_init_ && millis() - kf_start_ms_ >= BARO_BURNOUT_SETTLE_MS) ||
+        (imu_healthy && burnout_seen_ &&
+         (millis() - burnout_seen_ms_ >= BARO_BURNOUT_SETTLE_MS) &&
+         !baro_locked_out);
     if (launch_flag &&
+        backstop_baro_trusted &&
         baro_healthy &&
         alt_est > 15.0f &&
         alt_est <= max_altitude - APOGEE_BACKSTOP_DROP_M &&
@@ -1076,6 +1238,21 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
 
 }
 
+void TR_KinematicChecks::restoreFlightMaxima(float max_alt_m, float max_speed_mps,
+                                             bool past_apogee)
+{
+    // fmaxf: a NaN from the snapshot is ignored rather than adopted.
+    max_altitude_restored_ = fmaxf(max_altitude_restored_, max_alt_m);
+    max_speed              = fmaxf(max_speed, max_speed_mps);
+    if (past_apogee)
+        max_altitude = fmaxf(max_altitude, max_alt_m);
+}
+
+float TR_KinematicChecks::maxAltitudeReported() const
+{
+    return fmaxf(max_altitude, max_altitude_restored_);
+}
+
 // ======================================================================
 // 1D Constant-Velocity Kalman Filter
 //
@@ -1104,7 +1281,14 @@ float TR_KinematicChecks::updateAltKF(float z_meas, bool new_measurement)
 
     if (!kf_init_)
     {
+        // Start on the first real barometer reading (#1754). A pass with none
+        // has no altitude to start from: on the pad 0 was close enough, but
+        // after an in-flight reboot it started the filter 0 m below a rocket
+        // high up, and its climb back to the truth outran the 50 m window on
+        // max_altitude.
+        if (!new_measurement) return alt_est;
         // Initialize state to first measurement
+        kf_start_ms_ = now;
         alt_est = z_meas;
         d_alt_est_ = 0.0f;
         // Covariance already set in ctor

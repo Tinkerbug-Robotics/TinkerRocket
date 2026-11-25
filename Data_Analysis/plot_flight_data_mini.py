@@ -25,6 +25,7 @@ Usage:
 import sys
 import struct
 import zlib
+import binascii
 import os
 import math
 import numpy as np
@@ -104,6 +105,9 @@ MMC_UT_PER_COUNT = (8.0 * 100.0) / 131072.0  # ≈ 0.006104
 # than v6 carry no field and are assumed to be the big board's IIS2MDC.
 #   Big board V8 (IIS2MDC):                0.15 µT/LSB (ST datasheet 9.13)
 #   rocket-computer-mini (QMC5883P, #797): 100/3750 µT/LSB (±8 G, QST Table 2)
+# QMC5883P logs from before the driver released its soft reset (#1590 scale)
+# were counted at ±30 G, 1000 LSB/G: read here, their |B| is 3.75x small and
+# their directions are right.  Nothing in the log marks them; none is a flight.
 IIS2MDC_UT_PER_LSB  = 0.15
 QMC5883P_UT_PER_LSB = 100.0 / 3750.0
 
@@ -153,14 +157,32 @@ MSG_OUT_STATUS_QUERY  = 0xA0
 MSG_GNSS              = 0xA1
 MSG_GNSS_SAT          = 0x90  # GNSSSatData: per-satellite C/N0 at every GNSS epoch,
                               # variable length 10 + 6*n (first code of the 0x90 block)
-MSG_GNSS_RTCM         = 0x95  # GnssRtcmHeader + a raw RTCM3 frame (or one part of it),
-                              # variable length 5 + up to 219 (LC86G MSM7)
+MSG_GNSS_RTCM         = 0x95  # GnssRtcmHeader + one of the receiver's own frames, verbatim (or one
+                              # part of it): RTCM3 (LC86G) or an SBF block (mosaic-G5);
+                              # variable length 5 + up to 219
 MSG_RAW_GNSS_EKF      = 0x96  # RawGnssEkfData: the raw-GNSS shadow filter, 10 Hz (#1600)
 MSG_PAD_CAL_STATUS    = 0x99  # PadCalStatusData: the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
+MSG_GNSS_CHECK        = 0x9A  # GnssCheckData: each receiver fix against the IMU, 10 Hz (#1508)
+MSG_RAW_GNSS_ATT      = 0x9B  # RawGnssAttData: the raw-GNSS filter's attitude 1-sigma and IMU biases, 10 Hz
+MSG_IMU_TEMP          = 0x9C  # Ism6TempData: the IMU's die temperature, 1 Hz
+MSG_GNSS_CLOCK        = 0x9D  # GnssClockData: the GPS-to-MCU clock line each time it moves, ~1 Hz
+MSG_PAD_CONTEXT       = 0x9E  # PadContextHeader + its kind's body: what a replay needs from the pad,
+                              # once after launch; variable length 7 + up to 196
+MSG_HEADING_FIT       = 0x9F  # HeadingFitData: the heading from thrust, each fit, ~1 Hz in flight
 MSG_ISM6HG256         = 0xA2
 MSG_BMP585            = 0xA3
 MSG_MMC5983MA         = 0xA4
 MSG_FC_STATUS         = 0x92  # FcStatusData: the FC's own camera truth, 5 Hz (#1154 item 4)
+# FcStatusData v2 (#1409): scap_mv carries V_SCAP when FCS_SCAP_SENSE is set
+# (the V10/V11 flight computer reads the hold-up cap); 0xFFFF = no reading.
+FCS_SCAP_SENSE        = 0x04
+FCS_SCAP_NO_READING   = 0xFFFF
+# Bits 3-4: the gnss-sdr-dev board's IMU aiding, a SensorHealthState
+# (0 no board on J1 or an image from before it, 1 fully aiding, 2 not fully
+# aiding: the vertical only until it knows its heading, or off, 3 refused or
+# dropped), in v1 and v2 frames alike.
+FCS_GNSS_IMU_SHIFT    = 3
+FCS_GNSS_IMU_MASK     = 0x18
 MSG_NON_SENSOR        = 0xA5
 MSG_POWER             = 0xA6
 MSG_START_LOGGING     = 0xA7
@@ -171,6 +193,7 @@ MSG_LOG_BUFFER_STATS  = 0xE2  # OC self-emitted ring-buffer snapshot (~1 Hz)
 MSG_LORA              = 0xF1
 MSG_LORA_UPLINK       = 0xF9  # OC-self-emitted uplink RSSI/SNR record
 MSG_PYRO_FAULT_TRIP   = 0x94  # OC-self-emitted pyro fault-current trip, two per trip (#1553)
+MSG_OC_IDENTITY       = 0x87  # OC-self-emitted identity of the computer that wrote the log (#1658)
 MSG_GUIDANCE_TELEM    = 0xCA  # GuidanceTelemData, ~10 Hz during guided coast
 MSG_FLIGHT_SETTINGS   = 0xE1  # FlightSettingsData, once at PRELAUNCH->INFLIGHT
 
@@ -198,6 +221,12 @@ MSG_NAMES = {
     MSG_GNSS_RTCM:        "GNSS_RTCM",
     MSG_RAW_GNSS_EKF:     "RawGnssEkf",
     MSG_PAD_CAL_STATUS:   "PadCalStatus",
+    MSG_GNSS_CHECK:       "GnssCheck",
+    MSG_RAW_GNSS_ATT:     "RawGnssAtt",
+    MSG_IMU_TEMP:         "ImuTemp",
+    MSG_GNSS_CLOCK:       "GnssClock",
+    MSG_PAD_CONTEXT:      "PadContext",
+    MSG_HEADING_FIT:      "HeadingFit",
     MSG_ISM6HG256:        "ISM6HG256",
     MSG_BMP585:           "BMP585",
     MSG_MMC5983MA:        "MMC5983MA",
@@ -213,6 +242,7 @@ MSG_NAMES = {
     MSG_LORA:             "LoRa",
     MSG_LORA_UPLINK:      "LoRaUplink",
     MSG_PYRO_FAULT_TRIP:  "PyroFaultTrip",
+    MSG_OC_IDENTITY:      "OcIdentity",
     MSG_GUIDANCE_TELEM:   "Guidance",
 }
 
@@ -225,19 +255,26 @@ MSG_EXPECTED_LEN = {
     MSG_GNSS_RTCM:         None,  # 5 + 1..219; checked in decode_gnss_rtcm
     MSG_RAW_GNSS_EKF:      90,    # sizeof(RawGnssEkfData)
     MSG_PAD_CAL_STATUS:    40,    # sizeof(PadCalStatusData)
+    MSG_GNSS_CHECK:        24,    # sizeof(GnssCheckData)
+    MSG_RAW_GNSS_ATT:      46,    # sizeof(RawGnssAttData)
+    MSG_IMU_TEMP:           6,    # sizeof(Ism6TempData)
+    MSG_GNSS_CLOCK:        68,    # sizeof(GnssClockData)
+    MSG_PAD_CONTEXT:       None,  # 7 + its kind's body; checked in decode_pad_context
+    MSG_HEADING_FIT:       32,    # sizeof(HeadingFitData)
     MSG_ISM6HG256:         22,
     MSG_BMP585:            12,
     MSG_MMC5983MA:         16,
     MSG_IIS2MDC:           10,   # IIS2MDCData (new PCB rev)
     MSG_SNAPSHOT:          224,  # FlightSnapshotData (v2-v5 are all 224 B; version gates meaning, not size)
-    MSG_FC_STATUS:         5,    # FcStatusData: u32 time_us + u8 flags (#1154 item 4)
+    MSG_FC_STATUS:        (5, 7),  # FcStatusData v1: u32 time_us + u8 flags (#1154 item 4) / v2: + u16 scap_mv (#1409)
     MSG_NON_SENSOR:        None,  # 42 (legacy) or 43 (with pyro_status byte)
     MSG_POWER:            (10, 14),  # #850: v2 appends cam_ma + servo_ma
     MSG_START_LOGGING:     None,  # variable / no payload
     MSG_END_FLIGHT:        None,
-    MSG_LOG_BUFFER_STATS:  28,    # LogBufferStatsData
+    MSG_LOG_BUFFER_STATS:  (28, 52),  # LogBufferStatsData v1 / v2 (#1659: +I2S link receive health)
     MSG_LORA_UPLINK:       13,   # sizeof(LoRaUplinkData)
     MSG_PYRO_FAULT_TRIP:   13,   # sizeof(PyroFaultTripData)
+    MSG_OC_IDENTITY:       68,   # sizeof(OcIdentityData)
     MSG_LORA:              (22, 55),  # #850: SLOW / FAST frames; sweep on struct-size changes (#227)
     MSG_GUIDANCE_TELEM:    (15, 19),  # legacy (mislabeled) / current (+fin cmds)
 }
@@ -310,8 +347,11 @@ def decode_gnss_sat(payload):
         "sats":          sats,
     }
 # GNSS_RTCM_MSG: GnssRtcmHeader (time_us u32, part u8: index << 4 | count),
-# then the frame bytes. A frame longer than one record goes as consecutive
-# parts with the same time_us (RocketComputerTypes.h, gnssRtcmParts).
+# then the frame bytes: the receiver's own frames, verbatim -- RTCM3 frames
+# from the Beetle's LC86G, SBF blocks from the V9's mosaic-G5. A frame longer
+# than one record goes as consecutive parts with the same time_us
+# (RocketComputerTypes.h, gnssRtcmParts); join_gnss_rtcm() puts them back
+# together and split_gnss_raw_frames() tells the two kinds apart.
 FMT_GNSS_RTCM_HDR = '<I B'
 GNSS_RTCM_HDR_LEN = struct.calcsize(FMT_GNSS_RTCM_HDR)
 
@@ -332,11 +372,14 @@ def join_gnss_rtcm(recs):
     """GNSS_RTCM records in log order -> ([(time_us, frame bytes)], dropped).
 
     Parts of one frame are consecutive and share time_us; a frame missing any
-    part (a record lost on the link) is dropped whole and counted, so every
-    frame returned is exactly one the receiver sent.
+    part (a record lost on the link) is dropped whole and counted once -- the
+    later parts of a frame already counted are not counted again (an SBF
+    MeasEpoch is seven records) -- so every frame returned is exactly one the
+    receiver sent: an RTCM3 frame or an SBF block (split_gnss_raw_frames()).
     """
     frames, dropped = [], 0
     pending = None                     # (time_us, parts, [chunks])
+    lost = None                        # (time_us, parts, part) last seen of a frame counted dropped
     for r in recs:
         if r["part"] == 0:
             if pending is not None:
@@ -348,8 +391,12 @@ def join_gnss_rtcm(recs):
         else:
             if pending is not None:
                 dropped += 1
+                lost = (pending[0], pending[1], len(pending[2]) - 1)
             pending = None
-            dropped += 1               # a part with no frame to belong to
+            if (lost is None or lost[:2] != (r["time_us"], r["parts"])
+                    or r["part"] <= lost[2]):
+                dropped += 1           # a part with no frame to belong to
+            lost = (r["time_us"], r["parts"], r["part"])
             continue
         if pending is not None and len(pending[2]) == pending[1]:
             frames.append((pending[0], b"".join(pending[2])))
@@ -357,6 +404,227 @@ def join_gnss_rtcm(recs):
     if pending is not None:
         dropped += 1
     return frames, dropped
+
+
+# SBF, Septentrio Binary Format: the mosaic-G5's own output, logged block by
+# block in GNSS_RTCM_MSG. A block is "$@", CRC (u16), ID (u16: the block number
+# in bits 0-12, its revision in 13-15), Length (u16: the whole block, header
+# included, a multiple of 4), then the body, which starts with the receiver's
+# time stamp: TOW (u32, ms into the GPS week) and WNc (u16, GPS weeks, not
+# modulo 1024). All little-endian. The CRC is CRC-CCITT (0x1021, seed 0, no
+# reflection) from ID to the end: binascii.crc_hqx. Joined in log order the
+# blocks are a standard .sbf file (extract_gnss_sbf.py).
+SBF_SYNC = b"$@"
+FMT_SBF_HDR = '<2s H H H'                    # sync, CRC, ID, Length
+SBF_HDR_LEN = struct.calcsize(FMT_SBF_HDR)   # 8
+SBF_TOW_DNU = 4294967295                     # do-not-use: the receiver has no time yet
+SBF_WNC_DNU = 65535
+SBF_WEEK_MS = 604800000
+
+# The blocks the V9's firmware streams, by block number (the names are the SBF
+# reference guide's).
+SBF_BLOCK_NAMES = {
+    # measurements and the receiver's own fix, 20 Hz
+    4027: "MeasEpoch", 4000: "MeasExtra", 4007: "PVTGeodetic",
+    # the receiver's status, 1 Hz
+    4014: "ReceiverStatus", 4082: "QualityInd", 4092: "RFStatus", 4012: "SatVisibility",
+    4013: "ChannelStatus", 4001: "DOP", 5914: "ReceiverTime", 4059: "DiskStatus",
+    5911: "xPPSOffset",
+    # navigation messages: ephemerides, then ionosphere, UTC and system time offsets
+    5891: "GPSNav", 4042: "GPSCNav", 4002: "GALNav", 4081: "BDSNav", 4251: "BDSCNav1",
+    4004: "GLONav", 4095: "QZSNav",
+    5893: "GPSIon", 5894: "GPSUtc", 4030: "GALIon", 4031: "GALUtc", 4032: "GALGstGps",
+    4120: "BDSIon", 4121: "BDSUtc", 4036: "GLOTime",
+    # how the receiver is set up, the commands it took and the messages it logged
+    5902: "ReceiverSetup", 4015: "Commands", 4103: "RxMessage",
+}
+SBF_MEAS_EPOCH = 4027
+
+
+def sbf_block_ok(block):
+    """A whole SBF block: its sync, a Length that is its own length and a
+    multiple of 4, and its CRC."""
+    if len(block) < SBF_HDR_LEN or block[:2] != SBF_SYNC:
+        return False
+    _sync, crc, _id, length = struct.unpack_from(FMT_SBF_HDR, block, 0)
+    if length != len(block) or length % 4:
+        return False
+    return binascii.crc_hqx(block[4:], 0) == crc
+
+
+def sbf_block_number(block):
+    """The block number: the ID's low 13 bits."""
+    return struct.unpack_from('<H', block, 4)[0] & 0x1FFF
+
+
+def sbf_block_revision(block):
+    """The block's revision: the ID's top 3 bits."""
+    return struct.unpack_from('<H', block, 4)[0] >> 13
+
+
+def sbf_block_name(block):
+    """The block's name from SBF_BLOCK_NAMES, or "block <number>" for one not in it."""
+    n = sbf_block_number(block)
+    return SBF_BLOCK_NAMES.get(n, f"block {n}")
+
+
+def sbf_tow_wnc(block):
+    """(TOW ms, WNc) of the block's time stamp. Each is None where the receiver
+    says do-not-use (no time yet), both where the block is too short to carry one."""
+    if len(block) < SBF_HDR_LEN + 6:
+        return None, None
+    tow, wnc = struct.unpack_from('<I H', block, SBF_HDR_LEN)
+    return (None if tow == SBF_TOW_DNU else tow,
+            None if wnc == SBF_WNC_DNU else wnc)
+
+
+def sbf_gps_ms(block):
+    """The block's time stamp as ms since the GPS epoch (WNc weeks + TOW), or
+    None while either is do-not-use."""
+    tow, wnc = sbf_tow_wnc(block)
+    if tow is None or wnc is None:
+        return None
+    return wnc * SBF_WEEK_MS + tow
+
+
+def sbf_epoch_rate(blocks, number=SBF_MEAS_EPOCH):
+    """[(time_us, block)] -> (epochs, span_s, rate_hz) of one block number by
+    the receiver's own time stamps (MeasEpoch's by default: one block an
+    epoch): how many distinct stamps, first to last, and (epochs - 1) / span.
+    span_s and rate_hz are None under two epochs."""
+    stamps = sorted({sbf_gps_ms(b) for _, b in blocks if sbf_block_number(b) == number}
+                    - {None})
+    if len(stamps) < 2:
+        return len(stamps), None, None
+    span_s = (stamps[-1] - stamps[0]) / 1000.0
+    return len(stamps), span_s, (len(stamps) - 1) / span_s
+
+
+# SkyTraq binary, the V9 PX1105R image's (TR_GNSSReceiverPX1105R_Serial):
+# each frame logged whole, A0 A1, the body's length (u16 big-endian), the body
+# (its first byte the message ID), the XOR of the body, 0D 0A. Numbers in the
+# bodies are big-endian. The ones the image streams at 20 Hz: 0xE5 raw
+# measurements (body [3..4] the receiver's GPS week, [5..8] its time of week,
+# ms, [9..10] the measurement period, ms) and 0xDF its navigation state; 0xE7 /
+# 0xE8 channel status at 1 Hz; the navigation subframes 0xE0 (GPS), 0xE2
+# (BeiDou D1), 0xE6 (Galileo I/NAV); 0x83 / 0x84 ACK / NACK and the replies to
+# the setup's queries.
+SKYTRAQ_MSG_NAMES = {
+    0xE5: "ext raw meas (E5)", 0xDF: "nav state (DF)", 0xE7: "channel status (E7)",
+    0xE8: "elev/azimuth (E8)", 0xE0: "GPS subframe (E0)", 0xE1: "GLONASS string (E1)", 0xE2: "BDS D1 subframe (E2)",
+    0xE6: "GAL I/NAV page (E6)", 0x83: "ACK", 0x84: "NACK", 0x80: "sw version (80)",
+}
+SKYTRAQ_EXT_RAW = 0xE5
+
+
+def skytraq_frame_body(frame):
+    """A whole SkyTraq frame's body (from its message ID), or None if the
+    frame does not check: its sync, its length, its XOR and its 0D 0A."""
+    if len(frame) < 8 or frame[:2] != b"\xa0\xa1":
+        return None
+    n = (frame[2] << 8) | frame[3]
+    if n == 0 or len(frame) != n + 7 or frame[-2:] != b"\r\n":
+        return None
+    body = frame[4:4 + n]
+    cs = 0
+    for x in body:
+        cs ^= x
+    return body if cs == frame[4 + n] else None
+
+
+def skytraq_e5_rate(frames):
+    """[(time_us, frame)] -> (epochs, span_s, rate_hz) of 0xE5 by the
+    receiver's own time stamps (week and time of week), as sbf_epoch_rate."""
+    stamps = set()
+    for _, f in frames:
+        b = skytraq_frame_body(f)
+        if b is not None and b[0] == SKYTRAQ_EXT_RAW and len(b) >= 14:
+            week, tow = struct.unpack_from(">HI", b, 3)
+            stamps.add(week * SBF_WEEK_MS + tow)
+    stamps = sorted(stamps)
+    if len(stamps) < 2:
+        return len(stamps), None, None
+    span_s = (stamps[-1] - stamps[0]) / 1000.0
+    return len(stamps), span_s, (len(stamps) - 1) / span_s
+
+
+def split_gnss_raw_frames(frames):
+    """join_gnss_rtcm()'s frames -> {"rtcm3": [(time_us, frame)],
+    "sbf": [(time_us, block)], "skytraq": [(time_us, frame)], "bad": count},
+    each list in log order.
+
+    A frame that starts 0xD3 is RTCM3 (its CRC-24Q is the RTCM3 reader's to
+    check: extract_gnss_rtcm.frame_ok); one that starts "$@" and checks
+    (sbf_block_ok) is an SBF block; one that starts A0 A1 and checks
+    (skytraq_frame_body) is a SkyTraq frame. Anything else, an SBF block or a
+    SkyTraq frame that fails included, is counted as bad.
+    """
+    out = {"rtcm3": [], "sbf": [], "skytraq": [], "bad": 0}
+    for t, f in frames:
+        if f[:1] == b"\xd3":
+            out["rtcm3"].append((t, f))
+        elif sbf_block_ok(f):
+            out["sbf"].append((t, f))
+        elif skytraq_frame_body(f) is not None:
+            out["skytraq"].append((t, f))
+        else:
+            out["bad"] += 1
+    return out
+
+
+def print_gnss_skytraq_summary(recs):
+    """Print what a log's GNSS_RTCM records hold as SkyTraq frames (the V9
+    PX1105R image's): the messages by ID, 0xE5's rate over the receiver's own
+    time stamps, and what the link lost. Prints nothing for a log without them."""
+    frames, dropped = join_gnss_rtcm(recs)
+    raw = split_gnss_raw_frames(frames)
+    if not raw["skytraq"]:
+        return
+    counts = {}
+    for _, f in raw["skytraq"]:
+        mid = f[4]
+        name = SKYTRAQ_MSG_NAMES.get(mid, f"message 0x{mid:02X}")
+        counts[name] = counts.get(name, 0) + 1
+    print("  GNSS receiver frames (SkyTraq, PX1105R):")
+    print(f"    {len(recs):,} records -> {len(raw['skytraq']):,} frames")
+    print(f"    Dropped: {dropped:,} incomplete (a record lost), "
+          f"{raw['bad']:,} bad (sync, length, XOR or end)")
+    for name, n in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
+        print(f"    {name:<24s} {n:>8,}")
+    epochs, span_s, rate_hz = skytraq_e5_rate(raw["skytraq"])
+    if rate_hz is None:
+        print(f"    0xE5: {epochs} epochs, too few for a rate")
+    else:
+        print(f"    0xE5: {epochs:,} epochs over {span_s:.2f} s of receiver time -> {rate_hz:.2f} Hz")
+    print()
+
+
+def print_gnss_sbf_summary(recs):
+    """Print what a log's GNSS_RTCM records hold as SBF blocks: the blocks by
+    name, MeasEpoch's rate over the receiver's own time stamps, and what the
+    link lost. Prints nothing for a log without SBF (the LC86G's RTCM3)."""
+    frames, dropped = join_gnss_rtcm(recs)
+    raw = split_gnss_raw_frames(frames)
+    if not raw["sbf"]:
+        return
+    counts = {}
+    for _, b in raw["sbf"]:
+        name = sbf_block_name(b)
+        counts[name] = counts.get(name, 0) + 1
+    rtcm3 = f", {len(raw['rtcm3']):,} RTCM3 frames" if raw["rtcm3"] else ""
+    print("  GNSS receiver blocks (SBF, mosaic-G5):")
+    print(f"    {len(recs):,} records -> {len(raw['sbf']):,} blocks{rtcm3}")
+    print(f"    Dropped: {dropped:,} incomplete (a record lost), "
+          f"{raw['bad']:,} bad (sync, Length or CRC)")
+    for name, n in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
+        print(f"    {name:<24s} {n:>8,}")
+    epochs, span_s, rate_hz = sbf_epoch_rate(raw["sbf"])
+    if rate_hz is None:
+        print(f"    MeasEpoch: {epochs} epochs, too few for a rate")
+    else:
+        print(f"    MeasEpoch: {epochs:,} epochs over {span_s:.2f} s of receiver time "
+              f"-> {rate_hz:.2f} Hz")
+    print()
 
 
 # ISM6HG256Data: 22 bytes (time_us + 3×Vec3i16)
@@ -388,6 +656,13 @@ FMT_STATUS_QUERY = '<B H H hh B hhh'
 FMT_STATUS_QUERY_B2R = '<BB hhhh'  # b2r_code, b2r_mode, quat×10000 (payload[16:26])
 # LogBufferStatsData: 28 bytes (time_us + 6× uint32 ring counters)
 FMT_LOG_BUFFER_STATS = '<I IIIIII'
+# v2, 52 bytes (#1659): + rx_peak, rx_overflow_bytes, rx_bad_crc,
+# rx_resync_bytes, parser_max_us, flash_stall_max_us — the FC->OC link's
+# receive side and the longest flash stall the RX ISR rode through.
+FMT_LOG_BUFFER_STATS_V2 = '<I IIIIII IIIIII'
+LOG_BUFFER_STATS_V2_FIELDS = ("rx_peak", "rx_overflow_bytes", "rx_bad_crc",
+                              "rx_resync_bytes", "parser_max_us",
+                              "flash_stall_max_us")
 
 # RawGnssEkfData (RAW_GNSS_EKF_MSG 0x96), 90 bytes packed (#1600 phase 4): the
 # raw-GNSS shadow filter -- a tightly coupled GNSS/INS filter run beside the
@@ -456,7 +731,8 @@ SIZE_OF_PAD_CAL_STATUS = struct.calcsize(FMT_PAD_CAL_STATUS)  # 40
 PAD_CAL_STATES = {0: "idle", 1: "running", 2: "done", 3: "rejected", 4: "refused"}
 PAD_IONO_SOURCES = {0: "none", 1: "broadcast", 2: "pad survey"}
 PAD_CAL_FLAGS = {"raw_gnss": 0x01, "filter_running": 0x02, "iono_age_known": 0x04,
-                 "pad_valid": 0x08, "pad_frozen": 0x10, "pad_mismatch": 0x20}
+                 "pad_valid": 0x08, "pad_frozen": 0x10, "pad_mismatch": 0x20,
+                 "fix_suspect": 0x40}
 
 
 def decode_pad_cal_status(payload):
@@ -491,6 +767,385 @@ def decode_pad_cal_status(payload):
     return rec
 
 
+# RawGnssAttData (RAW_GNSS_ATT_MSG 0x9B), 46 bytes packed: beside each
+# RawGnssEkfData record, with its time_us, what that record leaves out of the
+# raw-GNSS filter -- its attitude 1-sigma about north, east and down (down is
+# the heading, and on a rocket near vertical the roll; centi-deg on the wire),
+# and its accelerometer (m/s^2) and gyro (deg/s) bias estimates, body FRD, with
+# their 1-sigma (mm/s^2, milli-deg/s on the wire).
+FMT_RAW_GNSS_ATT = '<I 3H 3f 3f 3H 3H'
+SIZE_OF_RAW_GNSS_ATT = struct.calcsize(FMT_RAW_GNSS_ATT)  # 46
+
+
+def decode_raw_gnss_att(payload):
+    """RawGnssAttData payload -> record dict in SI units (angles in deg), or None if the size is wrong."""
+    if len(payload) != SIZE_OF_RAW_GNSS_ATT:
+        return None
+    f = struct.unpack(FMT_RAW_GNSS_ATT, payload)
+    return {
+        "time_us":            f[0],
+        "att_sigma_n_deg":    f[1] * 1e-2,
+        "att_sigma_e_deg":    f[2] * 1e-2,
+        "heading_sigma_deg":  f[3] * 1e-2,
+        "acc_bias_x":         f[4],
+        "acc_bias_y":         f[5],
+        "acc_bias_z":         f[6],
+        "gyro_bias_x_dps":    f[7],
+        "gyro_bias_y_dps":    f[8],
+        "gyro_bias_z_dps":    f[9],
+        "acc_bias_sigma_x":   f[10] * 1e-3,
+        "acc_bias_sigma_y":   f[11] * 1e-3,
+        "acc_bias_sigma_z":   f[12] * 1e-3,
+        "gyro_bias_sigma_x_dps": f[13] * 1e-3,
+        "gyro_bias_sigma_y_dps": f[14] * 1e-3,
+        "gyro_bias_sigma_z_dps": f[15] * 1e-3,
+    }
+
+
+# Ism6TempData (IMU_TEMP_MSG 0x9C), 6 bytes packed: the ISM6HG256X's die
+# temperature once a second, as the chip gives it -- 256 LSB per degC, 0 at
+# 25 degC -- for the gyro's bias and scale against temperature.
+FMT_IMU_TEMP = '<I h'
+SIZE_OF_IMU_TEMP = struct.calcsize(FMT_IMU_TEMP)  # 6
+
+
+def decode_imu_temp(payload):
+    """Ism6TempData payload -> record dict (temp_c in degC), or None if the size is wrong."""
+    if len(payload) != SIZE_OF_IMU_TEMP:
+        return None
+    t, raw = struct.unpack(FMT_IMU_TEMP, payload)
+    return {"time_us": t, "temp_raw": raw, "temp_c": 25.0 + raw / 256.0}
+
+
+# GnssClockData (GNSS_CLOCK_MSG 0x9D), 68 bytes packed: the MCU clock against
+# GPS time as the LC86G driver's GnssTimeSync holds it (no 1PPS on the Beetle:
+# a line fitted to when each $PQTMPVT arrived), each time the line moves -- a
+# new GPS second filed, or a restart. A record flagged "pps" was fitted to the
+# receiver's 1PPS edges instead (the V9's mosaic-G5). Every raw epoch and fix
+# the flight placed on the IMU's clock went through it, so gnss_clock_mcu_us()
+# on the latest record logged before an epoch's last frame places it exactly
+# as the flight did.
+FMT_GNSS_CLOCK = '<I I I q d d d d f f I H B B'
+SIZE_OF_GNSS_CLOCK = struct.calcsize(FMT_GNSS_CLOCK)  # 68
+# GCL_* in RocketComputerTypes.h. "pps" (GCL_PPS): the line was fitted to the
+# receiver's 1PPS edges captured on the V9's GPIO2, not to sentence arrival
+# times -- such a record's time_us is that edge's FC time, and its latency_s is 0.
+GNSS_CLOCK_FLAGS = {"valid": 0x01, "started": 0x02, "pps": 0x04}
+
+
+def decode_gnss_clock(payload):
+    """GnssClockData payload -> record dict, or None if the size is wrong."""
+    if len(payload) != SIZE_OF_GNSS_CLOCK:
+        return None
+    f = struct.unpack(FMT_GNSS_CLOCK, payload)
+    rec = {
+        "time_us":    f[0],
+        "seq":        f[1],
+        "gps0_s":     f[2],
+        "mcu0_us":    f[3],
+        "a_s":        f[4],
+        "t_ref_s":    f[5],
+        "drift":      f[6],
+        "drift_ppm":  f[6] * 1e6,
+        "latency_s":  f[7],
+        "env_rms_ms": f[8],
+        "late90_ms":  f[9],
+        "samples":    f[10],
+        "restarts":   f[11],
+        "bins":       f[12],
+        "flags":      f[13],
+    }
+    for name, bit in GNSS_CLOCK_FLAGS.items():
+        rec[name] = bool(f[13] & bit)
+    return rec
+
+
+def gnss_clock_mcu_us(rec, gps_s):
+    """The MCU micros of a GPS instant (week * 604800 + time of week, s) on a
+    decoded GnssClockData line, as GnssTimeSync::mcuAt computes it (C's llround:
+    half away from zero). None if the line was not valid yet."""
+    if not rec["valid"]:
+        return None
+    t = gps_s - float(rec["gps0_s"])
+    rel = t + (rec["a_s"] + rec["drift"] * (t - rec["t_ref_s"])) - rec["latency_s"]
+    x = rel * 1.0e6
+    return rec["mcu0_us"] + int(math.copysign(math.floor(abs(x) + 0.5), x))
+
+
+# PAD_CONTEXT_MSG (0x9E): the pad, written once after launch -- the log's
+# pre-launch ring keeps only about a second before ignition, and none of this
+# changes in flight. A 7-byte header (time_us when written, kind, part, parts)
+# then one kind's body: "cal", the calibrations the flight flew with that the
+# logged counts do not carry (the flight loop, launch + 5 s); from + 6 s the
+# raw-GNSS filter at the launch tick -- "nav" its state and what it took from
+# the pad, "cov" its covariance (the upper triangle of its 19 error states, in
+# four parts), "survey" the pad survey's corrections (in parts) -- and "eph",
+# each broadcast ephemeris it held as a whole RTCM3 frame, one a record; "acc",
+# beside "cal", the low-g accelerometer's hand-calibrated offset (#1629), which
+# the converter takes off the low-g and high-g after the log; "hg", beside it,
+# the high-g's six-face alignment to the low-g (HG_CAL_*), which the converter
+# applies to the high-g after the log, before its bias and that offset; "ant",
+# beside them, the GNSS antenna's offset from the IMU (BLE cmd 81) set on the
+# flight, in the board's frame and in the filter's, whether the navigation
+# filter flew with it, and the offset that filter did fly with (an earlier one
+# while a setting sent just before launch waits for the ground in it).
+# join_pad_context() puts a launch's records back together.
+FMT_PAD_CONTEXT_HDR = '<I B B B'
+PAD_CONTEXT_HDR_LEN = struct.calcsize(FMT_PAD_CONTEXT_HDR)   # 7
+PAD_CONTEXT_KINDS = {1: "cal", 2: "nav", 3: "cov", 4: "survey", 5: "eph", 6: "acc", 7: "hg", 8: "ant"}
+FMT_PCX_CAL = '<3h 3f 3h B f 3i'
+SIZE_OF_PCX_CAL = struct.calcsize(FMT_PCX_CAL)               # 41
+FMT_PCX_ACC = '<B 3f'
+SIZE_OF_PCX_ACC = struct.calcsize(FMT_PCX_ACC)               # 13
+FMT_PCX_HG = '<B 9f'
+SIZE_OF_PCX_HG = struct.calcsize(FMT_PCX_HG)                 # 37
+FMT_PCX_ANT = '<B 3h 3f B B 3f'
+SIZE_OF_PCX_ANT = struct.calcsize(FMT_PCX_ANT)               # 33
+FMT_PCX_NAV = '<I 3d 3f 4f 3f 3f d 6f 8b H B B'
+SIZE_OF_PCX_NAV = struct.calcsize(FMT_PCX_NAV)               # 124
+PCX_NAV_FLAGS = {"running": 0x01, "clock_set": 0x02, "has_baro": 0x04, "has_iono": 0x08,
+                 "has_declination": 0x10, "primary": 0x20}
+PCX_IONO_SOURCES = {0: "none", 1: "broadcast", 2: "pad survey"}
+PCX_COV_N = 19                                               # position, velocity, attitude
+PCX_COV_VALUES = PCX_COV_N * (PCX_COV_N + 1) // 2            # half-angle, biases, clock, ISBs: 190
+FMT_PCX_COV_HDR = '<H B B'                                   # first, n, reserved; then n float32
+FMT_PCX_SURVEY_HDR = '<4B 2f B'                              # 13; then n of the entry below
+FMT_PCX_SURVEY_ENTRY = '<B B f'                              # sys (0 GPS, 1 Galileo, 2 BeiDou), prn, corr_m
+
+
+def decode_pad_context(payload):
+    """PAD_CONTEXT_MSG payload -> {time_us, kind, part, parts} and its kind's
+    fields, or None if malformed."""
+    if len(payload) < PAD_CONTEXT_HDR_LEN:
+        return None
+    time_us, kind, part, parts = struct.unpack_from(FMT_PAD_CONTEXT_HDR, payload, 0)
+    name = PAD_CONTEXT_KINDS.get(kind)
+    if name is None or parts == 0 or part >= parts:
+        return None
+    body = bytes(payload[PAD_CONTEXT_HDR_LEN:])
+    rec = {"time_us": time_us, "kind": name, "part": part, "parts": parts}
+    if name == "cal":
+        if len(body) != SIZE_OF_PCX_CAL:
+            return None
+        f = struct.unpack(FMT_PCX_CAL, body)
+        rec.update({
+            "gyro_offset_lsb":  f[0:3],      # subtracted before the log: ISM6HG256's gyro counts are after it
+            "hg_bias_mps2":     f[3:6],      # high-g less low-g, body frame: applied after the log
+            "mag_offset_lsb":   f[6:9],      # in the magnetometer's OFFSET registers: IIS2MDC's counts are after it
+            "mag_offset_set":   bool(f[9]),
+            "cal_gravity_mps2": f[10],
+            "mmc_offset_counts": f[11:14],   # the MMC5983MA's: subtracted after the log, before scaling
+        })
+    elif name == "acc":
+        if len(body) != SIZE_OF_PCX_ACC:
+            return None
+        f = struct.unpack(FMT_PCX_ACC, body)
+        rec.update({
+            "applied":     bool(f[0]),    # the converter took it off this flight (stored, not in sim)
+            "offset_mps2": f[1:4],        # board frame: off the low-g and the high-g, after the log
+        })
+    elif name == "hg":
+        if len(body) != SIZE_OF_PCX_HG:
+            return None
+        f = struct.unpack(FMT_PCX_HG, body)
+        rec.update({
+            "applied": bool(f[0]),        # the converter applied it this flight (stored, not in sim)
+            "matrix":  f[1:10],           # row-major, board frame: high = M h - bias - offset, after the log
+        })
+    elif name == "ant":
+        if len(body) != SIZE_OF_PCX_ANT:
+            return None
+        f = struct.unpack(FMT_PCX_ANT, body)
+        rec.update({
+            "known":          bool(f[0]),   # measured (BLE cmd 81); unknown: the rest 0
+            "board_mm":       f[1:4],       # the setting: board FLU, the IMU to the antenna's phase centre
+            "body_m":         f[4:7],       # the same in body FRD by the mounting
+            "used":           bool(f[7]),   # the navigation filter flew with this offset (predicted at the antenna)
+            "applied_known":  bool(f[8]),   # the navigation filter started and had a known offset on
+            "applied_body_m": f[9:12],      # that offset, the one it flew with: body FRD (unknown: 0)
+        })
+    elif name == "nav":
+        if len(body) != SIZE_OF_PCX_NAV:
+            return None
+        f = struct.unpack(FMT_PCX_NAV, body)
+        rec.update({
+            "filter_time_us":  f[0],          # the launch tick (RawGnssEkf's clock)
+            "lat_rad":         f[1],
+            "lon_rad":         f[2],
+            "height_m":        f[3],          # above the ellipsoid
+            "vel_ned":         f[4:7],
+            "quat":            f[7:11],       # body -> NED, scalar first
+            "acc_bias_mps2":   f[11:14],
+            "gyro_bias_rps":   f[14:17],
+            "clk_bias_m":      f[17],
+            "clk_drift_mps":   f[18],
+            "isb_gal_m":       f[19],
+            "isb_bds_m":       f[20],
+            "baro_offset_m":   f[21],
+            "declination_rad": f[22],
+            "field_ut":        f[23],
+            "iono":            f[24:32],      # GPS broadcast Klobuchar bytes: alpha0..3, beta0..3
+            "iono_gps_day":    f[32],
+            "iono_source":     PCX_IONO_SOURCES.get(f[33], str(f[33])),
+            "flags":           f[34],
+        })
+        for flag, bit in PCX_NAV_FLAGS.items():
+            rec[flag] = bool(f[34] & bit)
+    elif name == "cov":
+        hdr = struct.calcsize(FMT_PCX_COV_HDR)
+        if len(body) < hdr:
+            return None
+        first, n, _ = struct.unpack_from(FMT_PCX_COV_HDR, body, 0)
+        if len(body) != hdr + 4 * n or first + n > PCX_COV_VALUES:
+            return None
+        rec.update({"first": first, "values": struct.unpack_from(f"<{n}f", body, hdr)})
+    elif name == "survey":
+        hdr = struct.calcsize(FMT_PCX_SURVEY_HDR)
+        esz = struct.calcsize(FMT_PCX_SURVEY_ENTRY)
+        if len(body) < hdr:
+            return None
+        tracked, settling, corrected, pad_ok, rms_m, pad_offset_m, n = \
+            struct.unpack_from(FMT_PCX_SURVEY_HDR, body, 0)
+        if len(body) != hdr + esz * n:
+            return None
+        rec.update({
+            "tracked": tracked, "settling": settling, "corrected": corrected,
+            "pad_ok": bool(pad_ok), "rms_m": rms_m, "pad_offset_m": pad_offset_m,
+            "corrections": [struct.unpack_from(FMT_PCX_SURVEY_ENTRY, body, hdr + esz * i)
+                            for i in range(n)],
+        })
+    else:                                     # eph: 0xD3, 6 bits zero, 10 of length, payload, CRC-24Q
+        if len(body) < 6 or body[0] != 0xD3 or (((body[1] & 0x03) << 8) | body[2]) + 6 != len(body):
+            return None
+        rec["frame"] = body
+    return rec
+
+
+def join_pad_context(recs, launch=0):
+    """The decoded PadContext records of a log -> its launch-th launch's pad
+    context (from 0), or None if there is no such launch.
+
+    {"cal", "acc", "hg", "ant", "nav", "cov", "survey", "eph_frames", "missing"}: "cov" the 19x19
+    covariance (symmetric, nested lists) and "survey" the summary with every
+    correction, each None unless all its parts arrived (a part of one is not
+    it); "eph_frames" each ephemeris that arrived, a whole RTCM3 frame, for a
+    replay's RTCM3 parser before the flight's own GNSS_RTCM frames; "missing"
+    the kinds not (all) there. A launch's "cal" comes a second before its "nav"
+    and the rest after it, so a "cal", or a "nav" where there is one already,
+    starts the next launch's.
+    """
+    launches = []
+    for r in recs:
+        k = r["kind"]
+        if not launches or k == "cal" or (k == "nav" and launches[-1]["nav"] is not None):
+            launches.append({"cal": None, "acc": None, "hg": None, "ant": None, "nav": None, "cov": {}, "survey": {},
+                             "eph": [], "parts": {}})
+        cur = launches[-1]
+        if k in ("cal", "nav", "acc", "hg", "ant"):
+            cur[k] = r
+        elif k == "eph":
+            cur["eph"].append(r)
+        else:
+            cur[k][r["part"]] = r
+            cur["parts"][k] = r["parts"]
+    if not 0 <= launch < len(launches):
+        return None
+    cur = launches[launch]
+    cov = None
+    if cur["cov"] and len(cur["cov"]) == cur["parts"]["cov"]:
+        tri = [None] * PCX_COV_VALUES
+        for r in cur["cov"].values():
+            tri[r["first"]:r["first"] + len(r["values"])] = r["values"]
+        if None not in tri and len(tri) == PCX_COV_VALUES:
+            cov = [[0.0] * PCX_COV_N for _ in range(PCX_COV_N)]
+            k = 0
+            for i in range(PCX_COV_N):
+                for j in range(i, PCX_COV_N):
+                    cov[i][j] = cov[j][i] = tri[k]
+                    k += 1
+    survey = None
+    if cur["survey"] and len(cur["survey"]) == cur["parts"]["survey"]:
+        s0 = cur["survey"][0]
+        survey = {k: s0[k] for k in ("tracked", "settling", "corrected", "pad_ok", "rms_m", "pad_offset_m")}
+        survey["corrections"] = [c for p in sorted(cur["survey"]) for c in cur["survey"][p]["corrections"]]
+    out = {"cal": cur["cal"], "acc": cur["acc"], "hg": cur["hg"], "ant": cur["ant"], "nav": cur["nav"], "cov": cov,
+           "survey": survey, "eph_frames": [r["frame"] for r in cur["eph"]]}
+    out["missing"] = [k for k in ("cal", "nav", "cov", "survey") if out[k] is None]
+    if cur["eph"] and len(cur["eph"]) < cur["eph"][0]["parts"]:
+        out["missing"].append("eph")
+    return out
+
+
+# HeadingFitData (HEADING_FIT_MSG 0x9F), 32 bytes packed: the raw-GNSS filter's
+# batch fit of the pad's heading against the GNSS velocity, once for each raw
+# epoch it takes in flight (RawGnssShadow, HeadingFit.h). psi_deg is the turn
+# about vertical that rights the pad's heading (the pad's heading error is
+# -psi_deg); filt_deg the filter's heading less the fit's before any turn; in
+# act mode (the "act" flag) the epoch that handed the heading over carries the
+# turn it applied (turn_deg, "handed_now"); "rival": another heading far off
+# fitted nearly as well, so none was handed over.
+FMT_HEADING_FIT = '<I h H h h 2h H H H B B B B H H H'
+SIZE_OF_HEADING_FIT = struct.calcsize(FMT_HEADING_FIT)  # 32
+HEADING_FIT_FLAGS = {"act": 0x01, "solved": 0x02, "handed_now": 0x04, "handed": 0x08, "rival": 0x10}
+HEADING_FIT_NO_SIGMA = 0xFFFF
+
+
+def decode_heading_fit(payload):
+    """HeadingFitData payload -> record dict (degrees, m/s^2, m/s), or None if the size is wrong."""
+    if len(payload) != SIZE_OF_HEADING_FIT:
+        return None
+    f = struct.unpack(FMT_HEADING_FIT, payload)
+    rec = {
+        "time_us":       f[0],
+        "psi_deg":       f[1] / 100.0,
+        "sigma_deg":     None if f[2] == HEADING_FIT_NO_SIGMA else f[2] / 100.0,
+        "filt_deg":      f[3] / 100.0,
+        "turn_deg":      f[4] / 100.0,
+        "bias_mps2":     (f[5] / 1000.0, f[6] / 1000.0),
+        "speed_mps":     f[7] / 100.0,
+        "vel_sigma_mps": f[8] / 1000.0,
+        "rms":           f[9] / 100.0,
+        "n":             f[10],
+        "n_cut":         f[11],
+        "sats":          f[12],
+        "flags":         f[13],
+        "vel_us":        f[14],
+        "solve_us":      f[15],
+        "seed_ms":       f[16],
+    }
+    for name, bit in HEADING_FIT_FLAGS.items():
+        rec[name] = bool(f[13] & bit)
+    return rec
+
+
+# GnssCheckData (GNSS_CHECK_MSG 0x9A), 24 bytes packed (#1508): each receiver
+# fix the raw-GNSS shadow judged against the IMU -- from the last fix that
+# passed, the IMU's own motion predicts this one; flagged when it is further
+# off than its tolerance (the fixes' noise and timing, the IMU's error growing
+# with the span). Also: satellites the last raw epoch took as having jumped.
+# time_us is the fix's GPS instant on the MCU clock. Report-only on the FC.
+FMT_GNSS_CHECK = '<I BBH ffff'
+SIZE_OF_GNSS_CHECK = struct.calcsize(FMT_GNSS_CHECK)  # 24
+GNSS_CHECK_VERDICTS = {0: "unjudged", 1: "pass", 2: "flagged"}
+
+
+def decode_gnss_check(payload):
+    """GnssCheckData payload -> record dict, or None if the size is wrong."""
+    if len(payload) != SIZE_OF_GNSS_CHECK:
+        return None
+    f = struct.unpack(FMT_GNSS_CHECK, payload)
+    return {
+        "time_us":     f[0],
+        "verdict":     GNSS_CHECK_VERDICTS.get(f[1], str(f[1])),
+        "sats_jumped": f[2],
+        "span_s":      f[3] * 1e-3,
+        "pos_err_m":   f[4],
+        "pos_tol_m":   f[5],
+        "vel_err_mps": f[6],
+        "vel_tol_mps": f[7],
+    }
+
+
 # PyroFaultTripData (PYRO_FAULT_TRIP_MSG 0x94), 13 bytes packed (#1553): time_us
 # (OC esp_timer, the LORA_UPLINK_MSG clock — NOT the flight clock), peak_counts
 # (INA230 shunt register), trip_index (1-based this boot), held_ms (0 in phase
@@ -498,6 +1153,40 @@ def decode_pad_cal_status(payload):
 # arm consent, phase 2 when it releases, carrying the peak over the whole hold.
 FMT_PYRO_FAULT_TRIP = '<IhHHBBB'
 SIZE_OF_PYRO_FAULT_TRIP = struct.calcsize(FMT_PYRO_FAULT_TRIP)  # 13
+
+# OcIdentityData (#1658), 68 bytes: which out computer wrote the log, written
+# by the OC itself ~1 Hz while logging. Strings are fixed fields, NUL-padded,
+# and not NUL-terminated when full. board_rev_code is board_identity's byte,
+# as in FlightSettingsData (flight_report.flight_settings.board_rev_name).
+FMT_OC_IDENTITY = '<I BBBB 8s 20s 32s'
+SIZE_OF_OC_IDENTITY = struct.calcsize(FMT_OC_IDENTITY)  # 68
+
+
+def _fixed_str(raw):
+    return raw.split(b"\0", 1)[0].decode("utf-8", errors="replace")
+
+
+def decode_oc_identity(payload):
+    """OcIdentityData payload -> dict, or None if the size is wrong.
+
+    Kept out of `records` like the pyro trips: it is on the OC clock and says
+    the same thing every second, so it lands in config["oc_identity"] (the
+    last one in the log).
+    """
+    if len(payload) != SIZE_OF_OC_IDENTITY:
+        return None
+    (time_us, version, network_id, rocket_id, board_rev_code,
+     unit_id, unit_name, fw_version) = struct.unpack(FMT_OC_IDENTITY, payload)
+    return {
+        "time_us":        time_us,
+        "version":        version,
+        "network_id":     network_id,
+        "rocket_id":      rocket_id,
+        "board_rev_code": board_rev_code,
+        "unit_id":        _fixed_str(unit_id),
+        "unit_name":      _fixed_str(unit_name),
+        "fw_version":     _fixed_str(fw_version),
+    }
 # INA230 shunt LSB 2.5 uV across R72 (2 mOhm) = 1.25 mA/count = 800 counts/A.
 PYRO_FAULT_COUNTS_PER_A = 800.0
 # The shunt register saturates at INT16_MAX: the real current was at least this.
@@ -557,6 +1246,7 @@ SNAPSHOT_GNSS_ADMISSION = {
     3: "admitted_baro_agreed",
     4: "admitted_filter_agreed",
     5: "admitted_baro_stuck",
+    6: "admitted_above_baro",    # the barometer lost to altitude (#1707)
 }
 # The EKF's 15 error states, in P_diag order (TR_GpsInsEKF.cpp:96-108): position,
 # velocity, attitude, accel bias, gyro bias — three each.  Named here so the
@@ -577,6 +1267,18 @@ FMT_GUIDANCE_19 = '<I hhhhhhh B'
 FMT_GUIDANCE_15 = '<I hhhhh B'  # legacy: time, accel_n, accel_e, lateral, los, closing, flags
 GUID_FLAG_ACTIVE  = (1 << 0)
 GUID_FLAG_BURNOUT = (1 << 1)
+# Why guidance is not steering (GF_* in flight_computer/main/guidance_gate_policy.h).
+# Frames with ACTIVE clear are the ~10 Hz status stream sent while guidance is
+# enabled in flight but not steering; their command fields are 0.  Older logs
+# never set these bits and never sent status frames.
+GUID_FLAG_REASONS = {
+    "tilt_latched": (1 << 2),   # tilt-limit latch tripped (for the flight)
+    "too_slow":     (1 << 3),   # speed at or below the guidance floor
+    "ekf_not_ok":   (1 << 4),   # filter never initialised, or not healthy
+    "no_origin":    (1 << 5),   # no datum, or no launch origin (e.g. after a reboot)
+    "no_heading":   (1 << 6),   # magnetometer not healthy at launch (for the flight)
+    "fins_held":    (1 << 7),   # roll delay, speed gate, reboot settle or stale IMU
+}
 
 SYNC = b'\xAA\x55\xAA\x55'
 
@@ -745,10 +1447,12 @@ def decode_bmp585_temp(temp_q16):
     """Decode BMP585 temperature from Q16 int32 to °C."""
     return float(temp_q16) / 65536.0
 
-def decode_mmc_centered(raw_u32):
-    """Center an 18-bit MMC5983MA raw reading and convert to µT."""
+def decode_mmc_centered(raw_u32, offset_counts=0):
+    """Center an 18-bit MMC5983MA raw reading, take off its hard-iron offset
+    (centered counts, the flight's PCX_CAL mmc_offset_counts) and convert to
+    µT, as SensorConverter::convertMMC5983MAData does."""
     raw18 = raw_u32 & 0x3FFFF
-    centered = raw18 - 131072
+    centered = raw18 - 131072 - offset_counts
     return centered * MMC_UT_PER_COUNT
 
 def decode_voltage(raw_u16):
@@ -787,9 +1491,15 @@ def parse_binary_file(filepath):
     records = {
         "GNSS":           [],
         "GNSS_SAT":       [],
-        "GNSS_RTCM":      [],   # 0x95 raw RTCM3 frame parts; join_gnss_rtcm() reassembles
+        "GNSS_RTCM":      [],   # 0x95 the receiver's raw frame parts (RTCM3 or SBF); join_gnss_rtcm() reassembles
         "RawGnssEkf":     [],   # 0x96 the raw-GNSS shadow filter, 10 Hz (#1600)
         "PadCalStatus":   [],   # 0x99 the pad calibration's progress, 1 Hz on the ground (#1600 phase 5)
+        "GnssCheck":      [],   # 0x9A each receiver fix against the IMU, 10 Hz (#1508)
+        "RawGnssAtt":     [],   # 0x9B the raw-GNSS filter's attitude 1-sigma and IMU biases, 10 Hz
+        "ImuTemp":        [],   # 0x9C the IMU's die temperature, 1 Hz
+        "GnssClock":      [],   # 0x9D the GPS-to-MCU clock line each time it moves, ~1 Hz
+        "PadContext":     [],   # 0x9E the pad, once after launch; join_pad_context() puts a launch's together
+        "HeadingFit":     [],   # 0x9F the heading from thrust, each fit, ~1 Hz in flight
         "FcStatus":       [],   # 0x92 FcStatusData (#1154 item 4) — appended below; was never initialised
         "ISM6HG256":      [],
         "BMP585":         [],
@@ -836,6 +1546,9 @@ def parse_binary_file(filepath):
         "flight_settings_frames": [],
         # #1553: decoded PYRO_FAULT_TRIP_MSG records, in log order (OC clock).
         "pyro_fault_trips": [],
+        # #1658: the out computer that wrote the log (the last OC_IDENTITY_MSG),
+        # or None for a log written before the firmware recorded it.
+        "oc_identity": None,
     }
 
     stats = {
@@ -999,6 +1712,36 @@ def parse_binary_file(filepath):
                 rec = decode_pad_cal_status(payload)
                 if rec is not None:
                     records["PadCalStatus"].append(rec)
+
+            elif msg_type == MSG_GNSS_CHECK:
+                rec = decode_gnss_check(payload)
+                if rec is not None:
+                    records["GnssCheck"].append(rec)
+
+            elif msg_type == MSG_RAW_GNSS_ATT:
+                rec = decode_raw_gnss_att(payload)
+                if rec is not None:
+                    records["RawGnssAtt"].append(rec)
+
+            elif msg_type == MSG_IMU_TEMP:
+                rec = decode_imu_temp(payload)
+                if rec is not None:
+                    records["ImuTemp"].append(rec)
+
+            elif msg_type == MSG_GNSS_CLOCK:
+                rec = decode_gnss_clock(payload)
+                if rec is not None:
+                    records["GnssClock"].append(rec)
+
+            elif msg_type == MSG_PAD_CONTEXT:
+                rec = decode_pad_context(payload)
+                if rec is not None:
+                    records["PadContext"].append(rec)
+
+            elif msg_type == MSG_HEADING_FIT:
+                rec = decode_heading_fit(payload)
+                if rec is not None:
+                    records["HeadingFit"].append(rec)
 
             elif msg_type == MSG_ISM6HG256:
                 fields = struct.unpack(FMT_ISM6, payload)
@@ -1213,19 +1956,40 @@ def parse_binary_file(filepath):
                         "servo_a":  (fields[5] / 1000.0) if v2 else None,
                     })
 
-            elif msg_type == MSG_FC_STATUS and msg_len == 5:
+            elif msg_type == MSG_FC_STATUS and msg_len in (5, 7):
                 # #1154 item 4: the FC's ACTUAL camera state, as distinct from
                 # the out computer's camera_recording_requested, which is only
                 # what it last asked for. The two disagreeing is the whole
                 # reason this message exists — the FC can stop the camera on
                 # its own and, before this, said so to nobody.
-                t_us, fcs_flags = struct.unpack('<I B', payload)
+                t_us, fcs_flags = struct.unpack_from('<I B', payload, 0)
+                scap_v = None
+                if msg_len == 7:
+                    # #1409 (v2): the hold-up supercap voltage where the sense
+                    # line is the flight computer's (Tinker-Mantis V10/V11),
+                    # read once a second and repeated in every frame. Only
+                    # with FCS_SCAP_SENSE (0x04), and 0xFFFF = its ADC did not
+                    # answer. None on v1 frames and on every other board.
+                    (scap_mv,) = struct.unpack_from('<H', payload, 5)
+                    if (fcs_flags & FCS_SCAP_SENSE) and scap_mv != FCS_SCAP_NO_READING:
+                        scap_v = scap_mv / 1000.0
                 records["FcStatus"].append({
                     "time_us": t_us,
                     # "Engaged" is wider than "recording": true from the moment
                     # the camera rail comes up, several hundred ms before a
                     # GoPro or RunCam actually rolls.
                     "fc_camera_engaged": bool(fcs_flags & 0x01),
+                    # FCS_RAW_VOTES_WITHHELD: the mosaic-only image's raw vote
+                    # guard latched -- the raw-GNSS filter read >10 m/s below
+                    # the barometer's climb for 1 s after burnout, and its
+                    # velocity and pitch apogee votes are withheld until the
+                    # next launch. Always False on every other image.
+                    "fc_raw_votes_withheld": bool(fcs_flags & 0x02),
+                    "scap_v": scap_v,
+                    # the gnss-sdr-dev board's IMU aiding (FCS_GNSS_IMU_*): 0
+                    # none reported, 1 fully aiding, 2 not fully (the vertical
+                    # only, or off), 3 refused/dropped
+                    "gnss_imu": (fcs_flags & FCS_GNSS_IMU_MASK) >> FCS_GNSS_IMU_SHIFT,
                 })
             elif msg_type == MSG_SNAPSHOT and msg_len == SNAPSHOT_LEN:
                 # #752: the FC's crash-recovery snapshot, 10 Hz through INFLIGHT.
@@ -1263,15 +2027,20 @@ def parse_binary_file(filepath):
                     # other index here is untouched.  Euler was only ever a
                     # cache of the quaternion (still at f[30..33]), so nothing
                     # is lost: a v5 log's attitude is recoverable from ekf_q*.
+                    # The third reclaimed float (reserved_v5) is the receiver's
+                    # geoid separation on the mosaic-only image, whose raw-GNSS
+                    # filter keeps ekf_alt_m above the ELLIPSOID; 0 means not
+                    # recorded (every other image), so None.
                     if version >= 5:
                         ekf_roll = ekf_pitch = ekf_yaw = None
                         snap_max_alt_m     = f[56]
                         snap_max_speed_mps = f[57]
+                        snap_geoid_sep_m   = f[58] if f[58] != 0.0 else None
                     else:
                         ekf_roll  = math.degrees(f[56])
                         ekf_pitch = math.degrees(f[57])
                         ekf_yaw   = math.degrees(f[58])
-                        snap_max_alt_m = snap_max_speed_mps = None
+                        snap_max_alt_m = snap_max_speed_mps = snap_geoid_sep_m = None
                     # GnssAscentGate (reclaimed from pad, no version bump): 0 is
                     # every older writer's padding and means "not recorded" —
                     # None, not "held out".  See SNAPSHOT_GNSS_ADMISSION below.
@@ -1342,6 +2111,7 @@ def parse_binary_file(filepath):
                         # firmware did not carry them at all.
                         "snap_max_alt_m":       snap_max_alt_m,
                         "snap_max_speed_mps":   snap_max_speed_mps,
+                        "snap_geoid_sep_m":     snap_geoid_sep_m,
                         "b2r_q0":               b2r_q[0],
                         "b2r_q1":               b2r_q[1],
                         "b2r_q2":               b2r_q[2],
@@ -1361,9 +2131,13 @@ def parse_binary_file(filepath):
 
             elif msg_type == MSG_LOG_BUFFER_STATS:
                 # OC self-emitted ring snapshot, ~1 Hz while logging.
-                # See LogBufferStatsData in RocketComputerTypes.h.
-                fields = struct.unpack(FMT_LOG_BUFFER_STATS, payload)
-                records["LogBufferStats"].append({
+                # See LogBufferStatsData in RocketComputerTypes.h. #1659:
+                # dispatch on length; a v1 (28 B) record reports the link
+                # fields as None, NOT 0 -- that firmware never measured them.
+                v2 = (len(payload) == 52)
+                fields = struct.unpack(
+                    FMT_LOG_BUFFER_STATS_V2 if v2 else FMT_LOG_BUFFER_STATS, payload)
+                rec = {
                     "time_us":                fields[0],
                     "ring_size":              fields[1],
                     "ring_fill":              fields[2],
@@ -1371,7 +2145,10 @@ def parse_binary_file(filepath):
                     "ring_overruns":          fields[4],
                     "ring_drop_oldest_bytes": fields[5],
                     "ring_bad_sof_clears":    fields[6],
-                })
+                }
+                for i, name in enumerate(LOG_BUFFER_STATS_V2_FIELDS):
+                    rec[name] = fields[7 + i] if v2 else None
+                records["LogBufferStats"].append(rec)
 
             elif msg_type == MSG_PYRO_FAULT_TRIP:
                 # OC self-emitted fault-current trip (#1553). OC clock, so it
@@ -1379,6 +2156,13 @@ def parse_binary_file(filepath):
                 rec = decode_pyro_fault_trip(payload)
                 if rec is not None:
                     config["pyro_fault_trips"].append(rec)
+
+            elif msg_type == MSG_OC_IDENTITY:
+                # #1658: the computer that wrote this log; OC clock, repeated
+                # ~1 Hz, so the last one is kept.
+                rec = decode_oc_identity(payload)
+                if rec is not None:
+                    config["oc_identity"] = rec
 
             elif msg_type == MSG_GUIDANCE_TELEM and msg_len in (15, 19):
                 # PN guidance telemetry, ~10 Hz during guided coast.
@@ -1404,6 +2188,7 @@ def parse_binary_file(filepath):
                     "yaw_fin_cmd":    yaw_fin_cmd,        # deg (None on legacy)
                     "active":         bool(gflags & GUID_FLAG_ACTIVE),
                     "burnout":        bool(gflags & GUID_FLAG_BURNOUT),
+                    **{k: bool(gflags & b) for k, b in GUID_FLAG_REASONS.items()},
                 })
 
         except struct.error:
@@ -1416,6 +2201,21 @@ def parse_binary_file(filepath):
     rot_rad = math.radians(config["ism6_rot_z_deg"])
     c_rot, s_rot = math.cos(rot_rad), math.sin(rot_rad)
     hg_bx, hg_by, hg_bz = config["hg_bias"]
+    # #1629: the low-g's hand-calibrated offset, board frame, off the low-g and
+    # the high-g as SensorConverter takes it -- the flight's PCX_ACC record (a
+    # log without one: none, as before the calibration existed)
+    lg_ox = lg_oy = lg_oz = 0.0
+    for pr in records["PadContext"]:
+        if pr.get("kind") == "acc" and pr.get("applied"):
+            lg_ox, lg_oy, lg_oz = pr["offset_mps2"]
+    config["lg_offset"] = (lg_ox, lg_oy, lg_oz)
+    # the high-g's six-face alignment to the low-g, board frame, before its
+    # bias: the flight's PCX_HG record (a log without one: none, identity)
+    hg_m = None
+    for pr in records["PadContext"]:
+        if pr.get("kind") == "hg" and pr.get("applied"):
+            hg_m = pr["matrix"]
+    config["hg_matrix"] = hg_m
     low_g_rail_lsb = low_g_near_rail_lsb(config["low_g_fs_g"])
 
     # Board→rocket mounting rotation (matches SensorConverter: applied LAST,
@@ -1443,12 +2243,17 @@ def parse_binary_file(filepath):
         gy_y = r["gy_y"] * gyro_scale
         gy_z = r["gy_z"] * gyro_scale
 
-        low = apply_b2r(lg_x * c_rot - lg_y * s_rot,
-                        lg_x * s_rot + lg_y * c_rot,
-                        lg_z)
-        high = apply_b2r((hg_x * c_rot - hg_y * s_rot) - hg_bx,
-                         (hg_x * s_rot + hg_y * c_rot) - hg_by,
-                         hg_z - hg_bz)
+        low = apply_b2r(lg_x * c_rot - lg_y * s_rot - lg_ox,
+                        lg_x * s_rot + lg_y * c_rot - lg_oy,
+                        lg_z - lg_oz)
+        hb_x, hb_y, hb_z = hg_x * c_rot - hg_y * s_rot, hg_x * s_rot + hg_y * c_rot, hg_z
+        if hg_m is not None:
+            hb_x, hb_y, hb_z = (hg_m[0] * hb_x + hg_m[1] * hb_y + hg_m[2] * hb_z,
+                                hg_m[3] * hb_x + hg_m[4] * hb_y + hg_m[5] * hb_z,
+                                hg_m[6] * hb_x + hg_m[7] * hb_y + hg_m[8] * hb_z)
+        high = apply_b2r(hb_x - hg_bx - lg_ox,
+                         hb_y - hg_by - lg_oy,
+                         hb_z - hg_bz - lg_oz)
         gyro = apply_b2r(gy_x * c_rot - gy_y * s_rot,
                          gy_x * s_rot + gy_y * c_rot,
                          gy_z)
@@ -1491,10 +2296,19 @@ def parse_binary_file(filepath):
     # --- Post-process MMC raw data with rotation ---
     mmc_rad = math.radians(config["mmc_rot_z_deg"])
     c_mmc, s_mmc = math.cos(mmc_rad), math.sin(mmc_rad)
+    # The MMC5983MA's hard-iron offset, centered counts: the MMC has no offset
+    # register, so its logged counts carry the board's hard iron and the
+    # converter takes it off after the log -- the flight's PCX_CAL record (a
+    # log without one: none, as before the MMC was calibrated)
+    mmc_ox = mmc_oy = mmc_oz = 0
+    for pr in records["PadContext"]:
+        if pr.get("kind") == "cal":
+            mmc_ox, mmc_oy, mmc_oz = pr["mmc_offset_counts"]
+    config["mmc_offset_counts"] = (mmc_ox, mmc_oy, mmc_oz)
     for rec in records["MMC5983MA"]:
-        mx = decode_mmc_centered(rec.pop("raw_x"))
-        my = decode_mmc_centered(rec.pop("raw_y"))
-        mz = decode_mmc_centered(rec.pop("raw_z"))
+        mx = decode_mmc_centered(rec.pop("raw_x"), mmc_ox)
+        my = decode_mmc_centered(rec.pop("raw_y"), mmc_oy)
+        mz = decode_mmc_centered(rec.pop("raw_z"), mmc_oz)
         mag = apply_b2r(mx * c_mmc - my * s_mmc,
                         mx * s_mmc + my * c_mmc,
                         mz)
@@ -2170,7 +2984,9 @@ def plot_guidance(records, t0_global):
     of roll_cmd — plus the roll command from NonSensor for context.
     Bottom: guidance internals (LOS angle, lateral offset, closing velocity).
     """
-    g = records["Guidance"]
+    # Steering frames only: the status frames sent while guidance is enabled
+    # but not steering carry no commands.
+    g = [r for r in records["Guidance"] if r["active"]]
     if not g:
         return None
 
@@ -2503,6 +3319,10 @@ def main(filepath=BINARY_FILE, output_dir=OUTPUT_DIR, show_plots=SHOW_PLOTS,
     for name, count in sorted(stats["type_counts"].items(), key=lambda x: -x[1]):
         print(f"    {name:<24s} {count:>8,}")
     print()
+    # The mosaic-G5's SBF blocks, if this log has them (nothing otherwise)
+    print_gnss_sbf_summary(records["GNSS_RTCM"])
+    # The PX1105R's SkyTraq frames, the same way
+    print_gnss_skytraq_summary(records["GNSS_RTCM"])
 
     # Print sensor configuration
     print("  Sensor configuration:")

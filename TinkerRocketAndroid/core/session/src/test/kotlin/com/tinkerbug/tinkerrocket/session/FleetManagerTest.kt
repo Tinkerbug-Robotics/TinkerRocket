@@ -534,6 +534,43 @@ class FleetManagerTest {
         assertEquals("bs:02", h.fleet.foregroundBSID.value)
     }
 
+    // --------------------------------------- voice: base station only
+
+    /** The regression: with the rocket paired directly on the pad as well as
+     *  the base station, voice stays on the base station, whichever connected
+     *  first. (A direct rocket used to win.) */
+    @Test
+    fun voiceDevice_isTheBaseStationEvenWithADirectRocket() = runTest {
+        val h = fleetHarness()
+        discoverAndConnect(h, "aa:01", "TR-R-Atlas")
+        discoverAndConnect(h, "bs:01", "TR-B-One")
+        assertEquals("bs:01", h.fleet.voiceDevice()?.deviceId)
+    }
+
+    /** No base station, no callouts: a rocket on its own does not speak. */
+    @Test
+    fun voiceDevice_rocketOnly_isNull() = runTest {
+        val h = fleetHarness()
+        discoverAndConnect(h, "aa:01", "TR-R-Atlas")
+        assertNull(h.fleet.voiceDevice())
+    }
+
+    /** The direct link drops at launch and can come back mid-flight; neither
+     *  edge moves voice off the base station. */
+    @Test
+    fun voiceDevice_rocketDroppingAndReconnecting_staysOnTheBaseStation() = runTest {
+        val h = fleetHarness()
+        discoverAndConnect(h, "bs:01", "TR-B-One")
+        discoverAndConnect(h, "aa:01", "TR-R-Atlas")
+
+        h.fleet.disconnect("aa:01")
+        runCurrent()
+        assertEquals("bs:01", h.fleet.voiceDevice()?.deviceId)
+
+        discoverAndConnect(h, "aa:01", "TR-R-Atlas")
+        assertEquals("bs:01", h.fleet.voiceDevice()?.deviceId)
+    }
+
     // ------------------------------------------------ hidden rockets (#390)
 
     @Test

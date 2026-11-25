@@ -59,6 +59,13 @@ public:
 
     virtual void getStats(TR_LoRa_Comms::Stats& out) const = 0;
 
+    // millis() when the packet the last successful readPacket() returned
+    // finished arriving, or 0 when the backend cannot say (the UART modem:
+    // its frames reach the host a link transfer later). The base station
+    // times each rocket's frames from it (three-rocket slots) and falls back
+    // to its own loop time on 0.
+    virtual uint32_t lastRxDoneMs() const { return 0; }
+
     // ---- Spectrum scan (pre-launch collision avoidance; BS caller, #414) --
     // Mirrors the TR_LoRa_Comms scan surface exactly (same call-site-audit
     // rule as above — this is the set the BS application uses). Contract:

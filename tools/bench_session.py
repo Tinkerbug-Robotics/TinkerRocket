@@ -75,6 +75,15 @@ FILE_OPS_UUID  = "8d53dc1d-1db7-4cd3-868b-8a527460aa84"
 
 SCAN_TIMEOUT_S = 15.0
 
+
+def adv_name(d, ad) -> str:
+    # The advertised name first, as the app's scanner reads it (BLEFleet.swift),
+    # then macOS's cached GAP name (d.name) — that one is None until this Mac
+    # has connected to the unit (or since a re-flash wiped the bond), so
+    # matching it alone missed a board advertising its name (#1623).
+    return ad.local_name or d.name or ""
+
+
 # The BLE telemetry "fs" bitfield — buildTelemetryJSON() in TR_BLE_To_APP.cpp.
 #
 # NOT NonSensorData.flags.  The generated protocol reference documents a field
@@ -268,6 +277,7 @@ class Session:
         self.tl = timeline
         self.client = None
         self.dev = None
+        self.dev_name = None      # the name find() matched (macOS may have no d.name)
         self.frames = []          # (t, decoded dict)
         self.mark = 0.0           # time origin for the *_since assertions
         self.mark_frame = 0       # frame-index origin for expect_tlm/refute_tlm
@@ -290,9 +300,10 @@ class Session:
             return self.args.address
         found = await BleakScanner.discover(timeout=SCAN_TIMEOUT_S, return_adv=True)
         for d, ad in found.values():
-            name = d.name or ""
+            name = adv_name(d, ad)
             svc = SERVICE_UUID.lower() in [u.lower() for u in (ad.service_uuids or [])]
             if self.args.name.lower() in name.lower() or (svc and not self.args.name):
+                self.dev_name = name
                 return d
         raise SystemExit(f"no device matching {self.args.name!r}")
 
@@ -309,7 +320,7 @@ class Session:
             return
         if self.dev is None:
             self.dev = await self.find()
-        label = getattr(self.dev, "name", self.dev)
+        label = self.dev_name or getattr(self.dev, "name", self.dev)
         self.client = BleakClient(self.dev)
         await self.client.connect()
         await self.client.start_notify(TELEMETRY_UUID, self.on_notify)

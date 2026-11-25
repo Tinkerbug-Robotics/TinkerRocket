@@ -210,6 +210,36 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # Serial
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
+# Compiler optimization: -O2 (Performance), not IDF's -Og default.
+# The same line as flight_computer/sdkconfig.defaults, whose note has the FC
+# measurement and what else -O2 changes. On the Beetle V1's OC (240 MHz, on
+# the pad, the FC streaming 7,300 IMU samples/s, not logging) core 1 went from
+# 52 % busy to 43 % (oc_loop 27 -> 22.5 %, I2S Parse 24 -> 19 %), 2026-10-12:
+# more of the headroom #1485 raised the clock for. The images change by -0.5
+# to +2.3 % across the four boards; internal RAM use drops 4-8 KB.
+# TRAP: a build dir configured before this line keeps building -Og. Delete
+# build_<rev>/sdkconfig once (the TRAP note at the end of this file says why).
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# #1659: keep the FC link's I2S RX interrupt running through flash writes.
+# While the SPI flash erases or programs, IDF turns off the cache and every
+# interrupt that is not IRAM-safe on BOTH cores, whichever core asked. The RX
+# DMA keeps cycling its 4 descriptors (~2.9 ms each) meanwhile, so anything
+# longer than ~11.6 ms was overwritten before i2s_dma_rx_callback (in flash
+# without this) could hand it on. The Beetle's 2026-10-24 RIM66 flight lost
+# 39 ms of boost that way: the #1176 INFLIGHT token's NVS write landed on a
+# page change and paid for a sector erase.
+# With this the I2S DMA callback goes to IRAM and the GDMA interrupt is
+# allocated IRAM-safe (it selects GDMA_ISR_HANDLER_IN_IRAM). The rest of the
+# chain already was: TR_I2S_Stream::onRecvISR, i2sRecvCallback and rxPush are
+# IRAM_ATTR, rx_ring is static DRAM, and the driver refuses at registration a
+# callback outside IRAM or a context outside internal RAM. The ISR now keeps
+# filling the 64 KB rx_ring (~186 ms at 88200) and the parser catches up after
+# the stall. That covers every OC flash write (NVS, NimBLE bonding, OTA), not
+# only the token. Cost on the Beetle V1: +436 B of internal RAM, with the stall
+# measurement in i2sRecvCallback.
+CONFIG_I2S_ISR_IRAM_SAFE=y
+
 
 # --- Boot NOR size (#851 item 3, corrected 2026-08-24) --------------------
 # The two ways of getting this wrong are not symmetric:
@@ -245,6 +275,13 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # partition ever does cross 8 MB it has to move into a V9-only table, or V7/V8
 # stop building — gen_esp32part.py refuses a table larger than the declared
 # flash, which is the safe way for that mistake to surface.
+#
+# 2026-11-21: one board carries LESS than this. The Tinker-Beetle V2's out
+# computer (-DTR_BOARD_M2=1) boots from the 4 MB inside its ESP32-S3FH4R2, so
+# for that board the 8 MB above is the too-large case. Its build adds
+# sdkconfig.defaults.flash4mb after this file: a 4 MB declaration and
+# partitions_4mb.csv. main.cpp refuses to compile an M2 image that still
+# declares 8 MB.
 #
 # TRAP: IDF does not re-apply sdkconfig.defaults to an EXISTING sdkconfig, and
 # this project deliberately keeps one PER BUILD DIR (#822, so a V9 build

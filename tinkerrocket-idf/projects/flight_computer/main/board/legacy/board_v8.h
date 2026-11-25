@@ -54,13 +54,21 @@ struct board_pins
     // 1 PPS the SAM-M10Q carrier already routes to a P4 GPIO is being thrown
     // away because the header called it a UART line.
     //
-    // Nothing in firmware distinguishes the carriers at runtime — the board
-    // header hard-selects the UBlox driver and TR_GNSSReceiverUBlox_Serial has
-    // no carrier identification.  So GPIO2 stays unused: do not use it without
-    // first establishing which carrier is fitted (NVS, or the UBX MON-VER that
-    // begin() already reads).
+    // Do not use GPIO2 without first establishing which carrier is fitted. The
+    // default V8 image never does (it hard-selects the UBlox driver), so it
+    // leaves GPIO2 alone. The auto image (-DTR_GNSS_AUTO=1) establishes it at
+    // boot, as on the V9 (TR_Sensor_Collector's gnss_detect.h tells the u-blox
+    // from the mosaic by what each answers on pins 1-2). Only once it has
+    // found the mosaic-G5 does the mosaic's driver read pin 5, as the 1PPS
+    // coming through the harness's 1 kOhm; the u-blox path never touches it.
+    // The mosaic-only build (-DTR_GNSS_MOSAIC=1, the Goblin's) establishes it
+    // by being built (config.h GNSS_PPS_PIN). None of them ever drives the
+    // pin. J1 here is the V9's J1: the same
+    // BM05B-SRSS-TB with the same pins 1-5, so the Goblin's mosaic harness
+    // fits it as it is.
     static constexpr uint8_t GNSS_RX = 3;   // FC receives; module TXD drives this
     static constexpr uint8_t GNSS_TX = 4;   // FC drives;   module RXD listens here
+    static constexpr int8_t  GNSS_J1_PIN5 = 2;   // net GNSS_RXD2: carrier-dependent, see above
     static constexpr int8_t GNSS_RESET_N = -1;
     static constexpr int8_t GNSS_SAFEBOOT_N = -1;
 
@@ -73,6 +81,20 @@ struct board_pins
     // IIS2MDC -> board rotation (deg, CCW about +Z) on its normalized frame
     // (magTypeChipSign): U23 sits where V9's U3 does, so +90 (#204, #1589).
     static constexpr float MAG_ROT_Z_DEG_IIS2MDC = 90.0f;
+
+    // --- IMU and MMC5983MA placement (sensor -> board frame) ---
+    // A reading is multiplied by AXIS_SIGN, chip axis by chip axis, as it is
+    // read (SensorCollector::configureAxisSigns), and the converter then turns
+    // it ROT_Z_DEG, CCW about +Z. Every sign is +1 on a board whose parts sit
+    // on the front, so what is logged is what the chip read; only a part on
+    // the back has one (board_m2.h). These were config.h's, one pair for
+    // every board, until the Beetle V2 moved its IMU and magnetometer to the
+    // back.
+    // No MMC5983MA here: its angle is still the one the status query reports.
+    static constexpr float  ISM6HG256_ROT_Z_DEG    = -45.0f;
+    static constexpr int8_t ISM6HG256_AXIS_SIGN[3] = {1, 1, 1};
+    static constexpr float  MMC5983MA_ROT_Z_DEG    = 180.0f;
+    static constexpr int8_t MMC5983MA_AXIS_SIGN[3] = {1, 1, 1};
 
     // ### Part presence ###
     static constexpr bool USE_BMP585 = true;
@@ -127,6 +149,12 @@ struct board_pins
     static constexpr uint8_t PYRO3_CONT_PIN = 12;  // PYRO3_CONT
     static constexpr uint8_t PYRO4_FIRE_PIN = 13;  // PYRO4_FIRE
     static constexpr uint8_t PYRO4_CONT_PIN = 14;  // PYRO4_CONT
+    // One arm for all four channels: no further arm lines (V5's per-channel
+    // arms ride PYRO_ARM_GANG_PINS). Continuity reads with the arm down, and
+    // LOW means a load is present (#264).
+    static constexpr int8_t PYRO_ARM_GANG_PINS[3] = {-1, -1, -1};
+    static constexpr int  PYRO_CONT_CLOSED_LEVEL = 0;
+    static constexpr bool PYRO_CONT_NEEDS_ARM    = false;
 
     // ### Fin servos ###
     // CONFIRMED against the board files: each EXP net's package pin was read
@@ -168,6 +196,10 @@ struct board_pins
     // inference above still stands on the same footing it always did.
     static constexpr uint8_t RED_LED_PIN = 27;    // IND_1
     static constexpr uint8_t BLUE_LED_PIN = 26;   // IND_2
+
+    // No hold-up supercap sense on this board (#1409).
+    static constexpr int   SCAP_ADC_PIN       = -1;
+    static constexpr float SCAP_DIVIDER_RATIO = 1.0f;   // unused with no pin
 
     // ### I2C command/config channel to the OutComputer ###
     static constexpr uint8_t ESP_SDA_PIN = 23;  // ESP_SDA (OC pin 5)

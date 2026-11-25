@@ -17,7 +17,10 @@ TR_QMC5883P::TR_QMC5883P(uint8_t addr)
       _range(Range::G8),
       _off_x(0), _off_y(0), _off_z(0),
       _overflow(false),
-      _rereads(0)
+      _rereads(0),
+      _config_verified(false),
+      _config_attempts(0),
+      _readback{0, 0, 0}
 {}
 
 // ---------------------------------------------------------------------------
@@ -63,39 +66,79 @@ TR_QMC5883PStatus TR_QMC5883P::softReset()
     // chip that is not.  A failed begin() reports "no magnetometer" anyway.
     _off_x = _off_y = _off_z = 0;
     _overflow = false;
-    const TR_QMC5883PStatus st = writeRegister(REG_CTRL2, CTRL2_SOFT_RST);
+    if (writeRegister(REG_CTRL2, CTRL2_SOFT_RST) != TR_QMC5883P_OK)
+        return TR_QMC5883P_ERROR;
     // Table 7: POR is complete within 250 µs; soft reset has no figure of
-    // its own.  5 ms is paid once, at begin().
+    // its own.  10 ms in all is paid once, at begin().
+    delay(5);
+    // SOFT_RST does not clear itself, and no write sticks while it is set
+    // (qmc5883p_regs.h).  Release it here.  Leaving that to configure()'s
+    // CTRL2 write is what kept the Beetle at ±30 G: the sign word and the
+    // suspend write before it were lost, and so was that write's own range.
+    // 0x00 is CTRL2's default.
+    const TR_QMC5883PStatus st = writeRegister(REG_CTRL2, 0x00);
     delay(5);
     return st;
 }
 
 // ---------------------------------------------------------------------------
-//  configure – sign word, suspend, CTRL2, CTRL1 (datasheet section 7 order)
+//  configure – sign word, suspend, CTRL2, CTRL1 (datasheet section 7 order),
+//              then the three read back, and again if they did not take
 // ---------------------------------------------------------------------------
 TR_QMC5883PStatus TR_QMC5883P::configure(Odr odr, Mode mode, Range range,
                                          Osr1 osr1, Osr2 osr2,
                                          SetReset set_reset)
 {
-    // "Write Register 29H by 0x06 (Define the sign for X Y and Z axis)" —
-    // first in every example the datasheet gives.  Re-written on every
-    // configure() because softReset() restores every register and the
-    // datasheet does not say whether 0x29 is among them.
-    if (writeRegister(REG_AXIS_SIGN, AXIS_SIGN_VALUE) != TR_QMC5883P_OK)
-        return TR_QMC5883P_ERROR;
+    const uint8_t want_ctrl1 = ctrl1(mode, odr, osr1, osr2);
+    const uint8_t want_ctrl2 = ctrl2(range, set_reset);
+    _config_verified = false;
+    _config_attempts = 0;
 
-    // 9.2.3: "Suspend Mode should be added in the middle of mode shifting."
-    // Park the part before touching range or rate.  Harmless on a part that
-    // is already suspended (fresh reset); required on one that is running
-    // (reviveIIS2MDC() re-configures without a reset).
-    if (writeRegister(REG_CTRL1, ctrl1(Mode::SUSPEND, odr, osr1, osr2)) != TR_QMC5883P_OK)
-        return TR_QMC5883P_ERROR;
+    for (uint8_t attempt = 1; attempt <= CONFIGURE_ATTEMPTS; ++attempt)
+    {
+        // A pass that did not take may have met a part still settling, or
+        // one with SOFT_RST still set: that pass's own CTRL2 write clears
+        // the bit, and the next pass sticks.
+        if (attempt > 1) delay(5);
+        _config_attempts = attempt;
 
-    if (writeRegister(REG_CTRL2, ctrl2(range, set_reset)) != TR_QMC5883P_OK)
-        return TR_QMC5883P_ERROR;
-    _range = range;
+        // The sign word first, as in every datasheet example, but 0x00, not
+        // the examples' 0x06 (qmc5883p_regs.h).  Re-written on every
+        // configure() because softReset() restores every register and the
+        // datasheet does not say whether 0x29 is among them.
+        if (writeRegister(REG_AXIS_SIGN, AXIS_SIGN_VALUE) != TR_QMC5883P_OK)
+            return TR_QMC5883P_ERROR;
 
-    return writeRegister(REG_CTRL1, ctrl1(mode, odr, osr1, osr2));
+        // 9.2.3: "Suspend Mode should be added in the middle of mode
+        // shifting."  Park the part before touching range or rate.  Harmless
+        // on a part that is already suspended (fresh reset); required on one
+        // that is running (reviveIIS2MDC() re-configures without a reset).
+        if (writeRegister(REG_CTRL1, ctrl1(Mode::SUSPEND, odr, osr1, osr2)) != TR_QMC5883P_OK)
+            return TR_QMC5883P_ERROR;
+
+        if (writeRegister(REG_CTRL2, want_ctrl2) != TR_QMC5883P_OK)
+            return TR_QMC5883P_ERROR;
+
+        if (writeRegister(REG_CTRL1, want_ctrl1) != TR_QMC5883P_OK)
+            return TR_QMC5883P_ERROR;
+
+        // Read back what was written.  An ACK does not mean the write stuck
+        // (#1590).  Whatever range the part reports is the one its counts
+        // are taken at, so readRawXYZ() converts from that range, even if
+        // ±8 G never takes.
+        if (readRegister(REG_CTRL1, &_readback.ctrl1) != TR_QMC5883P_OK ||
+            readRegister(REG_CTRL2, &_readback.ctrl2) != TR_QMC5883P_OK ||
+            readRegister(REG_AXIS_SIGN, &_readback.axis_sign) != TR_QMC5883P_OK)
+            return TR_QMC5883P_ERROR;
+        _range = rangeOfCtrl2(_readback.ctrl2);
+
+        if (configTook(_readback, want_ctrl1, want_ctrl2, AXIS_SIGN_VALUE))
+        {
+            _config_verified = true;
+            break;
+        }
+    }
+    return TR_QMC5883P_OK;
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +204,12 @@ TR_QMC5883PStatus TR_QMC5883P::readRawXYZ(QMC5883P_RawData *out)
     }
     _overflow = ovfl;
 
+    // The ±8 G scale every log reader assumes, from whatever range the part
+    // reported at configure().  The identity when ±8 G took.
+    x = toContractCounts(x, _range);
+    y = toContractCounts(y, _range);
+    z = toContractCounts(z, _range);
+
     // Hard iron, the way the IIS2MDC's OFFSET registers do it in silicon.
     out->x = subtractSaturating(x, _off_x);
     out->y = subtractSaturating(y, _off_y);
@@ -187,7 +236,7 @@ void TR_QMC5883P::getHardIronOffset(int16_t *cx, int16_t *cy, int16_t *cz) const
 }
 
 // ---------------------------------------------------------------------------
-//  readFieldsXYZ_uT – counts × (100 / LSB-per-gauss at the configured range)
+//  readFieldsXYZ_uT – counts × 100/3750 (readRawXYZ() hands out ±8 G counts)
 // ---------------------------------------------------------------------------
 TR_QMC5883PStatus TR_QMC5883P::readFieldsXYZ_uT(float *x_uT, float *y_uT, float *z_uT)
 {

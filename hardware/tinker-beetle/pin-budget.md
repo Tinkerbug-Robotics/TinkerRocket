@@ -60,6 +60,10 @@ individually rather than collectively:
 - **Pins 30–35 are shared deliberately.** The in-package PSRAM and the external
   boot flash sit on one bus: SPICS0 selects the flash, SPICS1 the PSRAM. Using
   those six for the external flash is the intended arrangement, not a conflict.
+- **V2 is an ESP32-S3FH4R2** (same die, QFN-56 and pinout, 4 MB of quad flash
+  added in the package). Pads 30–35 now run to the in-package flash and carry
+  no-connect flags; nothing else may use them. GPIO26 stays the PSRAM select, and
+  GPIO33–37/47/48 stay available for the reasons above.
 
 **The realistic ceiling is 16.** A flight computer that cannot be debugged over
 JTAG or watched over a serial console during bring-up is a poor trade for four
@@ -190,7 +194,7 @@ flash/PSRAM, because the design's proof only covers one of them.
 
 | Group | Pins | Secondary function | Verdict |
 |---|---|---|---|
-| Quad flash bus | GPIO27–32 | flash clock, data, hold, write-protect, CS0 | **In use as intended** — they carry the external boot flash. Not repurposed, no risk. |
+| Quad flash bus | GPIO27–32 | flash clock, data, hold, write-protect, CS0 | **In use as intended** — they carry the external boot flash (V1) or the in-package flash (V2, no-connect on the board). Not repurposed, no risk. |
 | Octal PSRAM data | GPIO33–37 | SPIIO4–7, SPIDQS | **Proven safe.** The V7 board used GPIO34–38 for its memory bus on hardware that was built and flown — a part with octal PSRAM could not have done that. |
 | Octal PSRAM clock | GPIO47, GPIO48 | SPICLK_P / SPICLK_N | **Safe by the same proof** — these serve octal PSRAM only, and this part has none. Not directly exercised on V7, so slightly weaker evidence. |
 | **Quad PSRAM select** | **GPIO26** | **SPICS1** | **Confirmed unavailable** — datasheet Table 1-1 gives this part 2 MB quad PSRAM, whose chip select is this pin. **Left unused.** |
@@ -497,10 +501,10 @@ left GPIO26) carries over verbatim.
 | `ESP_I2S_SD` / `ESP_I2S_FSYNC` | 13, 14 | I2S data and frame sync to the OC |
 | `ESP_I2S_WS` / `ESP_I2S_BCLK` | 18, 21 | I2S word select and bit clock |
 | `ESP_SDA` / `ESP_SCL` | 36, 37 | I2C to the OC, 5.11 k to `V_MCU_SWTCH`. (An earlier revision of this table listed 33/35 — those are FIRE pins now) |
-| `MAG_SDA` / `MAG_SCL` | 1, 2 | the magnetometer moved off the OC's power-monitor bus onto ours, where the driver lives. Pull-ups `R117`/`R118` on `V_MCU_SWTCH` |
+| `MAG_CS` | 1 | V2: the magnetometer (`U3`, now an MMC5983MA) is on the `SENS_*` SPI bus with the IMU and baro, on its own chip select; `R118` (10 k, like `R4`/`R5`) pulls it up to `V_MCU_SWTCH`. On V1.0.x GPIO1/2 were `MAG_SDA`/`MAG_SCL` (I2C to the QMC5883P, pull-ups `R117`/`R118`) — the magnetometer had moved off the OC's power-monitor bus onto ours, where the driver lives |
 | `FC_EN_HOLD` | 17 | self-hold into `D9`. **Deliberately not GPIO3**, and **must stay in GPIO0–21** — the in-flight latch needs the RTC hold (`SOC_RTCIO_PIN_COUNT = 22`); above GPIO21 `gpio_hold_en` still returns `ESP_OK` but degrades to deep-sleep-only |
 | `Net-(U32-GPIO19)` / `Net-(U32-GPIO20)` | 19, 20 | USB-Serial-JTAG, through the `U1` mux — the console and flashing path |
-| `IND_1` / `IND_2` | 43, 45 | LED drives, driven high to light. `IND_1` → `R70` → `D10` **red** on `U0TXD` (weak reset pull-up, ~73 µA — dark); `IND_2` → `R71` → `D11` **blue** on the VDD_SPI strap, safe only because a blue die behind 10 k cannot pull it high |
+| `IND_1` / `IND_2` | 43, 45 | LED drives, driven high to light. `IND_1` → `R70` → `D10` **green** on `U0TXD` (red on V1.0.x; weak reset pull-up, ~73 µA — dark, and the green die's higher knee keeps it darker still); `IND_2` → `R71` → `D11` **blue** on the VDD_SPI strap, safe only because a blue die behind 10 k cannot pull it high — keep a high-Vf colour here |
 | `VBUCK_OK` | 3 | hold-up status, `R137`/`R138` divider off `V_BUCK`, read as ADC1_CH2 — see the GPIO3 correction above |
 
 
@@ -512,6 +516,15 @@ wanted; day to day the console is USB-Serial-JTAG. GPIO45 is **not** free either
 carries the strapping network, and **GPIO26 stays unused** for the quad-PSRAM reason argued above.
 *(This paragraph has been wrong twice: it claimed GPIO3/38/43/44 free until 2026-08-30, and
 GPIO43 free until 2026-09-04.)*
+
+**V2 adds GPIO15 and GPIO16** (pads 21, 22, `XTAL_32K_P`/`XTAL_32K_N`): the flight computer's
+32.768 kHz crystal `Y3` and its caps `C110`/`C111` are gone, because the firmware never selected
+it. Both pads carry no-connect flags in the schematic. They are RTC-capable (inside GPIO0–21), and
+re-using either one gives up the option of fitting the crystal again for FC light sleep.
+
+**V2 also frees GPIO2** (pad 7): the magnetometer moved from I2C to the sensor SPI bus, so its
+clock pin went and `R117` with it; GPIO1 stayed as its chip select `MAG_CS`. GPIO2 carries a
+no-connect flag, is RTC-capable and is not a strapping pin.
 
 ### Out computer `U15` — on `+3V3`, always on
 

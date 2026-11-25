@@ -86,5 +86,16 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # Serial
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
+# Compiler optimization: -O2 (Performance), not IDF's -Og default.
+# The same line as flight_computer/ and out_computer/sdkconfig.defaults; the
+# FC's note has the measurement and what else -O2 changes. Not measured on a
+# base station. The images get 1-5 % smaller: -O2 folds away the radio backend
+# a board does not use (config::USE_UART_RADIO_MODEM), which -Og kept linked,
+# UART driver and all. Internal RAM use drops 4-10 KB.
+# TRAP: IDF does not re-apply these defaults to a build dir's existing
+# sdkconfig, so a build dir configured before this line keeps building -Og.
+# Delete build_<rev>/sdkconfig once.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
 # FAT filesystem — enable long filenames (required for timestamped CSV logs)
 CONFIG_FATFS_LFN_HEAP=y

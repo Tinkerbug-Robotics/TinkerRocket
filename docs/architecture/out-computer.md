@@ -170,7 +170,7 @@ Two behaviors in this path are easy to misread as bugs:
   INFLIGHT with no reference adopts the FC's own from the `SNAPSHOT_MSG` frame it already
   caches for reboot recovery, together with the FC's running maxima, once; a nominal
   flight keeps the reference it tracked itself. Both rules live in
-  `ground_baseline_policy.h` (host-tested), and the mini's comms half shares them.
+  `ground_baseline_policy.h` (host-tested).
 
 ### Commands out
 
@@ -217,7 +217,7 @@ stream and a storage medium that occasionally stops to erase a block — it abso
 write burst without the erase latency of flash.
 
 **Where that ring lives is per board, and the fallbacks are not equivalent.** V8 uses
-the MRAM part. **V9/V10 and the mini have no MRAM at all** — the S3RH2's in-package
+the MRAM part. **V9/V10 and the Tinker-Beetle have no MRAM at all** — the S3's in-package
 PSRAM is its designated replacement, so `TR_LogToFlash` allocates a **512 KB** ring
 there (`config::PSRAM_RING_SIZE`, gated on the board header's `RING_IN_PSRAM` with
 `MRAM_CS = -1`). If neither answers, it falls back to **64 KB of internal RAM**
@@ -313,6 +313,14 @@ interval (200 ms, latency 4) while the rail is off and a fast one (30 ms) for
 transfers, and it disables the BLE library's own auto-negotiation so the two cannot
 race. The idle link is worth roughly 1 mA against 7 mA for the fast link, so the policy
 is most of the standby power story.
+
+**An FC-only reboot on the ground reads as a fresh boot.** The OC keeps the last
+`NonSensorData` state through an FC reset, because the snapshot it hands the booting FC,
+the in-flight refusals, LoRa and the landed lockout all need the rocket's phase. The
+direct BLE link no longer shows that state while the FC reports boot steps: a ground
+state is published as `INITIALIZATION` and the data status as `SYNCING`, which is what
+the first boot after power-on shows. `INFLIGHT` and `LANDED` are kept, and LoRa still
+carries the stored state (`fc_reboot_display_policy.h`).
 
 ---
 

@@ -53,11 +53,24 @@ def analyze(flight: Flight) -> AnalysisResult:
     result = AnalysisResult(name="guidance", title="Guidance (PN) Performance")
     recs = flight.records
     t0 = flight.t0_us
-    g = recs.get("Guidance") or []
+    g_all = recs.get("Guidance") or []
     ns = recs.get("NonSensor") or []
+    # Steering frames only.  Frames with the active bit clear are the ~10 Hz
+    # status stream sent while guidance is enabled in flight but not steering,
+    # their flags saying why (guidance_gate_policy.h).
+    g = [r for r in g_all if r.get("active", True)]
+    status = [r for r in g_all if not r.get("active", True)]
 
+    if status:
+        reasons = [k for k in ("tilt_latched", "too_slow", "ekf_not_ok", "no_origin",
+                               "no_heading", "fins_held")
+                   if any(r.get(k) for r in status)]
+        result.warnings.append(
+            "Guidance was enabled but not steering for part or all of the flight; "
+            "reasons seen: " + (", ".join(reasons) if reasons else "none flagged (PN past CPA)") + ".")
     if not g:
-        result.warnings.append("No guidance frames (GUIDANCE_TELEM_MSG) — not a guidance flight.")
+        if not status:
+            result.warnings.append("No guidance frames (GUIDANCE_TELEM_MSG) — not a guidance flight.")
         return result
     if not ns:
         result.warnings.append("Need NonSensor records to align guidance to flight time.")

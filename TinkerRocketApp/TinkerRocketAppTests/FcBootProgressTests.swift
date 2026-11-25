@@ -76,6 +76,49 @@ final class FcBootProgressTests: XCTestCase {
         }
     }
 
+    func testRescueModeIsNamed() throws {
+        // FCB_RESCUE (64): outside the progress range on purpose, and the one
+        // "step" that means the FC will not finish booting on its own.
+        let t = try decode(#"{"st":"INITIALIZATION","bs":64,"bt":412}"#)
+        let boot = try XCTUnwrap(t.fcBootProgress)
+        XCTAssertEqual(boot.knownStep, .rescue)
+        XCTAssertTrue(boot.isRescue)
+        XCTAssertEqual(boot.line(), "Rescue mode — ready for a firmware update")
+        XCTAssertEqual(TelemetryData.FcBootStep.rescue.rawValue, 64,
+                       "FCB_RESCUE in RocketComputerTypes.h")
+    }
+
+    func testRescueModeNeverStalls() {
+        // It stays put by design. "No progress for 300s" would read as "keep
+        // waiting", which is the opposite of what the operator should do.
+        let boot = TelemetryData.FcBootProgress(step: 64, elapsedMs: 412, degradedBits: 0)
+        XCTAssertFalse(boot.isStalled(dwell: 3600))
+        XCTAssertEqual(boot.line(dwell: 3600), "Rescue mode — ready for a firmware update")
+        XCTAssertFalse(TelemetryData.FcBootProgress(step: 2, elapsedMs: 0, degradedBits: 0).isRescue)
+    }
+
+    func testNoFlightLoopIsNamed() throws {
+        // FCB_NO_FLIGHT_LOOP (65): setup finished but the flight task was never
+        // created. It used to stay at COMPLETE and read "Flight computer ready".
+        let t = try decode(#"{"st":"INITIALIZATION","bs":65,"bt":24800}"#)
+        let boot = try XCTUnwrap(t.fcBootProgress)
+        XCTAssertEqual(boot.knownStep, .noFlightLoop)
+        XCTAssertTrue(boot.isNoFlightLoop)
+        XCTAssertFalse(boot.isRescue)
+        XCTAssertEqual(boot.line(), "Flight computer not running — no flight loop")
+        XCTAssertEqual(TelemetryData.FcBootStep.noFlightLoop.rawValue, 65,
+                       "FCB_NO_FLIGHT_LOOP in RocketComputerTypes.h")
+    }
+
+    func testNoFlightLoopNeverStalls() {
+        // Nothing will change until another image is flashed, so "no progress"
+        // would only say "keep waiting".
+        let boot = TelemetryData.FcBootProgress(step: 65, elapsedMs: 24800, degradedBits: 0)
+        XCTAssertFalse(boot.isStalled(dwell: 3600))
+        XCTAssertEqual(boot.line(dwell: 3600), "Flight computer not running — no flight loop")
+        XCTAssertFalse(TelemetryData.FcBootProgress(step: 5, elapsedMs: 0, degradedBits: 0).isNoFlightLoop)
+    }
+
     func testUnknownStepRendersGenerically() throws {
         // FcBootStep is append-only: a newer FC will report steps this build has
         // never heard of, and the line must still say something useful.

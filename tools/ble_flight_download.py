@@ -42,19 +42,28 @@ CHUNK_STALL_TIMEOUT = 30.0
 FLAG_EOF, FLAG_ABORT = 0x01, 0x02
 
 
+def adv_name(d, ad) -> str:
+    # The advertised name first, as the app's scanner reads it (BLEFleet.swift),
+    # then macOS's cached GAP name (d.name) — that one is None until this Mac
+    # has connected to the unit (or since a re-flash wiped the bond): matching
+    # it alone fell through to the first TR device, and the manifest said null.
+    return ad.local_name or d.name or ""
+
+
 async def find_device():
+    """(device, the name it advertises), or None."""
     print(f"scanning {SCAN_S:.0f}s for '{TARGET_NAME}' / service uuid ...", flush=True)
     found = await BleakScanner.discover(timeout=SCAN_S, return_adv=True)
     best = None
     for d, ad in found.values():
-        name = d.name or ""
+        name = adv_name(d, ad)
         has_svc = SERVICE_UUID.lower() in [u.lower() for u in (ad.service_uuids or [])]
         if name == TARGET_NAME or (has_svc and TARGET_NAME.lower() in name.lower()):
-            return d
+            return d, name
         if has_svc or name.startswith("TR-"):
             print(f"  other TR device: {d.address} rssi={ad.rssi} name={name!r}")
             if best is None:
-                best = d
+                best = d, name
     return best
 
 
@@ -171,8 +180,8 @@ async def do_downloads(fc, entries, outdir: Path, wanted_names):
     return results
 
 
-def write_manifest(outdir: Path, dev, entries, results):
-    manifest = {"device": dev.name, "listed": entries, "downloads": results,
+def write_manifest(outdir: Path, dev_name, entries, results):
+    manifest = {"device": dev_name, "listed": entries, "downloads": results,
                 "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     (outdir / "download_manifest.json").write_text(json.dumps(manifest, indent=2))
     print("\nmanifest written", flush=True)
@@ -183,7 +192,7 @@ def write_manifest(outdir: Path, dev, entries, results):
     return 0
 
 
-async def recover_mode(fc, dev, outdir: Path):
+async def recover_mode(fc, dev_name, outdir: Path):
     # Rail on. initPeripherals() blocks the OC loop for seconds, then
     # flightlog.begin() runs the brownout scan (<=90 s budget) and the #274
     # MRAM drain. Poll the file list until it goes non-empty or we time out.
@@ -214,7 +223,7 @@ async def recover_mode(fc, dev, outdir: Path):
     if skipped:
         print(f"skipping {len(skipped)} older file(s): {skipped}")
     results = await do_downloads(fc, entries, outdir, wanted)
-    rc = write_manifest(outdir, dev, entries, results)
+    rc = write_manifest(outdir, dev_name, entries, results)
 
     print("\nsending cmd 8 (FC rail OFF — OC will esp_restart, disconnect expected)", flush=True)
     try:
@@ -227,12 +236,13 @@ async def recover_mode(fc, dev, outdir: Path):
 
 async def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "list"
-    dev = await find_device()
-    if dev is None:
+    found = await find_device()
+    if found is None:
         print("DEVICE NOT FOUND — if the iOS app is connected to the rocket, "
               "close it (it holds the only BLE slot) and re-run.")
         return 2
-    print(f"found {dev.name!r} @ {dev.address}", flush=True)
+    dev, dev_name = found
+    print(f"found {dev_name!r} @ {dev.address}", flush=True)
     if mode == "scan":
         return 0
 
@@ -242,7 +252,7 @@ async def main():
         await fc.start()
 
         if mode == "recover":
-            return await recover_mode(fc, dev, Path(sys.argv[2]))
+            return await recover_mode(fc, dev_name, Path(sys.argv[2]))
 
         entries = await fc.list_all()
         print(f"\n{len(entries)} file(s) on board (newest first):")
@@ -254,7 +264,7 @@ async def main():
         outdir = Path(sys.argv[2])
         wanted = sys.argv[3:] or [e["name"] for e in entries]
         results = await do_downloads(fc, entries, outdir, wanted)
-        return write_manifest(outdir, dev, entries, results)
+        return write_manifest(outdir, dev_name, entries, results)
     return 0
 
 

@@ -493,7 +493,7 @@ struct MagCalView: View {
                             .foregroundColor(allGood ? .green : .blue)
                         Text("Verifying calibration")
                             .font(.headline)
-                        Text("Slowly rotate the rocket through every orientation — nose up, nose down, sides, and corners. Watch the live |B| stay between 20 and 70 µT with a tight spread. Tap Done when you've covered enough orientations.")
+                        Text("Slowly rotate the rocket through every orientation — nose up, nose down, sides, and corners. Watch the live |B| stay between 20 and 70 µT with a tight spread. Tap Save once coverage and samples are green.")
                             .font(.subheadline)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -551,9 +551,10 @@ struct MagCalView: View {
                             .foregroundColor(samplesMet ? .green : .secondary)
                     }
                 }
-                verifyButtonsSection(allGood: allGood)
+                verifyButtonsSection(save: MagCalVerifySave(enoughPoints: coverageMet && samplesMet,
+                                                            allGood: allGood))
                 Section(header: Text("What this does")) {
-                    Text("The fit's offset was just programmed into the magnetometer chip. The chip is now subtracting it from every raw sample, which should leave just Earth's magnetic field (~25–65 µT depending on latitude) regardless of which way the rocket is pointed.\n\nVerification confirms that's actually happening: as you rotate, the corrected |B| should stay roughly constant and inside Earth's band. If it wanders out of band or swings widely, the cal absorbed too much (or too little) and likely shouldn't be saved.\n\nAccept and Save commits the cal to flight-computer memory; Retry verification clears the min/max if you want to start fresh without redoing the whole tumble; Re-run calibration throws the proposed fit out and goes back to sampling; Abort restores the previously-saved cal.")
+                    Text("The fit's offset was just programmed into the magnetometer chip. The chip is now subtracting it from every raw sample, which should leave just Earth's magnetic field (~25–65 µT depending on latitude) regardless of which way the rocket is pointed.\n\nVerification confirms that's actually happening: as you rotate, the corrected |B| should stay roughly constant and inside Earth's band. If it wanders out of band or swings widely, the cal absorbed too much (or too little) and likely shouldn't be saved.\n\nSave commits the cal to flight-computer memory; Retry verification clears the min/max if you want to start fresh without redoing the whole tumble; Re-run calibration throws the proposed fit out and goes back to sampling; Abort restores the previously-saved cal.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -566,31 +567,29 @@ struct MagCalView: View {
     /// ViewBuilder in verifyingSection from blowing past the type-checker's
     /// expression complexity budget.
     @ViewBuilder
-    private func verifyButtonsSection(allGood: Bool) -> some View {
-        Section(footer: Text(allGood
-            ? "All checks green — tap Accept and Save to commit the cal to flight-computer memory."
-            : "Keep rotating until every row above is green. You can still Accept and Save if you want — the gate readouts are advisory, not blocking.")) {
-            // Primary action — Accept and Save.  Always tappable; copy
-            // and colour change with gate state.  iOS dispatches either
-            // VERIFY_DONE (firmware re-checks gates, with the same data
-            // so always passes when iOS sees green) or FORCE_APPLY
-            // (firmware skips gate check).
+    private func verifyButtonsSection(save: MagCalVerifySave) -> some View {
+        Section(footer: Text(save.footer)) {
+            // Primary action.  Always tappable: dark blue "Save" once the
+            // rotation has its points, orange "Save anyway" before.  iOS
+            // dispatches either VERIFY_DONE (firmware re-checks gates, with
+            // the same data so always passes when iOS sees green) or
+            // FORCE_APPLY (firmware skips gate check).
             Button {
-                if allGood {
+                if save.allGood {
                     device.sendMagCalVerifyDone()
                 } else {
                     device.sendMagCalForceApply()
                 }
             } label: {
                 HStack {
-                    Image(systemName: allGood ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    Text(allGood ? "Accept and Save" : "Save anyway")
+                    Image(systemName: save.enoughPoints ? "square.and.arrow.down" : "exclamationmark.circle.fill")
+                    Text(save.label)
                         .fontWeight(.semibold)
                     Spacer()
                 }
                 .foregroundColor(.white)
             }
-            .listRowBackground(allGood ? Color.green : Color.orange)
+            .listRowBackground(save.enoughPoints ? TRColor.nextStep : Color.orange)
 
             // Clear iOS + FC verify accumulators; stay in VERIFYING so
             // the proposed cal stays programmed on the chip and the

@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.tinkerbug.tinkerrocket.BuildConfig
 import com.tinkerbug.tinkerrocket.app.theme.TrPyroContinuityBadge
+import com.tinkerbug.tinkerrocket.protocol.AntennaOffset
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
 import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
@@ -59,10 +60,14 @@ import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.CalAdvisory
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.ConfigGroup
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.SyncState
+import com.tinkerbug.tinkerrocket.session.BoardCalibration
 import com.tinkerbug.tinkerrocket.session.DeviceSession
 import com.tinkerbug.tinkerrocket.session.ProfileRollWaypoint
 import com.tinkerbug.tinkerrocket.session.RocketProfile
 import com.tinkerbug.tinkerrocket.session.RocketProfileStore
+import com.tinkerbug.tinkerrocket.session.FlightComputerNotice
+import com.tinkerbug.tinkerrocket.session.SettingsAccess
+import com.tinkerbug.tinkerrocket.session.settingsAccess
 import com.tinkerbug.tinkerrocket.session.UnitFormatter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -95,6 +100,16 @@ fun SettingsScreen(
     // tests compile unchanged; the section simply does not render without them.
     network: AppNetworkStore? = null,
     knownDevices: com.tinkerbug.tinkerrocket.session.KnownDeviceStore? = null,
+    // Opens the dashboard's Firmware tool. Offered while the flight computer is
+    // off or not running, when an update may be the only way forward; null (the
+    // default) leaves the button out, so existing call sites are unchanged.
+    onOpenFirmware: (() -> Unit)? = null,
+    // #1629: opens the dashboard's six-face accelerometer calibration, the
+    // way onOpenFirmware opens its Firmware tool; null leaves the entry out.
+    onOpenAccelCal: (() -> Unit)? = null,
+    // #1650: opens the dashboard's test-fire screen for a pyro channel; null
+    // leaves the Test Pyro Channel button out.
+    onOpenPyroTest: ((Int) -> Unit)? = null,
 ) {
     val profiles by store.profiles.collectAsState()
     val activeId by store.activeId.collectAsState()
@@ -127,10 +142,23 @@ fun SettingsScreen(
     val hasTelemetry by (
         session?.hasReceivedTelemetry ?: kotlinx.coroutines.flow.MutableStateFlow(false)
         ).collectAsState()
-    val initializing by remember(session) {
-        session?.telemetry?.map { it.state == "INITIALIZATION" }?.distinctUntilChanged()
-            ?: kotlinx.coroutines.flow.flowOf(false)
-    }.collectAsState(initial = false)
+    // The state string, not a per-frame flag: it changes only on a state
+    // transition, so this still never recomposes at telemetry rate.
+    val rocketState by remember(session) {
+        session?.telemetry?.map { it.state }?.distinctUntilChanged()
+            ?: kotlinx.coroutines.flow.flowOf("UNKNOWN")
+    }.collectAsState(initial = "UNKNOWN")
+    // The FC's boot step, for the notice that stands in for its settings while
+    // it is not running.  "bt" is fixed per step, so this changes only when the
+    // step (or a degraded bit) does.
+    val bootNotice by remember(session) {
+        session?.telemetry
+            ?.map {
+                FcBootNotice(it.fcBootStepRaw, it.fcRescue, it.fcNoFlightLoop, it.fcBootStatusLine())
+            }
+            ?.distinctUntilChanged()
+            ?: kotlinx.coroutines.flow.flowOf(FcBootNotice(null, false, false, null))
+    }.collectAsState(initial = FcBootNotice(null, false, false, null))
 
     // "LoRa off" is DEVICE state (rocket NVS), not a profile field, so it is
     // read from the config readback and written straight to the session.
@@ -163,6 +191,43 @@ fun SettingsScreen(
     val imuRateMaxHz: Int? =
         if (connected && haveConfig) reportedImuRateMax ?: RocketProfile.IMU_RATE_BASELINE_MAX_HZ
         else null
+    // The GNSS log setting the rocket reports ("glog", cmd 79): null on
+    // firmware that has no such setting, and the receiver its FC found.
+    val reportedGnssLog: Int? by remember(session) {
+        val f: kotlinx.coroutines.flow.Flow<Int?> =
+            session?.rocketConfig
+                ?.map { it?.gnssLogSetting }
+                ?.distinctUntilChanged()
+                ?: kotlinx.coroutines.flow.flowOf(null)
+        f
+    }.collectAsState(initial = null)
+    // The GNSS antenna offset the rocket reports ("antk"/"antx"/"anty"/"antz",
+    // cmd 81): null on firmware that has no such setting. A Pair, with
+    // whether it is the flight computer's own report ("antsrc":"fc") rather
+    // than the out computer's copy.
+    val antennaReport: Pair<AntennaOffset?, Boolean> by remember(session) {
+        val f: kotlinx.coroutines.flow.Flow<Pair<AntennaOffset?, Boolean>> =
+            session?.rocketConfig
+                ?.map { Pair(it?.antennaOffset, it?.antennaOffsetFromFlightComputer == true) }
+                ?.distinctUntilChanged()
+                ?: kotlinx.coroutines.flow.flowOf(Pair(null, false))
+        f
+    }.collectAsState(initial = Pair(null, false))
+    val reportedAntenna = antennaReport.first
+    val antennaReportedByFc = antennaReport.second
+    val fcGnss: String? by remember(session) {
+        val f: kotlinx.coroutines.flow.Flow<String?> =
+            session?.identity
+                ?.map { it.fcGnss }
+                ?.distinctUntilChanged()
+                ?: kotlinx.coroutines.flow.flowOf(null)
+        f
+    }.collectAsState(initial = null)
+    // The connected rocket's mosaic-G5 is logging its detailed data, and that
+    // is what holds the IMU at 4k.
+    val gnssLogHoldsImuAt4k = connected && haveConfig && fcGnss == "mosaic-G5" &&
+        reportedGnssLog == RocketProfile.GNSS_LOG_DETAILED &&
+        (imuRateMaxHz ?: RocketProfile.IMU_RATE_BASELINE_MAX_HZ) <= RocketProfile.IMU_RATE_BASELINE_MAX_HZ
     val inflight by remember(session) {
         session?.telemetry?.map { it.state == "INFLIGHT" }?.distinctUntilChanged()
             ?: kotlinx.coroutines.flow.flowOf(false)
@@ -300,26 +365,16 @@ fun SettingsScreen(
         }
 
         // ── Device-state gate ────────────────────────────────────────────
-        // Everything below is FC configuration, and the FC answers none of it
-        // until it is running. This fails silently rather than loudly: the OC's
-        // #366 queue HOLDS commands while the rail is down and drains the batch
-        // at power-on, so edits made now land much later, out of order, or not
-        // at all. iOS SettingsView gates the same two states; Android had
-        // neither.
-        //
-        // Both scopes are load-bearing:
-        //  - !isBaseStation: the BS relay's TelemetryData never carries
-        //    pwrPinOn (the LoRa packet has no room for it), so over a
-        //    base-station link it reads false forever — an unscoped gate would
-        //    lock Settings on every BS connection.
-        //  - hasReceivedTelemetry (#377): before the first frame TelemetryData
-        //    is all-defaults, and a defaulted pwrPinOn is indistinguishable
-        //    from a genuinely-off rocket, so the notice would flash on every
-        //    connect — including for a rocket that is already powered on.
-        //
-        // Unlike iOS, firmware update is its own screen here rather than a row
-        // inside Settings, so nothing that still works with the rail off is
-        // lost behind this gate.
+        // Most of what follows is FC configuration, and the FC answers none of
+        // it until it is running. This fails silently rather than loudly: the
+        // OC's #366 queue HOLDS commands while the rail is down and drains the
+        // batch at power-on, so edits made now land much later, out of order,
+        // or not at all. The radio and network ID are the out computer's own
+        // and stay available, as does the firmware update (a dashboard tool
+        // here, linked from the gate). The rule, with the #377 and base-station
+        // scopes that keep it from locking a healthy rocket, is settingsAccess()
+        // in core/session SettingsAccess.kt, shared with iOS through
+        // tests_cpp/fixtures/app_behavior/settings_access.json.
         // #1038: over a BASE-STATION link this screen used to render the full
         // editor. Every edit persisted to the profile and called
         // syncer.pushGroup, which returns early on a base-station session
@@ -363,8 +418,10 @@ fun SettingsScreen(
                     SummaryRow("IMU mounting", if (active.imuOrientSetting == 0xFF) "Auto"
                                                else "Code ${active.imuOrientSetting}")
                     SummaryRow("Gain scheduling", if (active.gainScheduleEnabled) "On" else "Off")
-                    SummaryRow("Mag cal", if (active.magCal == null) "Not saved" else "Saved")
-                    SummaryRow("Sensor cal", if (active.sensorCal == null) "Not saved" else "Saved")
+                    // The profile's saved copies; what the board holds is
+                    // under Calibration (#1629).
+                    SummaryRow("Mag cal in profile", if (active.magCal == null) "Not saved" else "Saved")
+                    SummaryRow("Sensor cal in profile", if (active.sensorCal == null) "Not saved" else "Saved")
                 }
             }
 
@@ -384,53 +441,59 @@ fun SettingsScreen(
             return@Column
         }
 
-        val directLink = session != null && connected && !session.isBaseStation
-        if (directLink && hasTelemetry && !powerOn) {
-            GateNotice(
-                "Rocket is off",
-                "The flight computer answers every setting on this screen, and it " +
-                    "isn't running yet. Power on the rocket to configure it.",
-            )
-            return@Column
-        }
-        if (directLink && initializing) {
-            GateNotice(
-                "Initializing…",
-                "Waiting for sensors to start up. Settings can be applied once ready.",
-            )
+        // Which of the sections below the rocket can honour right now
+        // (core/session SettingsAccess.kt has the rule and why).  The flight
+        // computer's settings need it running; the out computer's own radio and
+        // network settings and the firmware update do not.  This used to be two
+        // early returns that hid everything, the out computer's settings with
+        // it, so an FC stuck in its boot locked out the screen around its fix.
+        val access = settingsAccess(
+            isConnected = session != null && connected,
+            isBaseStation = session?.isBaseStation == true,
+            hasReceivedTelemetry = hasTelemetry,
+            pwrPinOn = powerOn,
+            state = rocketState,
+            bootStepReported = bootNotice.stepRaw != null,
+        )
+        if (!access.allowsFlightComputerSettings) {
+            if (access == SettingsAccess.ROCKET_OFF) {
+                GateNotice(
+                    "Rocket is off",
+                    "Most settings live on the flight computer, which isn't powered. " +
+                        "Power on the rocket to change them. The radio, network ID and " +
+                        "firmware below are on the out computer and work now.",
+                )
+            } else {
+                val halted = bootNotice.rescue || bootNotice.noFlightLoop
+                GateNotice(
+                    FlightComputerNotice.title(
+                        bootNotice.stepRaw != null, bootNotice.rescue, bootNotice.noFlightLoop),
+                    FlightComputerNotice.explanation(
+                        bootNotice.stepRaw != null, bootNotice.rescue, bootNotice.noFlightLoop),
+                    // The step it is on; the rescue and no-flight-loop titles
+                    // already say it all.
+                    detail = bootNotice.line.takeIf { bootNotice.stepRaw != null && !halted },
+                    warn = halted,
+                )
+            }
+            RadioSection(session, connected, haveConfig, loraTxDisabled, inflight)
+            if (session != null && network != null && knownDevices != null) {
+                NetworkSection(session, network, knownDevices)
+            }
+            if (onOpenFirmware != null) {
+                Section("Firmware") {
+                    OutlinedButton(onClick = onOpenFirmware) { Text("Update firmware…") }
+                    Caption(
+                        "The out computer or the flight computer. A flight computer " +
+                            "update tells you whether the flight computer answered.",
+                    )
+                }
+            }
+            AppOnlySections(active, ::edit)
             return@Column
         }
 
-        // ── Radio (iOS General-tab "Radio" section) ──────────────────────
-        // Presented positively — the switch reads "LoRa telemetry", so ON
-        // always means the radio is doing something.  The wire byte is the
-        // inverse ("disabled"), inverted once, here.
-        Section("Radio") {
-            ToggleRow(
-                "LoRa telemetry",
-                loraTxDisabled != true,
-                enabled = session != null && connected &&
-                    loraTxDisabled != null && !inflight,
-            ) { on -> session?.sendLoraTxDisabled(!on) }
-            Caption(
-                when {
-                    inflight ->
-                        "Locked while the rocket is flying — muting it now would drop " +
-                            "the only link telling you where it is."
-                    connected && haveConfig && loraTxDisabled == null ->
-                        "This rocket's firmware doesn't support turning the radio off. " +
-                            "Update it to use this."
-                    loraTxDisabled == true ->
-                        "OFF — the rocket transmits nothing: no telemetry, no beacon. It " +
-                            "still listens, so the base station can turn it back on. You " +
-                            "will have no tracking during flight."
-                    else ->
-                        "ON — the rocket downlinks telemetry to the base station at 2 Hz. " +
-                            "Turn it off to fly silent (bench work, a busy band, or a site " +
-                            "where you would rather not transmit)."
-                },
-            )
-        }
+        RadioSection(session, connected, haveConfig, loraTxDisabled, inflight)
 
         // #624: iOS carries the Network section on the rocket General tab as
         // well as in the base-station branch, and for the same reason on both:
@@ -439,6 +502,34 @@ fun SettingsScreen(
         // sits where the General tab's content ends.
         if (session != null && network != null && knownDevices != null) {
             NetworkSection(session, network, knownDevices)
+        }
+
+        // ── Calibration (#1629) ──────────────────────────────────────────
+        // What THIS flight computer holds, read from the board (never the
+        // profile), then the six-face accelerometer calibration, worded and
+        // gated as in iOS SettingsView's Calibration section (the rocket
+        // itself, connected and powered). The screen itself is a dashboard
+        // tool beside the mag and pad calibrations; this opens it. The offset
+        // is the board's own (stored on the flight computer), so it is no
+        // profile field and nothing pushes it on connect.
+        if (session != null && !session.isBaseStation) Section("Calibration") {
+            BoardCalibrationRows(session)
+            if (onOpenAccelCal != null) {
+                val canCalibrate = com.tinkerbug.tinkerrocket.session.AccelSixFace.canCalibrate(
+                    connected, session.isBaseStation, powerOn,
+                )
+                OutlinedButton(onClick = onOpenAccelCal, enabled = canCalibrate) {
+                    Text(com.tinkerbug.tinkerrocket.session.AccelCalReadout.ENTRY)
+                }
+                Caption(com.tinkerbug.tinkerrocket.session.AccelCalReadout.ENTRY_CAPTION)
+                if (!canCalibrate) {
+                    Text(
+                        com.tinkerbug.tinkerrocket.session.AccelCalReadout.ENTRY_POWER,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.statusWarn,
+                    )
+                }
+            }
         }
 
         // ── IMU Mounting (iOS General-tab section; raw-int field replaced
@@ -499,7 +590,22 @@ fun SettingsScreen(
                 "Rate", shown.map { it.first }, shown.indexOfFirst { it.second == active.imuRateHz },
                 { i -> edit(ConfigGroup.IMU_RATE) { it.copy(imuRateHz = shown[i].second) } },
             )
-            Caption(imuRateCaption(active.imuRateHz, imuRateMaxHz))
+            Caption(imuRateCaption(active.imuRateHz, imuRateMaxHz, gnssLogHoldsImuAt4k))
+        }
+
+        // ── GNSS Logging (iOS General-tab section, under the rate) ───────
+        GnssLogSection(active.gnssLogSetting, connected, haveConfig, reportedGnssLog, fcGnss, inflight) { v ->
+            edit(ConfigGroup.GNSS_LOG) { it.copy(gnssLogSetting = v) }
+        }
+
+        // ── GNSS Antenna Offset (iOS General-tab section, under the log) ─
+        val antennaLocked = connected && (reportedAntenna == null || inflight)
+        AntennaOffsetSection(
+            active.antennaOffset, connected, haveConfig, reportedAntenna, antennaReportedByFc, fcGnss, inflight,
+        ) { o ->
+            // Locked (in flight, or firmware without it): keep it in the
+            // profile, but nothing goes to the rocket.
+            edit(if (antennaLocked) null else ConfigGroup.ANTENNA_OFFSET) { it.withAntennaOffset(o) }
         }
 
         // ── Camera (iOS Camera tab; raw-int field replaced by the picker) ─
@@ -620,6 +726,10 @@ fun SettingsScreen(
                             "law runs."
                     },
                 )
+                // The picker is the profile; this is what the flight computer holds.
+                if (session != null) {
+                    GuidanceStateLine(rememberGuidanceStateCheck(session, active))
+                }
                 ToggleRow(
                     "Angle control",
                     active.useAngleControl,
@@ -876,6 +986,24 @@ fun SettingsScreen(
                         "Engages at the Activation Delay after launch (shared with roll " +
                             "control), not after burnout.",
                     )
+                    // Both laws. Clamped to what the flight computer takes,
+                    // (0, 60]: it keeps its old limit for anything else.
+                    FieldRow {
+                        NumField("Tilt limit, boost (°)", fmt(active.pnTiltLimitBoostDeg), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.takeIf { it.isFinite() }?.let { v ->
+                                edit(ConfigGroup.GUIDANCE) { it.copy(pnTiltLimitBoostDeg = v.coerceIn(1f, 60f)) }
+                            }
+                        }
+                        NumField("Tilt limit, coast (°)", fmt(active.pnTiltLimitCoastDeg), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.takeIf { it.isFinite() }?.let { v ->
+                                edit(ConfigGroup.GUIDANCE) { it.copy(pnTiltLimitCoastDeg = v.coerceIn(1f, 60f)) }
+                            }
+                        }
+                    }
+                    Caption(
+                        "Guidance switches off for the rest of the flight if the rocket tilts " +
+                            "more than this from vertical. Boost is before burnout, coast after.",
+                    )
                 } else {
                     Caption("Switch the control mode above to Guidance to configure it.")
                 }
@@ -889,6 +1017,7 @@ fun SettingsScreen(
         //    mirror, so the dashboard tiles update without a readback. ─────
         PyroChannelSection(
             1, active.pyro1Enabled, active.pyro1TriggerMode, active.pyro1TriggerValue, session,
+            onTestFire = onOpenPyroTest,
             onEnabled = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro1Enabled = v) }
             },
@@ -901,6 +1030,7 @@ fun SettingsScreen(
         )
         PyroChannelSection(
             2, active.pyro2Enabled, active.pyro2TriggerMode, active.pyro2TriggerValue, session,
+            onTestFire = onOpenPyroTest,
             onEnabled = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro2Enabled = v) }
             },
@@ -913,6 +1043,7 @@ fun SettingsScreen(
         )
         PyroChannelSection(
             3, active.pyro3Enabled, active.pyro3TriggerMode, active.pyro3TriggerValue, session,
+            onTestFire = onOpenPyroTest,
             onEnabled = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro3Enabled = v) }
             },
@@ -925,6 +1056,7 @@ fun SettingsScreen(
         )
         PyroChannelSection(
             4, active.pyro4Enabled, active.pyro4TriggerMode, active.pyro4TriggerValue, session,
+            onTestFire = onOpenPyroTest,
             onEnabled = { v ->
                 edit(ConfigGroup.PYRO) { it.copy(pyro4Enabled = v) }
             },
@@ -940,51 +1072,7 @@ fun SettingsScreen(
                 "before flight; test-fire (Ground Test) is iOS-only for now.",
         )
 
-        // ── Recovery — app-side landing prediction, nothing on the wire ──
-        Section("Recovery") {
-            // iOS applyRecoveryConfig validation: rates and the deploy
-            // altitude must be > 0 (a rate ≤ 0.1 fps degrades simulateDescent
-            // to "lands where it is"); drag k accepts 0 (gravity-only) but
-            // never a negative, which would turn the drag term into thrust
-            // and blow the ballistic prediction up.
-            FieldRow {
-                NumField("Drogue ft/s", fmtD(active.drogueRateFps), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.takeIf { it > 0 }
-                        ?.let { v -> edit(null) { it.copy(drogueRateFps = v) } }
-                }
-                NumField("Main ft/s", fmtD(active.mainRateFps), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.takeIf { it > 0 }
-                        ?.let { v -> edit(null) { it.copy(mainRateFps = v) } }
-                }
-                NumField("Main alt ft", fmtD(active.mainDeployAltAglFt), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.takeIf { it > 0 }
-                        ?.let { v -> edit(null) { it.copy(mainDeployAltAglFt = v) } }
-                }
-            }
-            Caption(
-                "Descent profile for the live landing prediction and Drift Cast: drogue " +
-                    "rate above the main-deploy altitude (AGL), main rate below it. Stored " +
-                    "per rocket in the app — not sent to the flight computer.",
-            )
-            // iOS Drag k row — was missing on Android (accidental omission,
-            // the other three recovery fields were ported together).
-            FieldRow {
-                NumField("Drag k 1/m", fmtD(active.ballisticDragK), Modifier.weight(1f)) { s ->
-                    s.toDoubleOrNull()?.takeIf { it >= 0 }
-                        ?.let { v -> edit(null) { it.copy(ballisticDragK = v) } }
-                }
-            }
-            Caption(
-                "Quadratic drag coefficient for the coast-to-apogee ballistic prediction " +
-                    "(a = −k·|v|·v). ≈0.0005 for typical 54–65 mm airframes; 0 = gravity-only.",
-            )
-        }
-
-        Section("Notes") {
-            NumField("Notes", active.notes, Modifier.fillMaxWidth(), keyboard = KeyboardType.Text) { s ->
-                edit(null) { it.copy(notes = s) }
-            }
-        }
+        AppOnlySections(active, ::edit)
     }
 
     if (adding) {
@@ -1110,17 +1198,140 @@ private fun CalBanner(label: String, advisory: CalAdvisory, onImport: (() -> Uni
     }
 }
 
-/** Full-width notice shown in place of the config sections when the rocket
- *  can't accept settings yet (rail off / initializing). */
+/**
+ * The profile's app-only fields: the descent profile behind the landing
+ * prediction and Drift Cast, and the notes. Nothing here is sent to the rocket,
+ * so they stay editable whatever the flight computer is doing.
+ */
 @Composable
-private fun GateNotice(title: String, body: String) {
+private fun AppOnlySections(
+    active: RocketProfile,
+    edit: (ConfigGroup?, (RocketProfile) -> RocketProfile) -> Unit,
+) {
+    // ── Recovery — app-side landing prediction, nothing on the wire ──
+    Section("Recovery") {
+        // iOS applyRecoveryConfig validation: rates and the deploy
+        // altitude must be > 0 (a rate ≤ 0.1 fps degrades simulateDescent
+        // to "lands where it is"); drag k accepts 0 (gravity-only) but
+        // never a negative, which would turn the drag term into thrust
+        // and blow the ballistic prediction up.
+        FieldRow {
+            NumField("Drogue ft/s", fmtD(active.drogueRateFps), Modifier.weight(1f)) { s ->
+                s.toDoubleOrNull()?.takeIf { it > 0 }
+                    ?.let { v -> edit(null) { it.copy(drogueRateFps = v) } }
+            }
+            NumField("Main ft/s", fmtD(active.mainRateFps), Modifier.weight(1f)) { s ->
+                s.toDoubleOrNull()?.takeIf { it > 0 }
+                    ?.let { v -> edit(null) { it.copy(mainRateFps = v) } }
+            }
+            NumField("Main alt ft", fmtD(active.mainDeployAltAglFt), Modifier.weight(1f)) { s ->
+                s.toDoubleOrNull()?.takeIf { it > 0 }
+                    ?.let { v -> edit(null) { it.copy(mainDeployAltAglFt = v) } }
+            }
+        }
+        Caption(
+            "Descent profile for the live landing prediction and Drift Cast: drogue " +
+                "rate above the main-deploy altitude (AGL), main rate below it. Stored " +
+                "per rocket in the app — not sent to the flight computer.",
+        )
+        // iOS Drag k row — was missing on Android (accidental omission,
+        // the other three recovery fields were ported together).
+        FieldRow {
+            NumField("Drag k 1/m", fmtD(active.ballisticDragK), Modifier.weight(1f)) { s ->
+                s.toDoubleOrNull()?.takeIf { it >= 0 }
+                    ?.let { v -> edit(null) { it.copy(ballisticDragK = v) } }
+            }
+        }
+        Caption(
+            "Quadratic drag coefficient for the coast-to-apogee ballistic prediction " +
+                "(a = −k·|v|·v). ≈0.0005 for typical 54–65 mm airframes; 0 = gravity-only.",
+        )
+    }
+
+    Section("Notes") {
+        NumField("Notes", active.notes, Modifier.fillMaxWidth(), keyboard = KeyboardType.Text) { s ->
+            edit(null) { it.copy(notes = s) }
+        }
+    }
+}
+
+/**
+ * "LoRa off": the out computer's transmitter, so it works whatever the flight
+ * computer is doing (iOS General-tab "Radio" section).  Presented positively:
+ * the switch reads "LoRa telemetry", so ON always means the radio is doing
+ * something.  The wire byte is the inverse ("disabled"), inverted once, here.
+ */
+@Composable
+private fun RadioSection(
+    session: DeviceSession?,
+    connected: Boolean,
+    haveConfig: Boolean,
+    loraTxDisabled: Boolean?,
+    inflight: Boolean,
+) {
+    Section("Radio") {
+        ToggleRow(
+            "LoRa telemetry",
+            loraTxDisabled != true,
+            enabled = session != null && connected &&
+                loraTxDisabled != null && !inflight,
+        ) { on -> session?.sendLoraTxDisabled(!on) }
+        Caption(
+            when {
+                inflight ->
+                    "Locked while the rocket is flying — muting it now would drop " +
+                        "the only link telling you where it is."
+                connected && haveConfig && loraTxDisabled == null ->
+                    "This rocket's firmware doesn't support turning the radio off. " +
+                        "Update it to use this."
+                loraTxDisabled == true ->
+                    "OFF — the rocket transmits nothing: no telemetry, no beacon. It " +
+                        "still listens, so the base station can turn it back on. You " +
+                        "will have no tracking during flight."
+                else ->
+                    "ON — the rocket downlinks telemetry to the base station at 2 Hz. " +
+                        "Turn it off to fly silent (bench work, a busy band, or a site " +
+                        "where you would rather not transmit)."
+            },
+        )
+    }
+}
+
+/** What the not-running notice shows; distinct-until-changed in SettingsScreen. */
+private data class FcBootNotice(
+    val stepRaw: Int?,
+    val rescue: Boolean,
+    val noFlightLoop: Boolean,
+    val line: String?,
+)
+
+/** Full-width notice shown in place of the flight computer's sections when it
+ *  can't accept settings (rail off, still starting, stuck, rescue mode, no
+ *  flight loop).
+ *  [detail] is the boot step it is on, amber when [warn]. */
+@Composable
+private fun GateNotice(title: String, body: String, detail: String? = null, warn: Boolean = false) {
     Card(Modifier.fillMaxWidth()) {
         Column(
             Modifier.fillMaxWidth().padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(
+                title,
+                style = MaterialTheme.typography.titleMedium,
+                color = if (warn) com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors.statusWarn
+                        else androidx.compose.ui.graphics.Color.Unspecified,
+                textAlign = TextAlign.Center,
+            )
+            if (detail != null) {
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
             Text(
                 body,
                 style = MaterialTheme.typography.bodyMedium,
@@ -1132,6 +1343,45 @@ private fun GateNotice(title: String, body: String) {
 }
 
 /** #1038: read-only label/value row for the base-station Summary section. */
+/**
+ * #1629: what this flight computer holds for calibration, one row per sensor,
+ * as the board said it (never the profile).  A child composable so the
+ * Settings screen itself still reads no live state (#361).
+ */
+@Composable
+private fun BoardCalibrationRows(session: DeviceSession) {
+    val cal by session.calibration.collectAsState()
+    val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
+    @Composable
+    fun row(label: String, value: Boolean?, text: String) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = when (value) {
+                    true -> tr.statusOk
+                    false -> tr.statusWarn
+                    null -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+        }
+    }
+    row("Magnetometer", cal.mag, BoardCalibration.rowText(cal.mag))
+    row("Accelerometer (six faces)", cal.accel, BoardCalibration.rowText(cal.accel))
+    row("Gyro (pad calibration)", cal.gyro, BoardCalibration.rowText(cal.gyro))
+    // A refinement, not a need: never orange.
+    row(
+        "High-g alignment",
+        cal.highGAligned?.takeIf { it },
+        BoardCalibration.highGRowText(cal.highGAligned),
+    )
+    Caption(
+        "Read from this flight computer. Each board keeps its own calibration; a rocket " +
+            "profile does not carry it to another board.",
+    )
+}
+
 @Composable
 private fun SummaryRow(label: String, value: String) {
     Row(
@@ -1481,6 +1731,7 @@ private fun PyroChannelSection(
     mode: Int,
     value: Float,
     session: DeviceSession?,
+    onTestFire: ((Int) -> Unit)?,
     onEnabled: (Boolean) -> Unit,
     onMode: (Int) -> Unit,
     onValue: (Float) -> Unit,
@@ -1525,19 +1776,19 @@ private fun PyroChannelSection(
                 else "Fires when the rocket descends through this altitude (AGL).",
             )
         }
-        session?.let { PyroTestControls(it, channel) }
+        session?.let { PyroTestControls(it, channel, onTestFire) }
     }
 }
 
 /**
  * iOS PyroChannelTestControls twin — a CHILD composable so telemetry-rate
  * recomposition stays contained (the #361 keyboard fix; the Settings screen
- * itself reads no telemetry).  Direct connected rocket links only.  The
- * "Test Pyro Channel" test-fire button is NOT ported — the Ground Test
- * screen is its own safety-sensitive pass (ledger).
+ * itself reads no telemetry).  Direct connected rocket links only.  Test
+ * Pyro Channel opens the full-screen test fire (#1650, [onTestFire]); a
+ * base station's test fire opens from the dashboard's relay pyro tiles.
  */
 @Composable
-private fun PyroTestControls(session: DeviceSession, channel: Int) {
+private fun PyroTestControls(session: DeviceSession, channel: Int, onTestFire: ((Int) -> Unit)?) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     if (session.isBaseStation) return
     val connected by session.isConnected.collectAsState()
@@ -1633,6 +1884,13 @@ private fun PyroTestControls(session: DeviceSession, channel: Int) {
                 contTestActive = true
             },
         ) { Text("Test Continuity") }
+        // Same rail gate: the OC refuses cmd 36 with the rail off, since a
+        // queued fire would go off at the next power-on.
+        if (onTestFire != null) {
+            TextButton(enabled = railOn, onClick = { onTestFire(channel) }) {
+                Text("Test Pyro Channel", color = if (railOn) tr.statusWarn else Color.Unspecified)
+            }
+        }
         if (!railOn) {
             Text(
                 "Power on the rocket to test.",
@@ -1654,10 +1912,15 @@ private val IMU_RATE_CHOICES: List<Pair<String, Int>> = listOf(
 )
 
 /** iOS `SettingsView.imuRateFooter`. */
-private fun imuRateCaption(rate: Int, maxHz: Int?): String {
+private fun imuRateCaption(rate: Int, maxHz: Int?, gnssLogHoldsImuAt4k: Boolean = false): String {
+    // The mosaic-G5's detailed GNSS log is what holds this rocket at 4k.
+    val gnssHint = if (gnssLogHoldsImuAt4k) " The 8k rates need GNSS Logging set to Reduced (below)." else ""
     if (maxHz != null && RocketProfile.imuRatePeakHz(rate) > maxHz) {
         return "This rocket logs at up to $maxHz Hz. It keeps its current rate until you " +
-            "pick one it can fly."
+            "pick one it can fly." + gnssHint
+    }
+    if (gnssHint.isNotEmpty()) {
+        return "With the mosaic-G5 logging its detailed GNSS data, this rocket logs at up to 4k." + gnssHint
     }
     return when (rate) {
         RocketProfile.IMU_RATE_DYNAMIC ->
@@ -1676,6 +1939,240 @@ private fun imuRateCaption(rate: Int, maxHz: Int?): String {
                 "loop is unaffected. 8k fills the log twice as fast as 4k. Applies on the " +
                 "pad — never mid-flight."
     }
+}
+
+/**
+ * GNSS log, cmd 79 (iOS General-tab "GNSS Logging" section): what the rocket
+ * logs of a Septentrio mosaic-G5's data, all of it with the IMU at most 4k or
+ * its position and once-a-second raw measurements with the 8k rates open.
+ * Beside the rate because it moves the rate's limit; the rate menu follows
+ * the rocket's `irmax`. Locked while flying, and until the rocket says it has
+ * the setting.
+ */
+@Composable
+private fun GnssLogSection(
+    setting: Int,
+    connected: Boolean,
+    haveConfig: Boolean,
+    reported: Int?,
+    receiver: String?,
+    inflight: Boolean,
+    onSelect: (Int) -> Unit,
+) {
+    Section("GNSS Logging") {
+        GatedControls(enabled = !connected || (reported != null && !inflight)) {
+            SegmentedPicker(listOf("Detailed", "Reduced"), setting.coerceIn(0, 1), onSelect)
+        }
+        Caption(gnssLogCaption(setting, connected, haveConfig, reported, receiver, inflight))
+    }
+}
+
+/** iOS `SettingsView.gnssLogFooter`. */
+private fun gnssLogCaption(
+    setting: Int,
+    connected: Boolean,
+    haveConfig: Boolean,
+    reported: Int?,
+    receiver: String?,
+    inflight: Boolean,
+): String {
+    if (connected) {
+        if (inflight) return "Locked while the rocket is flying."
+        if (haveConfig && reported == null) {
+            return "This rocket’s firmware doesn’t have this setting. Update it to use this."
+        }
+    }
+    var text = if (setting == RocketProfile.GNSS_LOG_REDUCED) {
+        "Reduced: logs the mosaic-G5’s position 20 times a second and its raw measurements " +
+            "once a second, which leaves room for the 8k IMU rates."
+    } else {
+        "Detailed: logs all of the mosaic-G5’s data, raw measurements included, 20 times a " +
+            "second. That fills the log about as fast as the IMU at 4k, so the IMU logs at up to 4k."
+    }
+    text += " The receiver’s own microSD card keeps all of its data either way."
+    if (connected && receiver != null && receiver != "mosaic-G5") {
+        text = "This rocket’s receiver is the $receiver, not a Septentrio mosaic-G5, so this " +
+            "changes nothing on it. " + text
+    }
+    return text
+}
+
+/**
+ * GNSS antenna offset, cmd 81 (iOS General-tab "GNSS Antenna Offset"
+ * section): where the GNSS antenna sits relative to the flight computer's
+ * IMU, in the board's own axes, for the mosaic-G5's navigation filter.
+ * Unknown is sent at once; Measured only opens the three fields, empty on an
+ * Unknown profile, and the offset goes out when they are committed (blur /
+ * Done) with all three valid — zeros sent on the switch would tell the
+ * filter the antenna sits on the IMU. Locked while flying, and until the
+ * rocket says it has the setting.
+ */
+@Composable
+internal fun AntennaOffsetSection(
+    offset: AntennaOffset,
+    connected: Boolean,
+    haveConfig: Boolean,
+    reported: AntennaOffset?,
+    reportedByFlightComputer: Boolean,
+    receiver: String?,
+    inflight: Boolean,
+    onCommit: (AntennaOffset) -> Unit,
+) {
+    // Local, so the picker can say Measured before anything is stored
+    // (iOS antennaDraft). Re-seeded when the profile's own value flips. Each
+    // field re-seeds on its OWN component only (the NumField rule), so one
+    // field's commit landing cannot reset another mid-edit.
+    var measured by remember(offset.known) { mutableStateOf(offset.known) }
+    var xText by remember(offset.xMm) { mutableStateOf(offset.xMm.toString()) }
+    var yText by remember(offset.yMm) { mutableStateOf(offset.yMm.toString()) }
+    var zText by remember(offset.zMm) { mutableStateOf(offset.zMm.toString()) }
+    // Typing not yet committed (iOS antennaTyped): set by a keystroke,
+    // cleared when the three go out. Until the user types, an empty field
+    // is no error, and leaving the screen commits nothing — a Measured
+    // profile shown and left alone is never sent again.
+    var typed by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    // Reads the CURRENT state, so a field disposed after the switch to
+    // Unknown cannot commit its text and undo it.
+    val commit: () -> Unit = {
+        val x = AntennaOffset.parseMm(xText)
+        val y = AntennaOffset.parseMm(yText)
+        val z = AntennaOffset.parseMm(zText)
+        if (measured && x != null && y != null && z != null) {
+            val next = AntennaOffset.of(true, x, y, z)
+            typed = false
+            if (next != offset) onCommit(next)
+        }
+    }
+    Section("GNSS Antenna Offset") {
+        GatedControls(enabled = !connected || (reported != null && !inflight)) {
+            SegmentedPicker(listOf("Unknown", "Measured"), if (measured) 1 else 0) { i ->
+                if (i == 1) {
+                    // An Unknown profile's zeros are no measurement: the
+                    // fields start empty, so nothing can go out until all
+                    // three are typed.
+                    if (!offset.known) {
+                        xText = ""
+                        yText = ""
+                        zText = ""
+                        typed = false
+                    }
+                    measured = true
+                } else {
+                    measured = false
+                    focusManager.clearFocus()
+                    onCommit(AntennaOffset.UNKNOWN)
+                }
+            }
+            if (measured) {
+                val pending by androidx.compose.runtime.rememberUpdatedState(commit)
+                androidx.compose.runtime.DisposableEffect(Unit) {
+                    onDispose { if (typed) pending() }
+                }
+                AntennaMmField("Board X", xText, typed, { xText = it; typed = true }, commit)
+                AntennaMmField("Board Y", yText, typed, { yText = it; typed = true }, commit)
+                AntennaMmField("Board Z", zText, typed, { zText = it; typed = true }, commit)
+                if (typed) {
+                    antennaInputError(xText, yText, zText)?.let { error ->
+                        Text(
+                            error,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        }
+        Caption(
+            antennaOffsetCaption(
+                measured, offset, connected, haveConfig, reported, reportedByFlightComputer,
+                receiver, inflight,
+            ),
+        )
+    }
+}
+
+/**
+ * One millimeter field: commits on blur or Done (the NumField rule). Shown
+ * as an error only once [typed], so a fresh draft's empty fields are not.
+ */
+@Composable
+private fun AntennaMmField(
+    label: String,
+    text: String,
+    typed: Boolean,
+    onText: (String) -> Unit,
+    onCommit: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    OutlinedTextField(
+        value = text,
+        onValueChange = onText,
+        label = { Text(label) },
+        suffix = { Text("mm") },
+        singleLine = true,
+        isError = typed && AntennaOffset.parseMm(text) == null,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+        modifier = Modifier.fillMaxWidth().onFocusChanged { st ->
+            if (focused && !st.isFocused) onCommit()
+            focused = st.isFocused
+        },
+    )
+}
+
+/** iOS `SettingsView.antennaInputError`: which typed fields the firmware would refuse. */
+internal fun antennaInputError(x: String, y: String, z: String): String? {
+    val bad = listOf("X" to x, "Y" to y, "Z" to z)
+        .filter { AntennaOffset.parseMm(it.second) == null }
+        .map { it.first }
+    if (bad.isEmpty()) return null
+    return "Board " + bad.joinToString(", ") +
+        ": enter whole millimeters from -2000 to 2000. Nothing is sent until all three are."
+}
+
+/**
+ * iOS `SettingsView.antennaOffsetFooter`. [reportedByFlightComputer]: the
+ * readback is the flight computer's own ("antsrc":"fc"), not the out
+ * computer's copy of what it last relayed.
+ */
+internal fun antennaOffsetCaption(
+    measuredShown: Boolean,
+    profile: AntennaOffset,
+    connected: Boolean,
+    haveConfig: Boolean,
+    reported: AntennaOffset?,
+    reportedByFlightComputer: Boolean,
+    receiver: String?,
+    inflight: Boolean,
+): String {
+    var text = if (measuredShown) {
+        "From the flight computer’s IMU chip to the center of the GNSS antenna, along the " +
+            "board’s own X, Y and Z axes (Z out of the component side), in millimeters. Within " +
+            "2 to 3 cm is enough. Board axes: +X points forward (to the nose when the board is " +
+            "mounted nose-forward), +Y to the left, +Z up out of the component side."
+    } else {
+        "Unknown (the default): the flight computer allows for a GNSS antenna up to 30 cm from " +
+            "its IMU. If you have measured where the antenna sits, choose Measured: the " +
+            "navigation filter then models it, which sharpens the attitude while the rocket " +
+            "turns fast, as when the drogue opens."
+    }
+    if (!connected) return text
+    if (inflight) return "$text Locked while the rocket is flying."
+    if (!haveConfig) return text
+    if (reported == null) return "$text This rocket’s firmware has no antenna offset setting."
+    text += when {
+        measuredShown && !profile.known -> " Not sent yet: enter all three, then tap Done."
+        reported == profile && reportedByFlightComputer -> " In use by the flight computer."
+        reported == profile -> " Sent to the rocket; the flight computer has not reported it yet."
+        reportedByFlightComputer -> " The flight computer reports ${reported.label}."
+        else -> " The out computer holds ${reported.label}; the flight computer has not reported it yet."
+    }
+    if (receiver != null && receiver != "mosaic-G5") {
+        text += " Only the mosaic-G5’s navigation filter uses it; the rocket keeps it for when one does."
+    }
+    return text
 }
 
 /**

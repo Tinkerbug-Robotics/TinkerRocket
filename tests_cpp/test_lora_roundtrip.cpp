@@ -652,6 +652,57 @@ TEST_F(LoRaRoundtripTest, RailCurrentsRideTheSlowFrame) {
     EXPECT_NEAR(out.servo_current, 0.34f, 0.001f);
 }
 
+/// v6: the gnss-sdr-dev board's IMU aiding rides the SLOW frame's status byte
+/// (bits 0-1), and only those bits: the spare ones go out 0.
+TEST_F(LoRaRoundtripTest, GnssImuRidesTheSlowFrameStatus) {
+    for (uint8_t st : {uint8_t{0}, uint8_t{1}, uint8_t{2}, uint8_t{3}}) {
+        LoRaDataSI in = makeNominal();
+        in.gnss_imu = st;
+        uint8_t bytes[SIZE_OF_LORA_SLOW] = {};
+        conv.packLoRaSlowBytes(in, bytes);
+        EXPECT_EQ(bytes[SIZE_OF_LORA_SLOW - 1], st);
+        LoRaDataSI out{};
+        conv.unpackLoRaSlowBytes(bytes, out);
+        EXPECT_EQ(out.gnss_imu, st);
+    }
+    LoRaDataSI in = makeNominal();
+    in.gnss_imu = 0xFF;   // never more than its two bits
+    LoRaSlowData s{}; conv.packLoRaSlow(in, s);
+    EXPECT_EQ(s.status, 0x03u);
+    // and the fast frame neither carries nor clears it
+    LoRaDataSI acc{};
+    conv.unpackLoRaSlow(s, acc);
+    LoRaFastData f{}; conv.packLoRaFast(in, f);
+    conv.unpackLoRaFast(f, acc);
+    EXPECT_EQ(acc.gnss_imu, 3u);
+}
+
+/// A v5 rocket's SLOW frame is v6's without its last byte: the v5 reader takes
+/// every field v5 had and reports no board.
+TEST_F(LoRaRoundtripTest, AV5SlowFrameReadsAsV6WithoutTheBoard) {
+    LoRaDataSI in = makeNominal();
+    in.max_alt = 1234.0f;
+    in.voltage = 7.85f;
+    in.cam_current = 1.48f;
+    in.gnss_imu = 1;
+    uint8_t v6[SIZE_OF_LORA_SLOW] = {};
+    conv.packLoRaSlowBytes(in, v6);
+    uint8_t v5[SIZE_OF_LORA_SLOW_V5] = {};
+    memcpy(v5, v6, sizeof v5);
+    v5[offsetof(LoRaFrameHeader, ver_type)] = loraVerType(LORA_PROTO_VERSION_V5, LORA_FRAME_SLOW);
+
+    LoRaDataSI a{}, b{};
+    conv.unpackLoRaSlowBytes(v6, a);
+    b.gnss_imu = 2;   // whatever the accumulator held: a v5 frame says no board
+    conv.unpackLoRaSlowV5Bytes(v5, b);
+    EXPECT_FLOAT_EQ(b.max_alt, a.max_alt);
+    EXPECT_FLOAT_EQ(b.voltage, a.voltage);
+    EXPECT_FLOAT_EQ(b.cam_current, a.cam_current);
+    EXPECT_EQ(b.rocket_id, a.rocket_id);
+    EXPECT_EQ(a.gnss_imu, 1u);
+    EXPECT_EQ(b.gnss_imu, 0u);
+}
+
 /// Five FAST then one SLOW. At LORA_TX_RATE_HZ = 2 that puts the slow set on
 /// a 3.0 s cadence, which is what the airtime budget was computed against.
 TEST_F(LoRaRoundtripTest, SlotScheduleIsFiveFastToOneSlow) {

@@ -3,16 +3,16 @@
 
 # iOS App -- module map
 
-`TinkerRocketApp/TinkerRocketApp` is 35,782 lines across 93 Swift files, grouped by directory.
+`TinkerRocketApp/TinkerRocketApp` is 42,082 lines across 104 Swift files, grouped by directory.
 "Declares" lists the top-level types in each file. Files of 400+ lines also
 list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 
 
-## `(root)/` — 2 files, 123 lines
+## `(root)/` — 2 files, 124 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
-| [DesignTokens.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/DesignTokens.swift) | 85 | `TRColor`, `TRShape`, `TRSpacing` |
+| [DesignTokens.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/DesignTokens.swift) | 86 | `TRColor`, `TRShape`, `TRSpacing` |
 | [TinkerRocketAppApp.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/TinkerRocketAppApp.swift) | 38 | `TinkerRocketAppApp` |
 
 
@@ -31,67 +31,80 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [NetworkMonitor.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Maps/Offline/NetworkMonitor.swift) | 52 | `NetworkMonitor`, `OfflinePill` |
 
 
-## `Models/` — 51 files, 18,656 lines
+## `Models/` — 61 files, 23,121 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
-| [BLEDevice.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BLEDevice.swift) | 2,859 | `BLEDeviceType`, `BLEDevice` |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Published per-device state · Device identity (populated from config_identity readback) · Internal state · Init · Connection lifecycle (called by BLEFleet) · BLE RSSI Polling · Sim state · Commands · OTA helpers (#8 phase 2) · Magnetometer hard-iron calibration (issue #96) · Pad calibration (#1600 phase 5) · Identity commands · File operations · File chunk handling (private) · CSV Generation · Download State Management · CBPeripheralDelegate · Telemetry parsing |
-| [SensorTypes.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/SensorTypes.swift) | 1,123 | `MessageType`, `RocketState`, `ParseError` |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Message Types · Rocket State · Status Query Data (10 bytes) — sensor config from FlightComputer · Flight Settings Snapshot (176 bytes) — runtime config at launch (#165) · Raw Packed Data Structures · Legacy Raw Data Structures · SI Unit Structures · Parsing Errors · Data Extension for Binary Parsing |
-| [CSVGenerator.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/CSVGenerator.swift) | 1,008 | `DeviceType`, `CSVError` |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Device Auto-Detection · Main CSV Generation · Rotation Configuration · Helper Functions · Flight Summary · Flight Settings (#165) · CSV Errors |
-| [TelemetryData.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/TelemetryData.swift) | 982 | `TelemetryData` |
-| [ActiveRocketSyncer.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/ActiveRocketSyncer.swift) | 957 | `ActiveRocketSyncer` |
+| [BLEDevice.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BLEDevice.swift) | 3,326 | `BLEDeviceType`, `BLEDevice` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Published per-device state · Device identity (populated from config_identity readback) · Internal state · Init · Connection lifecycle (called by BLEFleet) · BLE RSSI Polling · Sim state · Commands · OTA helpers (#8 phase 2) · Magnetometer hard-iron calibration (issue #96) · Pad calibration (#1600 phase 5) · Accelerometer six-face calibration (#1629) · Identity commands · File operations · File chunk handling (private) · CSV Generation · Download State Management · CBPeripheralDelegate · Telemetry parsing |
+| [AccelSixFace.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/AccelSixFace.swift) | 1,318 | — |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Faces · Which face it is on now (a hint; a measurement names its own) · One face window · The six faces · The solve: one sphere fit over all six faces · The high-g, aligned to the low-g · The screen's flow · What the screen says · The live face on a device |
+| [SensorTypes.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/SensorTypes.swift) | 1,172 | `MessageType`, `RocketState`, `ParseError` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Message Types · Rocket State · Status Query Data (10 bytes) — sensor config from FlightComputer · Flight Settings Snapshot (176 bytes) — runtime config at launch (#165) · Out Computer Identity (#1658, 68 bytes) · Raw Packed Data Structures · Legacy Raw Data Structures · SI Unit Structures · Parsing Errors · Data Extension for Binary Parsing |
+| [ActiveRocketSyncer.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/ActiveRocketSyncer.swift) | 1,126 | `ActiveRocketSyncer` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Lifecycle · Triggers · Binding · Adoption (rocket wins) · Explicit push (user-initiated only) · The precedence rule · Mag cal · Sensor cal (gyro + high-g) — mirrors mag cal · Suggestion |
-| [BLEFleet.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BLEFleet.swift) | 774 | `BLEFleet` |
+| [CSVGenerator.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/CSVGenerator.swift) | 1,083 | `DeviceType`, `CSVError` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Device Auto-Detection · Main CSV Generation · Rotation Configuration · Helper Functions · Flight Summary · Flight Settings (#165) · CSV Errors |
+| [TelemetryData.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/TelemetryData.swift) | 1,058 | `TelemetryData` |
+| [BLEFleet.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BLEFleet.swift) | 872 | `BLEFleet` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Published state · Rocket roster (#390) · Private state · Voice routing (#829's iOS twin) · Init · Scanning · Connection · Virtual Rocket (iOS twin of Android demo mode, 2026-07-30) · Device lookup · Last-valid rocket fix cache (#140) · CBCentralManagerDelegate |
-| [FlightAnnouncer.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FlightAnnouncer.swift) | 656 | `TelemetryAnnouncer`, `AnnouncerSpeech`, `FlightAnnouncer`, `SystemSpeech` |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Seams · Private State · Constants · Init · Main Entry Point · Event Detectors · Horizontal Distance · Speak policy · State Reset · Production speech engine |
+| [FileCache.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FileCache.swift) | 799 | `FlightSummaryHeadline`, `FlightSummaryIdentity`, `CachedFlightType`, `CachedFlight` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | CachedFlight Model · Device-scoped path helpers · Summary File Caching · Binary File Caching · Base-station logs: the combined CSV + one per rocket · Direct CSV Caching (for base station LoRa logs that are already CSV) · Flight Caching Status · Board-confirmed short downloads · Delete Cached Flight · List All Cached Flights |
+| [FlightAnnouncer.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FlightAnnouncer.swift) | 768 | `TelemetryAnnouncer`, `AnnouncerSpeech`, `FlightAnnouncer`, `SystemSpeech` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Seams · Private State · Constants · Init · Main Entry Point · Event Detectors · Predicted landing · Horizontal Distance · Speak policy · State Reset · Production speech engine |
 | [LandingPredictor.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/LandingPredictor.swift) | 608 | `LandingSnapshotSource`, `LandingPrediction`, `LandingPredictor` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Telemetry handling · Wind prefetch · DriftCast adapter · Uncertainty model (#191 item 2) · Ascent ballistic (#191 item 1) |
-| [FileCache.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FileCache.swift) | 561 | `FlightSummaryHeadline`, `CachedFlightType`, `CachedFlight` |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | CachedFlight Model · Device-scoped path helpers · Summary File Caching · Binary File Caching · Direct CSV Caching (for base station LoRa logs that are already CSV) · Flight Caching Status · Delete Cached Flight · List All Cached Flights |
+| [RocketProfile.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/RocketProfile.swift) | 579 | `RollSegmentMode`, `RollWaypoint`, `MagCalData`, `SensorCalData`, `RocketProfile` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Fin calibration (#449) · Backward-compatible decoding · GNSS antenna offset (cmd 81) |
+| [BLETypes.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BLETypes.swift) | 577 | `PyroTestRefusal`, `FileInfo`, `DownloadState`, `DiscoveredDevice`, `PyroConfigSource`, `CameraTypeSource`, +1 more |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | #915 config report · #1231 deployment-config provenance · Guidance-target echo (#435) |
 | [SensorConverter.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/SensorConverter.swift) | 559 | — |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Rotation Configuration · GNSS Conversion · Power Conversion · BMP585 Conversion · ISM6HG256 Conversion · MMC5983MA Conversion · IIS2MDC Conversion (new Mini PCB rev) · Legacy Sensor Conversions · Mini NonSensor Conversion |
-| [BLETypes.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BLETypes.swift) | 531 | `PyroTestRefusal`, `FileInfo`, `DownloadState`, `DiscoveredDevice`, `PyroConfigSource`, `CameraTypeSource`, +1 more |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | #915 config report · #1231 deployment-config provenance · Guidance-target echo (#435) |
+| [SdrAlignStatus.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/SdrAlignStatus.swift) | 514 | — |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | The faces · The board's part of the six-face screen · What the screen says |
 | [DriftCastEngine.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/DriftCastEngine.swift) | 506 | `WindLayer`, `WindProfile`, `TrackPoint`, `GuidanceResult`, `OpenMeteoResponse`, `OpenMeteoHourly`, +1 more |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Data Structures · Geo Utilities · Standard Atmosphere · Wind API (Open-Meteo) · Descent Simulation · Main Orchestration |
-| [OTASession.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTASession.swift) | 488 | `OTASession` |
+| [OTASession.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTASession.swift) | 489 | `OTASession` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Flow · Wait helpers |
-| [PreflightChecklist.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/PreflightChecklist.swift) | 479 | `PreflightItemKind`, `PreflightItem`, `PreflightMaster`, `PreflightRocketConfig`, `FailableItem`, `FailableDate`, +5 more |
+| [PreflightChecklist.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/PreflightChecklist.swift) | 489 | `PreflightItemKind`, `PreflightItem`, `PreflightMaster`, `PreflightRocketConfig`, `FailableItem`, `FailableDate`, +5 more |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Item kinds · Items · Master + per-rocket config · Effective list + progress |
-| [RocketProfile.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/RocketProfile.swift) | 440 | `RollSegmentMode`, `RollWaypoint`, `MagCalData`, `SensorCalData`, `RocketProfile` |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Fin calibration (#449) · Backward-compatible decoding |
-| [MagCalStatus.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/MagCalStatus.swift) | 406 | `MagCalSubType`, `MagCalRejectCode`, `MagCalStatus`, `MagCalAxis`, `MagCalComponent`, `MagCalConstants` |
-| [BSLogCSVGenerator.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BSLogCSVGenerator.swift) | 385 | — |
+| [KnownDeviceStore.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/KnownDeviceStore.swift) | 454 | `DeviceIdentityPusher`, `KnownDevice`, `KnownDeviceStore` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Lookup · Rocket IDs (three rockets, one base station) · Readback intake · Edits (push now when connected, queue when offline) · Record plumbing · Persistence |
+| [BSLogCSVGenerator.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BSLogCSVGenerator.swift) | 442 | — |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | decoded record · little-endian readers · frame decode · geodesy / attitude · format · parse · render |
+| [MagCalStatus.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/MagCalStatus.swift) | 431 | `MagCalSubType`, `MagCalRejectCode`, `MagCalStatus`, `MagCalAxis`, `MagCalComponent`, `MagCalConstants` |
 | [CSVParser.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/CSVParser.swift) | 367 | `FlightCSVData`, `CSVParserError`, `CSVParser` |
-| [KnownDeviceStore.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/KnownDeviceStore.swift) | 325 | `DeviceIdentityPusher`, `KnownDevice`, `KnownDeviceStore` |
-| [RocketProfileStore.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/RocketProfileStore.swift) | 323 | `RocketProfileStore` |
-| [DeploymentWatcher.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/DeploymentWatcher.swift) | 270 | `DeploymentKind`, `RecoveryProfile`, `DeploymentEvent` |
+| [RocketProfileStore.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/RocketProfileStore.swift) | 350 | `RocketProfileStore` |
+| [DeploymentWatcher.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/DeploymentWatcher.swift) | 292 | `DeploymentKind`, `RecoveryProfile`, `DeploymentEvent` |
 | [PadCalStatus.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/PadCalStatus.swift) | 256 | — |
 | [PreflightStore.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/PreflightStore.swift) | 238 | `PreflightStore` |
 | [IonosphereStore.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/IonosphereStore.swift) | 233 | `IonosphereStore` |
+| [VirtualRocket.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/VirtualRocket.swift) | 232 | `VirtualRocketDriver` |
 | [RocketRoster.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/RocketRoster.swift) | 230 | `RocketKey`, `RocketFreshness`, `RelayPath`, `RocketCommandLink`, `RocketSubject`, `RocketRoster` |
 | [FirmwareRelease.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FirmwareRelease.swift) | 226 | — |
-| [FirmwareCatalogSession.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FirmwareCatalogSession.swift) | 216 | `FirmwareCatalogSession` |
+| [FirmwareCatalogSession.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FirmwareCatalogSession.swift) | 225 | `FirmwareCatalogSession` |
 | [UnitFormatter.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/UnitFormatter.swift) | 204 | `UnitSystem`, `UnitFormatter` |
-| [VirtualRocket.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/VirtualRocket.swift) | 200 | `VirtualRocketDriver` |
 | [EspImage.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/EspImage.swift) | 197 | — |
+| [AccelCalStatus.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/AccelCalStatus.swift) | 189 | — |
 | [FirmwareManifest.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FirmwareManifest.swift) | 177 | — |
 | [LocationManager.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/LocationManager.swift) | 175 | `LocationManager` |
+| [MessageParser.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/MessageParser.swift) | 169 | — |
 | [GnssVelocityCheck.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/GnssVelocityCheck.swift) | 167 | `GnssVelocityCheck` |
 | [MagCalCells.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/MagCalCells.swift) | 161 | `MagCalCells` |
 | [FirmwareCache.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FirmwareCache.swift) | 160 | — |
 | [Klobuchar.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/Klobuchar.swift) | 154 | — |
-| [MessageParser.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/MessageParser.swift) | 151 | — |
 | [StorageStats.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/StorageStats.swift) | 121 | `RocketStorageStats`, `BaseStationStorageStats` |
+| [TouchdownPredictor.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/TouchdownPredictor.swift) | 119 | — |
+| [RemoteRocket.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/RemoteRocket.swift) | 108 | `RemoteRocket` |
+| [FleetFirmware.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FleetFirmware.swift) | 104 | `FirmwareStamp` |
 | [OTATimeouts.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTATimeouts.swift) | 104 | `OTAStage`, `OTATimeouts` |
+| [VoiceRocketPolicy.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/VoiceRocketPolicy.swift) | 97 | `VoiceRocketPolicy` |
+| [BoardCalibration.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BoardCalibration.swift) | 94 | `BoardCalibration` |
+| [GuidanceStateCheck.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/GuidanceStateCheck.swift) | 93 | `GuidanceStateCheck` |
 | [OtaWriteGate.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OtaWriteGate.swift) | 90 | `OtaWriteGate` |
 | [BluetoothAvailability.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/BluetoothAvailability.swift) | 84 | `BluetoothAvailability` |
 | [Gzip.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/Gzip.swift) | 83 | — |
-| [RemoteRocket.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/RemoteRocket.swift) | 69 | `RemoteRocket` |
+| [SettingsAccess.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/SettingsAccess.swift) | 71 | `SettingsAccess` |
 | [PhoneFixCodec.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/PhoneFixCodec.swift) | 62 | — |
 | [LastValidRocketFix.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/LastValidRocketFix.swift) | 56 | `LastValidRocketFix` |
 | [SensorCalStatus.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/SensorCalStatus.swift) | 50 | `SensorCalStatus` |
@@ -99,56 +112,59 @@ list their `// MARK: -` sections, which is what Xcode's jump bar shows.
 | [UserDisconnectLedger.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/UserDisconnectLedger.swift) | 46 | `UserDisconnectLedger` |
 | [AppBuildStamp.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/AppBuildStamp.swift) | 43 | `AppBuildStamp` |
 | [OTALink.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTALink.swift) | 33 | `OTALink` |
+| [OTABeginFailure.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/OTABeginFailure.swift) | 28 | `OTABeginFailure` |
 | [FrequencyScanSample.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Models/FrequencyScanSample.swift) | 15 | `FrequencyScanSample` |
 
 
-## `Views/` — 31 files, 16,038 lines
+## `Views/` — 32 files, 17,872 lines
 
 | File | Lines | Declares |
 |------|-------|----------|
-| [DashboardView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DashboardView.swift) | 3,555 | `IdentifiableInt`, `DashboardSheet`, `DashboardVisibility`, `DashboardView`, `ConnectedFleetView`, `DirectRocketSection`, +41 more |
+| [DashboardView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DashboardView.swift) | 3,694 | `IdentifiableInt`, `DashboardSheet`, `DashboardVisibility`, `DashboardView`, `ConnectedFleetView`, `DirectRocketSection`, +41 more |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Connected fleet dashboard (#390) · Connected device dashboard (observes the BLEDevice for live updates) · Shared rocket telemetry cards · Component Views · Pyro Channels · Controls · Branded Toolbar · Signal Strength Tile · LoRa RSSI mapping (-130 to -30 dBm) · GNSS Satellites (0 to 30) · BLE RSSI mapping (-100 to -30 dBm) · Preview |
-| [SettingsView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/SettingsView.swift) | 1,931 | `SettingsView`, `PyroChannelTestControls` |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Focus-driven self-apply (#144) · Base station (read-only display) · No active profile · Rocket settings (profile-backed) · Per-channel profile accessors (centralise the 4-channel switch) · Profile bindings · String ↔ profile sync · Helpers · Apply actions (write profile + push when connected) · LoRa TX power (base station only) · Pyro live controls |
-| [DriftCastView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DriftCastView.swift) | 1,387 | `DriftCastMapView`, `Trajectory3DView`, `DriftCastView`, `DriftCastSendButton` |
+| [SettingsView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/SettingsView.swift) | 2,429 | `SettingsView`, `SettingsContent`, `BoardCalibrationRows`, `PyroChannelTestControls`, `FlightComputerNotRunningSection` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Focus-driven self-apply (#144) · Base station (read-only display) · No active profile · Rocket settings (profile-backed) · Per-channel profile accessors (centralise the 4-channel switch) · Profile bindings · String ↔ profile sync · Helpers · Apply actions (write profile + push when connected) · LoRa TX power (base station only) · Pyro live controls · Flight computer not running |
+| [DriftCastView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DriftCastView.swift) | 1,389 | `DriftCastMapView`, `Trajectory3DView`, `DriftCastView`, `DriftCastSendButton` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Map Representable · 3D Trajectory View (SceneKit + ArcGIS Satellite Imagery) · Geo Conversion · Scene Builder · Scene Helpers · Main Drift Cast View · Computed Properties · Body · Map Section · Form Content · Results Section · Wind Profile Section · UI Helpers · Actions · Profile sync (#191) · Send-to-Unit Button · Preview |
-| [PyroTestView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/PyroTestView.swift) | 802 | `PyroTestState`, `TickCounter`, `PyroTestView`, `VideoOutcome`, `PyroContinuityBadge`, `SlowMoCameraManager`, +1 more |
+| [PyroTestView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/PyroTestView.swift) | 812 | `PyroTestState`, `TickCounter`, `PyroTestView`, `VideoOutcome`, `PyroContinuityBadge`, `SlowMoCameraManager`, +1 more |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | State Machine · Tick Counter (ObservableObject so SwiftUI can observe it) · View · Top Bar · Center Display · Bottom Controls · Actions · Continuity Badge (shared by the test view and the pyro cards) · Slow-Mo Camera Manager · Camera Preview (UIViewRepresentable) |
 | [FlightTrajectoryView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FlightTrajectoryView.swift) | 731 | `FlightMapView`, `FlightScene3DView`, `FlightTrajectoryView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Data Extraction · 2D Map View · 3D Scene View · Geo Conversion · Scene Builder · Scene Helpers · Container View |
-| [MagCalView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/MagCalView.swift) | 664 | `MagCalView` |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | States |
-| [FileManagerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FileManagerView.swift) | 652 | `FileManagerView`, `FilePageNavigator`, `FileRow`, `ShareHelper`, `FlightFileItemSource` |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Share Helper (presents UIActivityViewController via UIKit to avoid SwiftUI .sheet blank screen) |
-| [FirmwareUpdateView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FirmwareUpdateView.swift) | 595 | `FirmwareUpdateView`, `FirmwareUpdateContent`, `LabeledRow` |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Action / status · Published releases (#773 step 4c) · File picker |
-| [MapView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/MapView.swift) | 594 | `PredictedLandingAnnotation`, `RocketMapSurface`, `RocketMapView`, `MapView` |
+| [FleetDashboardComponents.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FleetDashboardComponents.swift) | 708 | `PairSwitcherView`, `UnitsBarView`, `VoiceCalloutsOnKey`, `RocketChip`, `BaseStationStripView`, `RocketSectionHeader`, +5 more |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Pair switcher (≥2 base stations) · Units bar (roster chips) · Voice marker · Base-station strip · Rocket section header · Non-focused relayed rocket section · A relayed rocket's calibration (#1629) · Firmware mismatch (three rockets, one base station) |
+| [MapView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/MapView.swift) | 706 | `PredictedLandingAnnotation`, `RocketMapPin`, `RocketMapSurface`, `RocketMapView`, `MapView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | UIViewRepresentable MKMapView wrapper · Main Map View · Preview |
+| [FileManagerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FileManagerView.swift) | 676 | `FileManagerView`, `FilePageNavigator`, `FileRow`, `ShareHelper`, `FlightFileItemSource` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Share Helper (presents UIActivityViewController via UIKit to avoid SwiftUI .sheet blank screen) |
+| [MagCalView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/MagCalView.swift) | 663 | `MagCalView` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | States |
+| [FirmwareUpdateView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FirmwareUpdateView.swift) | 607 | `FirmwareUpdateView`, `FirmwareUpdateContent`, `LabeledRow` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Action / status · Published releases (#773 step 4c) · File picker |
+| [AccelCalibrationView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/AccelCalibrationView.swift) | 606 | `AccelCalibrationView` |
+| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Sections · The high-g · The GNSS board · Commands |
 | [FlightChartView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FlightChartView.swift) | 514 | `FlightChartView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Zoom & Pan State · Zoom Helpers · Body · Chart View · Zoom Indicator · Gestures · Data Loading · Chart Series Update · Progressive LOD Re-decimation · Binary Search Helpers |
-| [FleetDashboardComponents.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FleetDashboardComponents.swift) | 505 | `PairSwitcherView`, `UnitsBarView`, `RocketChip`, `BaseStationStripView`, `RocketSectionHeader`, `RelayRocketSectionView`, +2 more |
-| &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Pair switcher (≥2 base stations) · Units bar (roster chips) · Base-station strip · Rocket section header · Non-focused relayed rocket section |
-| [DeviceManagerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DeviceManagerView.swift) | 421 | `DeviceManagerView`, `KnownDeviceDetailView` |
+| [DeviceManagerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DeviceManagerView.swift) | 485 | `DeviceManagerView`, `KnownDeviceDetailView` |
 | &nbsp;&nbsp;&nbsp;&nbsp;↳ *sections* | | Network · Devices · Detail / editor |
 | [MagCalSphereView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/MagCalSphereView.swift) | 355 | `MagCalSphereView` |
 | [FrequencyScanView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FrequencyScanView.swift) | 305 | `FrequencyScanView` |
 | [RocketProfileView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/RocketProfileView.swift) | 292 | `RocketProfileView`, `SyncStatusRow` |
 | [SimulationView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/SimulationView.swift) | 278 | `SimulationView` |
-| [PreflightRunView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/PreflightRunView.swift) | 261 | `PreflightRunView`, `PreflightAdvisoryRow` |
+| [FlightDetailView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FlightDetailView.swift) | 270 | `FlightDetailView`, `SourceRow`, `SummaryRow` |
+| [PreflightRunView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/PreflightRunView.swift) | 269 | `PreflightRunView`, `PreflightAdvisoryRow` |
 | [PadCalibrationView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/PadCalibrationView.swift) | 260 | `PadCalibrationView` |
 | [FinLayoutView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FinLayoutView.swift) | 258 | `FinLayoutView` |
+| [FlightLogsView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FlightLogsView.swift) | 251 | `FlightLogsView`, `FlightLogRow`, `FlightLogsView_Previews` |
 | [SaveAreaView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/SaveAreaView.swift) | 245 | `RegionPickerMap`, `SaveAreaView` |
-| [FlightLogsView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FlightLogsView.swift) | 241 | `FlightLogsView`, `FlightLogRow`, `FlightLogsView_Previews` |
-| [FlightDetailView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/FlightDetailView.swift) | 194 | `FlightDetailView`, `SummaryRow` |
 | [PreflightMasterView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/PreflightMasterView.swift) | 184 | `PreflightMasterView`, `PreflightItemRow`, `PreflightItemEditSheet` |
+| [DeviceProvisioningSheet.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DeviceProvisioningSheet.swift) | 173 | `DeviceProvisioningSheet` |
 | [PreflightRocketConfigView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/PreflightRocketConfigView.swift) | 158 | `PreflightRocketConfigView` |
-| [DeviceProvisioningSheet.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DeviceProvisioningSheet.swift) | 145 | `DeviceProvisioningSheet` |
+| [ServoTestView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ServoTestView.swift) | 118 | `ServoTestView` |
 | [OnboardingView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/OnboardingView.swift) | 105 | `OnboardingView` |
-| [ServoTestView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ServoTestView.swift) | 100 | `ServoTestView` |
+| [ActiveRocketHeader.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ActiveRocketHeader.swift) | 102 | `ActiveRocketHeader`, `GuidanceStateLine` |
 | [OfflineMapsView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/OfflineMapsView.swift) | 79 | `OfflineMapsView` |
 | [DeviceTypeIcon.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/DeviceTypeIcon.swift) | 78 | `DeviceTypeIcon`, `NetworkCopy` |
-| [ActiveRocketHeader.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ActiveRocketHeader.swift) | 77 | `ActiveRocketHeader` |
 | [ColumnPickerView.swift](https://github.com/Tinkerbug-Robotics/TinkerRocket/blob/main/TinkerRocketApp/TinkerRocketApp/Views/ColumnPickerView.swift) | 72 | `ColumnPickerView` |
 
 
-Total: 93 files, 35,782 lines.
+Total: 104 files, 42,082 lines.

@@ -25,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.concurrent.Executors
@@ -137,6 +138,15 @@ class AppContainer(app: Application) {
                 profileStore.activeProfile?.let {
                     com.tinkerbug.tinkerrocket.session.RecoveryProfile.from(it)
                 }
+            },
+            // The predicted landing call fires with no frame arriving, so it
+            // needs a timer: on the fleet scope, the announcer's own thread.
+            schedule = { atMs, action ->
+                val job = fleetScope.launch {
+                    delay((atMs - System.currentTimeMillis()).coerceAtLeast(0))
+                    action()
+                }
+                ({ job.cancel() })
             },
         )
     }
@@ -264,6 +274,7 @@ class AppContainer(app: Application) {
                     onIdentity = { msg, pusher -> fleetRef.onIdentityReadback(deviceId, msg, pusher) },   // #1041
                     onRocketFix = fleetRef::recordRocketFix,
                     fixLookup = fleetRef::lastValidRocketFix,
+                    hiddenRockets = { fleetRef.hiddenRocketKeys.value },
                 )
                 seedFocusRocket?.let { session.seedFocusRocket(it) }
                 session.start()
@@ -300,14 +311,10 @@ class AppContainer(app: Application) {
         val session = f.activeDeviceId.value?.let { devices[it] }?.session
         if (session != null) syncer.attach(session, profileStore) else syncer.detach()
 
-        // Voice follows the first connected direct rocket when one exists
-        // (full frame rate), else the foreground base station — whose stream
-        // is pinned to its focused rocket, so callouts never interleave two
-        // rockets (#375, #390).
-        val direct = devices.values.firstOrNull {
-            it.session.isConnected.value && it.deviceType == BleDeviceType.ROCKET
-        }
-        val voice = direct ?: f.foregroundBaseStation()
+        // Voice follows the foreground base station only, never a direct
+        // rocket link: that link leaves range at launch (see
+        // FleetManager.voiceDevice).
+        val voice = f.voiceDevice()
         for (d in devices.values) {
             if (d !== voice) d.session.telemetryAnnouncer = null
         }

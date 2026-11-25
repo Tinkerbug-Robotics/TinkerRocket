@@ -648,7 +648,7 @@ def test_the_card_says_why_it_has_no_burn_time() -> None:
     """Three cells missing, one quiet line saying why, and no 146 G headline.
 
     The cells that count from first motion are left off. Coast still counts
-    from burnout, which is measured. Max acceleration is taken over the part of
+    from burnout, which is measured. Max thrust acceleration is taken over the part of
     the burn the log kept, not over the whole flight: that would headline the
     ejection and the landing, 146 G on this log.
     """
@@ -663,7 +663,7 @@ def test_the_card_says_why_it_has_no_burn_time() -> None:
     for label in ("Burn time", "Time to apogee", "Flight time"):
         assert label not in cells, f"{label} was measured from a guess"
     assert "Coast time" in cells
-    peak = cells["Max acceleration"]
+    peak = cells["Max thrust acceleration"]
     assert 4.0 < peak["q"].value < 6.0, peak["q"].value
     assert "after the gap" in str(peak["hint"])
 
@@ -814,7 +814,7 @@ def test_a_burnout_in_a_logging_gap_is_blank_and_says_where() -> None:
 
     No log small enough for the repo lost its burnout, so this cuts one the way
     2026-03-14 224121 lost it: every stream, from under thrust to coasting. Burn
-    time and coast time go blank and the card says why. Max acceleration keeps
+    time and coast time go blank and the card says why. Max thrust acceleration keeps
     the burn before the hole, the motor section refuses, stability leaves out
     both figures taken at burnout, the vibration windows stop at the hole's
     edges, and the ejection is still found after it.
@@ -829,7 +829,7 @@ def test_a_burnout_in_a_logging_gap_is_blank_and_says_where() -> None:
     whole = Flight.from_bin(SAMPLE_BIN)
     whole.load()
     before = measured(whole)
-    peak_before = {c["label"]: c for c in compute_summary(whole)}["Max acceleration"]
+    peak_before = {c["label"]: c for c in compute_summary(whole)}["Max thrust acceleration"]
 
     flight = Flight.from_bin(SAMPLE_BIN)
     flight.load()
@@ -847,8 +847,8 @@ def test_a_burnout_in_a_logging_gap_is_blank_and_says_where() -> None:
     for label in ("Burn time", "Coast time"):
         assert label not in cells, f"{label} was measured from a guess"
     assert "Time to apogee" in cells and "Flight time" in cells
-    # The sample flight peaks at 9.5 G early in the burn, well before the hole.
-    peak = cells["Max acceleration"]
+    # The sample flight holds its 9.0 G peak early in the burn, well before the hole.
+    peak = cells["Max thrust acceleration"]
     assert peak["q"].value == peak_before["q"].value
     assert "under thrust, before the gap" in str(peak["hint"])
 
@@ -1094,6 +1094,25 @@ def test_apogee_turnover_stays_zoomed_in(report_html: Path) -> None:
     # It has to actually reach the landing it marks.
     r_lo, r_hi = recovery["layout"]["xaxis"]["range"]
     assert r_hi > hi, "recovery chart ends before the turnover chart does"
+
+
+def test_baro_reject_note_names_the_spike_check() -> None:
+    """The apogee chart's rejection note says which check dropped the samples.
+
+    It once blamed the vehicle's speed ("too fast for pressure to be reliable"),
+    which is the transonic lockout's job. The 65 mm roll-control flight of
+    2026-10-24 peaked at 72 m/s and still lost 30 to 50% of its coast samples
+    to the spike check's rate, which a 0.6 m step tripped at the 2 ms spacing;
+    the check now also needs a 5 m step, and the note says so.
+    """
+    from flight_report.modules.apogee import _reject_note
+
+    t_raw = [i * 0.002 for i in range(1000)]           # 2 s at 500 Hz
+    note = _reject_note([0.1, 0.5, 0.9, 1.3], t_raw, 0.0, 1.0)
+    assert "spike check dropped 4 of 501 (1%) barometer samples" in note, note
+    assert "more than 5 m from the last sample it kept and faster than 300 m/s" in note, note
+    assert "too fast" not in note
+    assert "not the navigation filter's barometer gate" in note
 
 
 def test_charts_keep_every_sample(report_html: Path) -> None:
@@ -1383,6 +1402,10 @@ CATALOG_EMPTY_ON_EVERY_FIXTURE = {
     # repo, so no committed log carries one. The row stays because the next
     # flight recorded on current firmware will produce it.
     "FcStatus.fc_camera_engaged",
+    # The mosaic-only image's raw vote guard bit rides the same frame.
+    "FcStatus.fc_raw_votes_withheld",
+    # #1409: the V10's hold-up cap voltage, FcStatusData v2 — the same frame.
+    "FcStatus.scap_v",
 }
 
 
@@ -1621,7 +1644,7 @@ def test_motor_section_measures_the_burn_with_no_input_at_all() -> None:
     """
     result = _motor(SAMPLE_BIN)
     assert result.error is None
-    for row in ("Burn time", "Peak acceleration", "Average acceleration",
+    for row in ("Burn time", "Peak thrust acceleration", "Average acceleration",
                 "Thrust-to-weight at peak", "Impulse per kg", "Speed at burnout"):
         assert row in result.metrics, f"{row} should not need an input"
     assert not result.warnings, f"a form-free run should warn about nothing: {result.warnings}"
@@ -1631,7 +1654,7 @@ def test_motor_section_measures_the_burn_with_no_input_at_all() -> None:
     # by it — specific force over g IS the ratio. If this ever starts reading a
     # mass, that identity has been broken.
     tw = result.metrics["Thrust-to-weight at peak"]
-    peak_g = result.metrics["Peak acceleration"]
+    peak_g = result.metrics["Peak thrust acceleration"]
     assert abs(tw.value - peak_g.value) < 1e-9
 
 
@@ -1745,3 +1768,156 @@ def test_globe_reads_the_logged_origin_before_rebuilding_it() -> None:
     # A pre-#834 snapshot with no convergence flag still yields the origin.
     assert globe._logged_reference({"Snapshot": [{"ref_lat": 40.1, "ref_lon": -105.2, "ref_alt_m": 1500.0}]})[0] == (40.1, -105.2, 1500.0, None)
 
+
+
+def test_log_facts_read_the_flight_log_columns_from_the_log() -> None:
+    """The web tool's flight log fills these from the log, not from the flyer.
+
+    The sample flight predates the board-revision byte (settings frame v3), so
+    the board stays None — "not recorded", which is the truth — while the
+    firmware, the GNSS liftoff time and the pad still come through. The pad is
+    CENJARS, and the numbers are the summary card's own.
+    """
+    import json
+
+    from flight_report.flight import Flight
+    from flight_report.log_entry import log_facts
+
+    if not SAMPLE_BIN.exists():
+        pytest.skip(f"Sample flight missing: {SAMPLE_BIN}")
+    facts = log_facts(Flight.from_bin(SAMPLE_BIN))
+    json.dumps(facts)  # handed to JavaScript as JSON, so it must be plain JSON
+
+    assert facts["file"] == SAMPLE_BIN.name
+    assert facts["date_source"] == "gnss"
+    # Liftoff by the receiver's clock, which is not the file name's 17:45:32:
+    # the entry's date is when the rocket flew, from the clock that knows.
+    assert facts["date_utc"] == "2026-07-05T17:44:15Z"
+    assert abs(facts["pad"]["lat"] - 40.16307) < 1e-4
+    assert abs(facts["pad"]["lon"] - -74.08066) < 1e-4
+    assert facts["firmware"] == "0c8c132" and facts["firmware_dirty"] is False
+    assert facts["settings_version"] == 3
+    assert facts["board"] is None and facts["board_asserted"] is None
+    assert facts["apogee_m"] == pytest.approx(357.1, abs=0.5)
+    assert facts["max_speed_mps"] == pytest.approx(97.9, abs=0.5)
+    assert facts["flight_time_s"] == pytest.approx(75.2, abs=0.2)
+
+
+def test_explore_survives_fields_that_are_not_one_number() -> None:
+    """Every log from the 10/24 firmware took the time panel down.
+
+    Newer streams carry named states as text (Snapshot.gnss_admission,
+    PadCalStatus.cal_state) and whole tables per row (GNSS_SAT.sats is a list
+    of satellites, PadContext a calibration matrix, GNSS_RTCM raw bytes). The
+    section put every value through float(), and the first list ended it with
+    "float() argument must be a string or a real number, not 'list'". The
+    golden and sample flights predate those streams, so nothing caught it.
+    """
+    from types import SimpleNamespace
+
+    from flight_report.modules.explore import analyze_time
+
+    def rows(n, **fields):
+        return [{"time_us": 1000 * i, **{k: v(i) for k, v in fields.items()}} for i in range(n)]
+
+    flight = SimpleNamespace(t0_us=0, stats={}, records={
+        "Snapshot": rows(4, gnss_admission=lambda i: "held_out" if i < 2 else "admitted_baro_agreed",
+                         flight_elapsed_ms=lambda i: 100 * i),
+        "GNSS_SAT": rows(3, sats=lambda i: [{"sv_id": 1, "cno_dbhz": 30 + i}], num=lambda i: 9),
+        "PadContext": rows(2, kind=lambda i: ("cal", "acc")[i], matrix=lambda i: (1.0, 0.0, 0.0)),
+        "GNSS_RTCM": rows(2, data=lambda i: b"\xd3\x00"),
+    })
+    result = analyze_time(flight)
+    assert result.error is None, result.error
+    channels = result.datasets[0]["channels"]
+
+    # Named states plot as steps, with their names beside them.
+    adm = channels["Snapshot.gnss_admission"]
+    assert adm["kind"] == "enum" and adm["runs"] == [[0, 0], [2, 1]]
+    assert adm["caution"].endswith("Plotted as numbers: 0 = held_out, 1 = admitted_baro_agreed.")
+    assert channels["PadContext.kind"]["runs"] == [[0, 0], [1, 1]]
+    # Plain numbers are untouched beside them.
+    assert channels["Snapshot.flight_elapsed_ms"]["y"] == [0, 100, 200, 300]
+    assert channels["GNSS_SAT.num"]["const"] == 9
+
+    # Tables are left out of the picker, and the section names them.
+    for key in ("GNSS_SAT.sats", "PadContext.matrix", "GNSS_RTCM.data"):
+        assert key not in channels
+        assert key in result.metrics["Not plottable"]
+    assert "skipped" not in result.datasets[0], "bookkeeping must not ship in the payload"
+
+
+def test_thrust_acceleration_is_what_the_motor_held_not_a_spike() -> None:
+    """A 2 ms ring at liftoff is not the motor.
+
+    The 10/24 Piercer Mini's card read 283 G "under thrust" for a motor that
+    held 10.5: one sample of a liftoff transient that swung +275, -93, +22 G
+    inside 2 ms. The held peak has to ignore any spike shorter than
+    THRUST_HOLD_S however tall, and keep any plateau longer than it.
+    """
+    import numpy as np
+
+    from flight_report.imu import THRUST_HOLD_S, accel_body, sustained_peak
+
+    t = np.arange(0.0, 1.5, 1 / 7300)                 # the Piercer's IMU rate
+    x = np.full(t.size, 8.0)
+    ring = (t > 0.014) & (t < 0.016)
+    x[ring] = np.where(np.arange(ring.sum()) % 2, -93.0, 275.0)
+    level, _at = sustained_peak(t, x)
+    assert level == 8.0, level
+
+    plateau = (t > 0.30) & (t < 0.30 + 1.5 * THRUST_HOLD_S)  # an ignition spike, briefly
+    x[plateau] = 12.0
+    level, at = sustained_peak(t, x)
+    assert level == 12.0 and 0.30 < at < 0.30 + 1.5 * THRUST_HOLD_S, (level, at)
+
+    # The flight loop's own pick, sample by sample: one railed sample moves
+    # that sample to the high-G part and leaves the rest on the low-G one.
+    rows = [{"low_acc_x": 9.0, "low_acc_y": 0.0, "low_acc_z": 0.0,
+             "high_acc_x": 9.5, "high_acc_y": 0.0, "high_acc_z": 0.0,
+             "low_g_near_rail": i == 2} for i in range(5)]
+    rows[2].update(low_acc_x=156.0, high_acc_x=250.0)
+    acc, railed, which = accel_body({"ISM6HG256": rows})
+    assert list(acc[0]) == [9.0, 9.0, 250.0, 9.0, 9.0]
+    assert list(railed) == [False, False, True, False, False]
+    assert which == "low-G accelerometer, high-G where it railed"
+
+
+def test_the_card_separates_the_motor_from_the_hardest_knock() -> None:
+    """Max thrust acceleration is the motor's; Peak shock is the knock, and when.
+
+    The sample flight flew a G77: it held 9.0 G, and took its hardest knock,
+    68 G on the high-G part, at touchdown. The shock has to be held on two
+    samples in a row, so one corrupt sample cannot set it, while a real knock
+    rings for several.
+    """
+    from flight_report.flight import Flight
+    from flight_report.summary import compute_summary, peak_shock
+
+    flight = Flight.from_bin(SAMPLE_BIN)
+    flight.load()
+    cells = {c["label"]: c for c in compute_summary(flight)}
+    assert "Max acceleration" not in cells, "the old one-sample cell is back"
+    thrust = cells["Max thrust acceleration"]
+    assert 8.5 < thrust["q"].value < 9.5, thrust["q"].value
+    assert "held 10 ms or more" in str(thrust["hint"])
+    shock = cells["Peak shock"]
+    assert 60 < shock["q"].value < 75, shock["q"].value
+    assert str(shock["hint"]).startswith("at touchdown, 75.5 s"), shock["hint"]
+    assert "high-G accelerometer" in str(shock["hint"])
+
+    # One corrupt sample under the chute changes nothing; the same reading on
+    # two samples in a row is a knock, and is named for when it came. 40 s is
+    # long after the ejection the events module finds, so it moves no event.
+    def spiked(n):
+        f = Flight.from_bin(SAMPLE_BIN)
+        f.load()
+        imu = f.records["ISM6HG256"]
+        i = next(k for k, r in enumerate(imu) if (r["time_us"] - f.t0_us) / 1e6 > 40.0)
+        for r in imu[i:i + n]:   # records are m/s²: 300 G on the high-G part, the low-G one railed
+            r.update(high_acc_x=300 * 9.80665, low_acc_x=156 * 9.80665, low_g_near_rail=True)
+        return peak_shock(f)
+
+    assert spiked(1)["g"] == shock["q"].value
+    two = spiked(2)
+    assert abs(two["g"] - 300.0) < 1.0 and two["phase"] == "on descent", two

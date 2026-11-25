@@ -41,6 +41,33 @@ final class RocketProfileStore: ObservableObject {
         return profiles.first { $0.id == id }
     }
 
+    /// The profile bound to a board (`lastUsedUnitID`), or nil. Two
+    /// claimants — a store written by the pre-#915 build — resolve to the most
+    /// recently updated, the same rule ActiveRocketSyncer.bindProfileToBoard
+    /// heals by.
+    func profile(boundToUnitID unitID: String) -> RocketProfile? {
+        Self.profile(boundToUnitID: unitID, in: profiles)
+    }
+
+    static func profile(boundToUnitID unitID: String,
+                        in profiles: [RocketProfile]) -> RocketProfile? {
+        guard !unitID.isEmpty else { return nil }
+        return profiles.filter { $0.lastUsedUnitID == unitID }
+            .max { $0.updatedAt < $1.updatedAt }
+    }
+
+    /// The profile for a rocket heard through a base station: (network,
+    /// rocket ID) names the registry record, its unitID names the bound
+    /// profile. nil when the rocket has never been on a direct Bluetooth link
+    /// (no record, so no unitID) or that board has no profile — never the
+    /// ACTIVE profile, which belongs to whichever rocket was connected last.
+    func profile(networkID: UInt8, rocketID: UInt8, name: String? = nil,
+                 knownDevices: KnownDeviceStore) -> RocketProfile? {
+        guard let rec = knownDevices.rocket(networkID: networkID, rocketID: rocketID, name: name)
+        else { return nil }
+        return profile(boundToUnitID: rec.unitID)
+    }
+
     init(directory: URL? = nil, defaults: UserDefaults = .standard) {
         self.defaults = defaults
         if let directory {

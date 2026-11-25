@@ -15,7 +15,9 @@ cannot be converted back to binary (it is derived and lossy).  Callers get the
 same row dicts either way; ``fmt`` says which file they came from.
 
 THE FORWARD-FILL.  A binary log holds two interleaved frame types: a 55-byte
-FAST frame five times out of six and a 22-byte SLOW frame on the sixth.  Each
+FAST frame five times out of six and a 23-byte SLOW frame on the sixth (LoRa
+v6; a v5 rocket's SLOW frame is 22 bytes, the same without its status byte,
+and is still read, as the base station does).  Each
 carries a subset, so a row is built by merging the frame into a running
 accumulator per rocket, exactly as the base station does in RAM.  That is what
 makes the rows rectangular, and it is why a slow frame does not blank the
@@ -37,10 +39,13 @@ BS_EVENT_MSG = 0xFD
 
 # --- LoRa frames (#850) ---------------------------------------------------
 SIZE_OF_LORA_FAST = 55
-SIZE_OF_LORA_SLOW = 22
-LORA_PROTO_VERSION = 5
+SIZE_OF_LORA_SLOW = 23           # v6: + status (the gnss-sdr-dev board's IMU aiding)
+SIZE_OF_LORA_SLOW_V5 = 22        # a v5 rocket's: no status byte
+LORA_PROTO_VERSION = 6
+LORA_PROTO_VERSION_V5 = 5        # still read: the same FAST frame, SLOW without status
 LORA_FRAME_FAST = 0x0
 LORA_FRAME_SLOW = 0x1
+LORA_SLOW_GNSS_IMU_MASK = 0x03   # LoRaSlowData.status bits 0-1, a SensorHealthState
 
 # LoRaFrameHeader: network_id, rocket_id, next_channel_idx, seq, ver_type, flags_state
 FMT_LORA_HDR = '<BBBHBB'
@@ -60,8 +65,8 @@ LORA_LAUNCH = 1 << 0
 LORA_VEL_APOGEE = 1 << 1
 LORA_ALT_APOGEE = 1 << 2
 LORA_ALT_LANDED = 1 << 3
-LORA_CAMERA_REC = 1 << 4
-LORA_STATE_SHIFT = 4
+LORA_STATE_SHIFT = 4             # bits 4-6
+LORA_CAMERA_REC = 1 << 7         # bit 7 (it read bit 4, the state's low bit, before)
 
 LORA_NUM_SATS_MASK = 0x3F
 LORA_SIM_BIT = 0x40
@@ -79,6 +84,16 @@ def _i24(b, off):
 def _decode_voltage_2_10_01(u8):
     """encodeVoltage_2_10_01 inverse: 2.00-10.00 V in 1/32 V steps."""
     return 2.0 + (u8 / 255.0) * 8.0
+
+
+def telemetry_len_ok(version, frame_type, length):
+    """RocketComputerTypes.h loraTelemetryLenOk: v6 frames and v5 ones."""
+    if frame_type == LORA_FRAME_FAST:
+        return version in (LORA_PROTO_VERSION, LORA_PROTO_VERSION_V5) and length == SIZE_OF_LORA_FAST
+    if frame_type == LORA_FRAME_SLOW:
+        return ((version == LORA_PROTO_VERSION and length == SIZE_OF_LORA_SLOW)
+                or (version == LORA_PROTO_VERSION_V5 and length == SIZE_OF_LORA_SLOW_V5))
+    return False
 
 
 def iter_frames(blob):
@@ -156,6 +171,11 @@ def _unpack_slow(frame, row):
     cam_ma, servo_ma = struct.unpack_from('<2H', frame, o + 11)
     row['cam_a'] = cam_ma / 1000.0
     row['servo_a'] = servo_ma / 1000.0
+    # v6: the gnss-sdr-dev board's IMU aiding (0 none, 1 fully aiding, 2 not
+    # fully: the vertical only or off, 3 refused or dropped); a v5 frame has no
+    # status byte: 0.
+    row['gnss_imu'] = (frame[o + 15] & LORA_SLOW_GNSS_IMU_MASK
+                       if len(frame) == SIZE_OF_LORA_SLOW else 0)
 
 
 def read_bs_bin(path):
@@ -194,14 +214,14 @@ def read_bs_bin(path):
 
         t_ms, rssi_x10, snr_x10, freq_hz = struct.unpack_from(FMT_BS_RX_HDR, payload, 0)
         frame = payload[BS_RX_HDR_LEN:]
-        if len(frame) not in (SIZE_OF_LORA_FAST, SIZE_OF_LORA_SLOW):
+        if len(frame) not in (SIZE_OF_LORA_FAST, SIZE_OF_LORA_SLOW, SIZE_OF_LORA_SLOW_V5):
             continue
 
         probe = {}
         ver_type = _unpack_lora_header(frame, probe)
-        if (ver_type >> 4) != LORA_PROTO_VERSION:
-            continue
         ftype = ver_type & 0x0F
+        if not telemetry_len_ok(ver_type >> 4, ftype, len(frame)):
+            continue
 
         rid = probe['rocket_id']
         row = dict(accum.get(rid, {}))          # forward-fill from this rocket
@@ -218,6 +238,8 @@ def read_bs_bin(path):
         row['snr'] = float('nan') if snr_x10 == BS_RSSI_UNKNOWN else snr_x10 / 10.0
         row['rx_freq_mhz'] = freq_hz / 1e6
         row['frame'] = 'slow' if ftype == LORA_FRAME_SLOW else 'fast'
+        row['frame_len'] = len(frame)          # 22 (v5) or 23 for a slow frame
+        row['lora_proto'] = ver_type >> 4
 
         prev = last_seq.get(rid)
         row['gap'] = -1 if prev is None else ((row['seq'] - prev - 1) & 0xFFFF)

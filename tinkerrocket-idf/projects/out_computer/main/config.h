@@ -10,14 +10,21 @@
 // fork per revision. Select the V8 map with: idf.py -DTR_BOARD_V8=1 build
 // (default stays V7 until V8 bring-up completes).
 //
-// TR_BOARD_V9=1 selects board_v9.h (V9/V10). The S3's *pin* map is unchanged
-// from V8 through V10 — unlike the FC, where V9 moved three pyro pins — so
+// TR_BOARD_V9=1 selects board_v9.h (V9). The S3's *pin* map is unchanged
+// from V8 through V9 — unlike the FC, where V9 moved three pyro pins — so
 // this used to be an alias to board_v8.h. #822: it isn't a pin change that
 // forced the split, it's a deleted part. V9 removed the MRAM (U12), and an
 // alias is presence-blind: it can say "same pins" but not "one fewer device",
-// so V9/V10 firmware kept driving an MRAM_CS that goes nowhere and backed the
+// so V9 firmware kept driving an MRAM_CS that goes nowhere and backed the
 // log ring + reboot snapshot with an unfitted chip. The two headers differ in
 // exactly one value, MRAM_CS (34 vs -1); keep every other pin in step by hand.
+//
+// TR_BOARD_V10=1 selects board_v10.h (#1593): every V9 pin plus four new ones,
+// the first of which is the supervised arm's consent output. A V9 image on a
+// V10 never raises it, so that board cannot fire a channel.
+#ifndef TR_BOARD_V5
+#define TR_BOARD_V5 0
+#endif
 #ifndef TR_BOARD_V7
 #define TR_BOARD_V7 0
 #endif
@@ -27,19 +34,26 @@
 #ifndef TR_BOARD_V9
 #define TR_BOARD_V9 0
 #endif
-// TR_BOARD_M1=1 selects board_m1.h — rocket-computer-mini rev1, where the far
-// side of the link is a second ESP32-S3 rather than a P4, the radio is an
-// on-board E220 on the memory SPI bus rather than a UART daughterboard, and
-// there is no camera, servo or separate GNSS rail. The six ESP_* link GPIOs
-// and the memory bus are identical to V9; everything else differs.
-#ifndef TR_BOARD_M1
-#define TR_BOARD_M1 0
+#ifndef TR_BOARD_V10
+#define TR_BOARD_V10 0
+#endif
+// TR_BOARD_M2=1 selects board_m2.h: the Tinker-Beetle V2, in work and not
+// ordered. The far side of the link is a second ESP32-S3 rather than a P4,
+// the radio is an on-board E220 on the memory SPI bus rather than a UART
+// daughterboard, and there is no camera, servo or separate GNSS rail. The
+// V1's two-S3 board with seven of this processor's signals on other pads (the
+// 2026-11-21 layout move) and an ESP32-S3FH4R2 whose boot flash is the 4 MB
+// in its package; an M2 build declares 4 MB with a partition table of its own
+// (sdkconfig.defaults.flash4mb). The V1 (rev1) is retired and has no build
+// here.
+#ifndef TR_BOARD_M2
+#define TR_BOARD_M2 0
 #endif
 // No default (#834 sweep). main/CMakeLists.txt raises the same error with a
 // friendlier message; this is the backstop for anything that includes config.h
 // without going through it.
-#if (TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_M1) != 1
-#error "Set exactly one board revision: -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1 or -DTR_BOARD_M1=1. There is no default — V7's PWR_PIN (GPIO6) is ESP_SCL on every later board, V9/V10 needs the sdkconfig overlay that enables its PSRAM log ring, and M1 (rocket-computer-mini) drives its radio over SPI where V8/V9 drive a UART daughterboard."
+#if (TR_BOARD_V5 + TR_BOARD_V7 + TR_BOARD_V8 + TR_BOARD_V9 + TR_BOARD_V10 + TR_BOARD_M2) != 1
+#error "Set exactly one board revision: -DTR_BOARD_V5=1, -DTR_BOARD_V7=1, -DTR_BOARD_V8=1, -DTR_BOARD_V9=1, -DTR_BOARD_V10=1 or -DTR_BOARD_M2=1. There is no default — V7's PWR_PIN (GPIO6) is ESP_SCL on every later board, V9 and V10 need the sdkconfig overlay that enables the PSRAM log ring, V10's arm needs this processor's consent (GPIO14), and M2 (Tinker-Beetle V2) drives its radio over SPI where V8/V9/V10 drive a UART daughterboard."
 #endif
 // TR_BOARD_REV_STR names the board in log lines. It sits next to the header it
 // describes, as in the flight computer's config.h, so the two cannot disagree.
@@ -50,13 +64,19 @@
 #define TR_BOARD_REV_STR "V8"
 #elif TR_BOARD_V9
 #include "board/board_v9.h"
-#define TR_BOARD_REV_STR "V9/V10"
-#elif TR_BOARD_M1
-#include "board/board_m1.h"
-#define TR_BOARD_REV_STR "M1 (rocket-computer-mini)"
+#define TR_BOARD_REV_STR "V9"
+#elif TR_BOARD_V10
+#include "board/board_v10.h"
+#define TR_BOARD_REV_STR "V10"
+#elif TR_BOARD_M2
+#include "board/board_m2.h"
+#define TR_BOARD_REV_STR "M2 (Tinker-Beetle V2)"
 #elif TR_BOARD_V7
 #include "board/legacy/board_v7.h"
 #define TR_BOARD_REV_STR "V7"
+#elif TR_BOARD_V5
+#include "board/legacy/board_v5.h"
+#define TR_BOARD_REV_STR "V5"
 #else
 #error "This board flag selects no board header: add it to the chain in config.h."
 #endif
@@ -67,38 +87,83 @@
 // -1 on a V8 board the fitted MRAM simply goes unused. Both are silent. So pin
 // it here — re-aliasing the V9 branch back to board_v8.h, or editing MRAM_CS
 // in the wrong header, then fails the build instead of the flight.
-#if TR_BOARD_M1
-// The mini never had an MRAM to delete — U12 does not exist in its schematic.
+#if TR_BOARD_M2
+// The Beetle never had an MRAM to delete — U12 does not exist in its schematic.
 static_assert(board_pins::MRAM_CS < 0,
-              "rocket-computer-mini has no MRAM (no U12) — board_m1.h must keep MRAM_CS = -1");
+              "the Tinker-Beetle has no MRAM (no U12) — its board header must keep MRAM_CS = -1");
 // The radio is a bare E220 on the memory SPI bus, not a UART daughterboard.
 // Getting this backwards points the modem backend at pins that are -1 and the
 // link simply never comes up, with no obvious symptom at the pin level.
 static_assert(!board_pins::USE_UART_RADIO_MODEM,
-              "rocket-computer-mini drives its radio over SPI — board_m1.h must keep USE_UART_RADIO_MODEM = false");
+              "the Tinker-Beetle drives its radio over SPI — its board header must keep USE_UART_RADIO_MODEM = false");
 static_assert(board_pins::LORA_CS_PIN >= 0 && board_pins::LORA_SPI_SCK >= 0,
-              "board_m1.h: the on-board E220 needs a real chip select and clock");
+              "Tinker-Beetle board header: the on-board E220 needs a real chip select and clock");
 // The E220's RF switch receive-enable MUST be driven; the base station has
 // already been bitten by an RXEN left floating in RX.
 static_assert(board_pins::LORA_RXEN_PIN >= 0,
-              "board_m1.h: L_RXEN reaches a GPIO on this board and must be driven");
+              "Tinker-Beetle board header: L_RXEN reaches a GPIO on this board and must be driven");
 #endif
+
+#if TR_BOARD_M2
+// The seven signals the V2 layout moved (2026-11-21), pinned. Each of these is
+// silent at runtime when wrong: rev1's number drives a bare pad, so the rail
+// never comes up (PWR_PIN), the radio never answers (LORA_CS_PIN, LORA_BUSY_PIN)
+// or the link delivers nothing (the three I2S pins). Re-derive them from a
+// netlist export of the V2 schematic before changing one — V2 is not ordered,
+// and its map can still move.
+static_assert(board_pins::PWR_PIN == 48 && board_pins::LORA_CS_PIN == 47,
+              "board_m2.h: FC_EN_OC is S3 GPIO48 (pad 36) and L_CS is GPIO47 (pad 37) on the Tinker-Beetle V2");
+static_assert(board_pins::I2S_BCLK_PIN == 40 && board_pins::I2S_WS_PIN == 39 &&
+              board_pins::I2S_FSYNC_PIN == 34 && board_pins::I2S_DIN_PIN == 3,
+              "board_m2.h: ESP_I2S_BCLK/WS/FSYNC are S3 GPIO40/39/34 on the Tinker-Beetle V2, and ESP_I2S_SD stays on GPIO3");
+static_assert(board_pins::LORA_BUSY_PIN == 41 && board_pins::LORA_RXEN_PIN == 42,
+              "board_m2.h: L_BUSY is S3 GPIO41 (pad 47) and L_RXEN is GPIO42 (pad 48) on the Tinker-Beetle V2");
+// The two outputs that must stay low through a reset sit behind 100 k
+// pull-downs (R84 on POWER_SWITCH, R142 on L_RXEN). A pad the chip pulls up at
+// reset beats those; of the pads a signal could move to, that is GPIO39 (MTCK)
+// and GPIO43/44 (the ROM console). ESP32-S3 datasheet v2.2, Table 2-1.
+static_assert(board_pins::PWR_PIN != 39 && board_pins::PWR_PIN != 43 && board_pins::PWR_PIN != 44 &&
+              board_pins::LORA_RXEN_PIN != 39 && board_pins::LORA_RXEN_PIN != 43 &&
+              board_pins::LORA_RXEN_PIN != 44,
+              "board_m2.h: FC_EN_OC and L_RXEN must not sit on a pad the chip pulls up at reset");
+#endif
+
+// The GNSS antenna offset (cmd 81) is the flight computer's to keep, and the
+// Beetle's keeps none (RocketComputerTypes.h, F_ANTENNA_FROM_NVS), so on that
+// board this processor neither stages one nor reads one back, and the apps
+// lock the setting. M2 follows the V1, as the V2's flight computer does
+// (flight_computer config.h, TR_FC_ANTENNA_OFFSET): the two must agree, or one
+// processor stages a setting the other never reads back.
+#define TR_OC_ANTENNA_OFFSET (!TR_BOARD_M2)
 
 #if TR_BOARD_V9
 static_assert(board_pins::MRAM_CS < 0,
-              "V9/V10 deleted the MRAM (U12) — board_v9.h must keep MRAM_CS = -1 (#822)");
+              "V9 deleted the MRAM (U12) — board_v9.h must keep MRAM_CS = -1 (#822)");
+#elif TR_BOARD_V10
+static_assert(board_pins::MRAM_CS < 0,
+              "V10 has no MRAM (U12) — board_v10.h must keep MRAM_CS = -1 (#822)");
+// #1593: the V10's arm is a two-processor vote, and OC_ARM_EN is ours. -1 here
+// compiles consent out, and the board then cannot fire a channel at all (the
+// Beetle's #1168 bug, rebuilt). The INA230 alert edge is the fault trip's
+// interrupt path (#1553).
+static_assert(board_pins::ARM_CONSENT_PIN == 14,
+              "board_v10.h: OC_ARM_EN is S3 GPIO14 — re-derive it from the netlist before changing it (#1593)");
+static_assert(board_pins::INA_ALERT_PIN == 18,
+              "board_v10.h: INA_ALERT is S3 GPIO18 (#1553, #1593)");
+static_assert(board_pins::PG_RAIL_PIN == 17 && board_pins::VBUCK_OK_PIN == 34,
+              "board_v10.h: PG_RAIL is S3 GPIO17 and VBUCK_OK is GPIO34 (#1593)");
 #elif TR_BOARD_V8
 static_assert(board_pins::MRAM_CS == 34,
               "V8 bench boards have the MRAM fitted on GPIO34 — do not change this (#822)");
 #endif
 
 // #1166: the hold-up cap sense (V_SCAP_ADC, R125/R126) reaches this processor
-// on the mini, and its verdict is the only thing on the board that reports a
+// on the Beetle, and its verdict is the only thing on the board that reports a
 // hold-up that silently is not there.  Setting the pin to -1 there would
 // compile the monitor out and bring that silence back.
-#if TR_BOARD_M1
+#if TR_BOARD_M2
 static_assert(board_pins::SCAP_ADC_PIN >= 0,
-              "board_m1.h: V_SCAP_ADC reaches the out computer on the mini and must be read (#1166)");
+              "Tinker-Beetle board header: V_SCAP_ADC reaches the out computer on the Beetle and must be read (#1166)");
 #endif
 // Wherever the sense exists it must sit on ADC1 (GPIO1-10 on the S3): ADC2 is
 // unusable with the radio up, and a wrong pad reads a floating input as a
@@ -106,10 +171,27 @@ static_assert(board_pins::SCAP_ADC_PIN >= 0,
 static_assert(board_pins::SCAP_ADC_PIN < 0 ||
               (board_pins::SCAP_ADC_PIN >= 1 && board_pins::SCAP_ADC_PIN <= 10),
               "SCAP_ADC_PIN must be an ADC1 pad (GPIO1-10) or -1 (#1166)");
+// #1409: one source per board. A sense line here AND the flight computer's
+// relayed reading would be two verdicts fighting over one telemetry key.
+static_assert(!(board_pins::SCAP_FROM_FC && board_pins::SCAP_ADC_PIN >= 0),
+              "SCAP_FROM_FC and SCAP_ADC_PIN are exclusive: the cap is read on one processor (#1409)");
+#if TR_BOARD_V10
+// The V10's (and V11's) V_SCAP_ADC is P4 GPIO17: the flight computer reads it
+// and this processor judges it. false here would put the V10 back to "scap"
+// absent and the hold-up unwatched.
+static_assert(board_pins::SCAP_FROM_FC,
+              "board_v10.h: V_SCAP_ADC reaches the flight computer, which relays it — SCAP_FROM_FC (#1409)");
+#endif
 // #1553: the INA230 alert edge drops OC_ARM_EN, so it means nothing on a board
 // with no consent pin to drop.
 static_assert(board_pins::INA_ALERT_PIN < 0 || board_pins::ARM_CONSENT_PIN >= 0,
               "INA_ALERT_PIN is the fault-current trip's input: it needs ARM_CONSENT_PIN (#1553)");
+// The consent output must not be an ESP32-S3 strapping pad (GPIO0, 3, 45, 46):
+// setup_oc drives it low, and a strap held at a level by the arm chain could
+// change how the board boots.
+static_assert(board_pins::ARM_CONSENT_PIN != 0 && board_pins::ARM_CONSENT_PIN != 3 &&
+              board_pins::ARM_CONSENT_PIN != 45 && board_pins::ARM_CONSENT_PIN != 46,
+              "ARM_CONSENT_PIN landed on an ESP32-S3 strapping pad");
 
 struct config : board_pins
 {
@@ -204,7 +286,21 @@ struct config : board_pins
     // still reads an older FC clocking at 44100; the reverse does not hold.
     static constexpr uint32_t I2S_SAMPLE_RATE = I2S_LINK_SAMPLE_RATE_HZ;
 
-    // #1484: the mini's E220 rides the memory bus (board_m1.h wires LORA_SPI_*
+    // The one usable ESP32-S3 pad that comes out of reset pulled UP without
+    // being a console or strapping pad: MTCK, GPIO39. The chip turns on its
+    // weak pull-up (45 k typical) after every reset while EFUSE_DIS_PAD_JTAG is
+    // unburnt (datasheet v2.2, Table 2-1 note 7), and no driver turns it off.
+    // A flight-computer link net on that pad feeds about 60 uA into the
+    // unpowered flight computer for the whole pad standby, so setup_oc() turns
+    // the pull off at boot on a board that has one there. That is the
+    // Tinker-Beetle V2 (ESP_I2S_WS, board_m2.h) and no other board.
+    static constexpr int S3_MTCK_GPIO = 39;
+    static constexpr bool LINK_NET_ON_MTCK =
+        I2S_BCLK_PIN == S3_MTCK_GPIO || I2S_WS_PIN == S3_MTCK_GPIO ||
+        I2S_DIN_PIN == S3_MTCK_GPIO || I2S_FSYNC_PIN == S3_MTCK_GPIO ||
+        I2C_SDA_PIN == S3_MTCK_GPIO || I2C_SCL_PIN == S3_MTCK_GPIO;
+
+    // #1484: the Beetle's E220 rides the memory bus (board_m2.h wires LORA_SPI_*
     // to SPI_*). A radio there must join the NAND's host (SPI2) as a second
     // device. Starting SPI3 on the same pins re-routes the pads and leaves the
     // NAND's host with no clock, which silently drops every write after the
@@ -245,11 +341,16 @@ struct config : board_pins
     static constexpr uint8_t DEFAULT_ROCKET_ID  = 1;
     static constexpr const char* DEVICE_TYPE     = "R";  // "R" = rocket
 
-    // --- #1166: hold-up supercap health (rocket-computer-mini) ---
+    // --- #1166: hold-up supercap health (the Tinker-Beetle, V10/V11) ---
     // SCAP_ADC_PIN / SCAP_DIVIDER_RATIO come from the board header (-1 on
     // boards without the sense line).  The TPS61094 charges C130 (5 F) at
     // 100 mA to a 2.5 V termination — about two minutes from empty — and
     // nothing else on the board reports whether it did (holdup_policy.h).
+    // #1409: on the Tinker-Mantis V10/V11 (SCAP_FROM_FC) the sense line is the
+    // flight computer's; it sends its reading in every FC_STATUS_MSG, and the
+    // same rules below run on that.  C130 is 2 F there: ~50 s from empty.
+    // With no FC_STATUS_MSG for FC_FRAME_STALE_MS (the FC rail off, a reboot)
+    // the verdict is withheld, not judged on a stale number.
     //   CHARGED_V: at or above this the backup is there (2.2 V of the 2.5 V
     //     termination is 77 % of the energy).
     //   LOW_ADVISORY_MS: after this long continuously under CHARGED_V the OC

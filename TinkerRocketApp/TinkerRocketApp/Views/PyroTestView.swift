@@ -459,7 +459,10 @@ struct PyroTestView: View {
                 // permanently; the rocket's own LoRa cmd-36 refusal and the
                 // pyroCommandPathReady freshness check guard that path.
                 let railOff = !device.isBaseStation && !device.telemetry.pwr_pin_on
-                let canFire = device.isConnected && !railOff
+                // Two rockets answering to the focused rocket ID would both
+                // take a relayed fire (sendPyroFire refuses it as well).
+                let idShared = device.focusedRocketIDShared
+                let canFire = device.isConnected && !railOff && !idShared
                 Button(action: startCountdown) {
                     Text("FIRE")
                         .font(.title2.weight(.heavy))
@@ -472,6 +475,13 @@ struct PyroTestView: View {
                     Label("Rocket power is off", systemImage: "bolt.slash")
                         .font(.headline)
                         .foregroundColor(.orange)
+                }
+                if idShared {
+                    Label("Two rockets may be using this rocket ID — pyro commands are blocked",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.headline)
+                        .foregroundColor(.red)
+                        .multilineTextAlignment(.center)
                 }
 
             case .countdown:

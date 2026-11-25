@@ -23,6 +23,10 @@
  "size": 10,
  "notes": "IIS2MDCData, msg 0xD1"},
  {
+ "file": "logframes/ocidentity_68.bin",
+ "size": 68,
+ "notes": "OcIdentityData v1, msg 0x87 (#1658): OC-self, ~1 Hz while logging; unit_name fills all 20 bytes with no NUL"},
+ {
  "file": "logframes/power_14.bin",
  "size": 14,
  "notes": "POWERData v2 (+cam_ma +servo_ma), msg 0xA6"},
@@ -100,8 +104,12 @@
  "notes": "FlightSettingsData version-ladder truncation of the v9 image"},
  {
  "file": "csv/bs_tiny.bin",
- "size": 868,
+ "size": 870,
  "notes": "base-station binary log built with the real packers; the CSV golden generated from it lives in tests_cpp/fixtures/csv_golden/ (app output, not emitter output)"},
+ {
+ "file": "csv/bs_tiny_v5.bin",
+ "size": 868,
+ "notes": "bs_tiny.bin as a v5 rocket sent it (version 5, 22-byte slow frames with no status byte); a v6 reader must render the same CSV, bs_tiny.expected.csv"},
  {
  "file": "framed/stream_good.bin",
  "size": 455,
@@ -154,6 +162,18 @@
  "file": "fileops/padcal_0xD0_40.bin",
  "size": 41,
  "notes": "PadCalStatusData behind 0xD0 (#1600 phase 5); frame = 41 B"},
+ {
+ "file": "fileops/accelcal_0xD1_40.bin",
+ "size": 41,
+ "notes": "AccelCalStatusData behind 0xD1 (#1629); frame = 41 B"},
+ {
+ "file": "fileops/accelcal_0xD1_114.bin",
+ "size": 115,
+ "notes": "AccelCalStatusFrame behind 0xD1: AccelCalStatusData then AccelCalHighGStatus; frame = 115 B"},
+ {
+ "file": "fileops/sdralign_0xD2_111.bin",
+ "size": 112,
+ "notes": "SdrAlignStatusData behind 0xD2; frame = 112 B"},
  {
  "file": "commands/cmd05_simconfig_16.bin",
  "size": 17,
@@ -235,13 +255,25 @@
  "size": 19,
  "notes": "SensorCalApplyData"},
  {
+ "file": "commands/cmd76_accelcal_12.bin",
+ "size": 13,
+ "notes": "AccelCalApplyData"},
+ {
+ "file": "commands/cmd80_hgcal_49.bin",
+ "size": 50,
+ "notes": "HighGCalApplyData; op 1 store (0 clears the matrix and keeps the bias)"},
+ {
+ "file": "commands/cmd83_sdralign_2.bin",
+ "size": 3,
+ "notes": "SdrAlignCmdData; op 1 save, 2 clear, 3 restart, 4 report; the app's id"},
+ {
  "file": "commands/cmd64_imuorient_auto.bin",
  "size": 2,
  "notes": "ImuOrientConfigData; 0xFF = auto, else orientation code 0..23"},
  {
- "file": "commands/cmd65_guidance_45.bin",
- "size": 46,
- "notes": "GuidanceConfigData: first 36 bytes FROZEN, append-only (#534); a 45-B-era FC rejects a 36-B frame — ship in lockstep"},
+ "file": "commands/cmd65_guidance_53.bin",
+ "size": 54,
+ "notes": "GuidanceConfigFrame: GuidanceConfigData (first 36 bytes FROZEN, #534) + tilt limits appended at 45; the 45-B v2 frame is a prefix — ship in lockstep"},
  {
  "file": "commands/cmd66_fin_18.bin",
  "size": 19,
@@ -250,6 +282,14 @@
  "file": "commands/cmd67_imurate_2.bin",
  "size": 3,
  "notes": "ImuRateConfigData; valid values 960/1920/3840"},
+ {
+ "file": "commands/cmd79_gnsslog_1.bin",
+ "size": 2,
+ "notes": "GnssLogConfigData; 0 detailed, 1 reduced"},
+ {
+ "file": "commands/cmd81_antenna_7.bin",
+ "size": 8,
+ "notes": "AntennaOffsetConfigData; known 0 unknown (all 0), 1 measured: board-frame mm, each within +-2000"},
  {
  "file": "commands/cmd75_padcal_10.bin",
  "size": 11,
@@ -260,7 +300,7 @@
  "notes": "OTA_BEGIN; cmds 70-72 dispatch inside TR_BLE_To_APP.cpp, not main.cpp"},
  {
  "file": "csv/tiny_flight.bin",
- "size": 29665,
+ "size": 29741,
  "notes": "synthetic mini-device flight for the bin→CSV golden; app-generated CSV/summary goldens live in tests_cpp/fixtures/csv_golden/ (outside wire/ — they are app output, not emitter output)"}
  ]
 }

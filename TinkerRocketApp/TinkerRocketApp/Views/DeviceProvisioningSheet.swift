@@ -11,6 +11,9 @@ import SwiftUI
 struct DeviceProvisioningSheet: View {
     @ObservedObject var device: BLEDevice
     @ObservedObject var store: KnownDeviceStore
+    /// The rockets the fleet hears right now also hold IDs — one seen only
+    /// through a base station has no registry record. nil: registry only.
+    var fleet: BLEFleet? = nil
     @Environment(\.dismiss) var dismiss
 
     @State private var nameInput: String = ""
@@ -54,8 +57,14 @@ struct DeviceProvisioningSheet: View {
 
                 if !device.isBaseStation {
                     Section(header: Text("Rocket ID"),
-                            footer: Text("Unique ID within your network (1-254). Each rocket needs a different ID.")) {
+                            footer: Text(rocketIDFooter)) {
                         Stepper("ID: \(rocketIDInput)", value: $rocketIDInput, in: 1...254)
+                        if takenRocketIDs.contains(UInt8(clamping: rocketIDInput)) {
+                            Label("Another rocket on this network uses ID \(rocketIDInput)",
+                                  systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                        }
                     }
                 }
 
@@ -106,12 +115,31 @@ struct DeviceProvisioningSheet: View {
                 if !initialized {
                     // Pre-fill from device's current values
                     nameInput = device.unitName.isEmpty ? device.connectedDeviceName : device.unitName
-                    rocketIDInput = Int(device.rocketID)
-                    if rocketIDInput == 0 { rocketIDInput = 1 }
+                    // Keep the rocket's own ID only while nobody else holds
+                    // it; two rockets under one ID interleave on the base
+                    // station and block each other's pyro commands.
+                    rocketIDInput = Int(KnownDeviceStore.provisioningRocketID(
+                        reported: device.rocketID, taken: takenRocketIDs))
                     initialized = true
                 }
             }
         }
+    }
+
+    /// The network this rocket will be on once saved: the app's, which Save
+    /// pushes, else whatever the rocket already has.
+    private var targetNetworkID: UInt8 {
+        networkID > 0 ? UInt8(clamping: networkID) : device.networkID
+    }
+
+    private var takenRocketIDs: Set<UInt8> {
+        fleet?.rocketIDsInUse(networkID: targetNetworkID, excludingUnitID: device.unitID)
+            ?? store.rocketIDsInUse(networkID: targetNetworkID, excluding: device.unitID)
+    }
+
+    private var rocketIDFooter: String {
+        "Unique ID within your network (1-254). Each rocket needs a different ID. "
+            + "With transmit slots on, the base station gives each rocket its own slot."
     }
 
     private func saveAndDismiss() {

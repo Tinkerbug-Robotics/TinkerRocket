@@ -23,6 +23,15 @@ import Foundation
 @MainActor
 final class FirmwareCatalogSession: ObservableObject {
 
+    // The swiftlang/swift#87316 workaround the other main-actor stores carry
+    // (see OfflineTileCache): an isolated deinit goes through the back-deploy
+    // shim at this deployment target, which double-frees on iOS 26.2 and
+    // aborts the process. Unlike the shared stores, this one IS released in
+    // production — it is the firmware screen's @StateObject — so on iOS 26.2
+    // the app aborted every time the operator left that screen (seen in the
+    // simulator, 2026-10-16; 26.5 and 27.0 are fine). Nothing to do at deinit.
+    nonisolated deinit {}
+
     enum State: Equatable {
         case idle
         /// Talking to GitHub. One API call, then one asset fetch.

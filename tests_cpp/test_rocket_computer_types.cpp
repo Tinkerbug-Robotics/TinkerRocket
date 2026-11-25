@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <initializer_list>
 #include <limits>
@@ -7,6 +8,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 #include "RocketComputerTypes.h"
 #include "GuidancePointGate.h"
 #include "RollProfileGate.h"
@@ -43,14 +45,24 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(sizeof(NonSensorData),  52u);  // #1190: +uint16 shock_gate_trips (2 B) after #529's ekf_ticks
     // #1154 item 4: the FC's own camera truth, 5 Hz on FC_STATUS_MSG.
     // Deliberately NOT a byte in NonSensorData — see FcStatusData.
-    EXPECT_EQ(sizeof(FcStatusData),    5u);
+    // #1409: v2 appends the V10's hold-up cap voltage; v1 (5 B) stays the
+    // length decoders and the out computer must still accept.
+    EXPECT_EQ(sizeof(FcStatusData),    7u);
+    EXPECT_EQ(FC_STATUS_V1_SIZE,       5u);
     EXPECT_EQ(offsetof(FcStatusData, time_us), 0u);
     EXPECT_EQ(offsetof(FcStatusData, flags),   4u);
+    EXPECT_EQ(offsetof(FcStatusData, scap_mv), 5u);
     EXPECT_EQ(sizeof(LoRaFrameHeader), 7u);   // #850: shared prefix, both frames
     EXPECT_EQ(sizeof(LoRaFastData),   55u);  // #850: 5-of-6 slots
-    EXPECT_EQ(sizeof(LoRaSlowData),   22u);  // #850: 1-of-6 slots
+    EXPECT_EQ(sizeof(LoRaSlowData),   23u);  // #850: 1-of-6 slots; v6: + status
     EXPECT_EQ(sizeof(LoRaUplinkData), 13u);  // uplink RSSI/SNR log record (0xF9)
     EXPECT_EQ(sizeof(PyroFaultTripData), 13u);  // #1553 fault-current trip log record (0x94)
+    // #1658: the computer that wrote the log (0x87); the apps and Python read
+    // the strings by these offsets
+    EXPECT_EQ(sizeof(OcIdentityData), 68u);
+    EXPECT_EQ(offsetof(OcIdentityData, unit_id), 8u);
+    EXPECT_EQ(offsetof(OcIdentityData, unit_name), 16u);
+    EXPECT_EQ(offsetof(OcIdentityData, fw_version), 36u);
     EXPECT_EQ(sizeof(GnssRtcmHeader), 5u);      // raw RTCM3 frame record header (0x95)
     // #1600: the raw-GNSS shadow filter's 10 Hz record (0x96); time_us first,
     // as every FC stream, and the fields the ground decoder reads by offset
@@ -82,6 +94,33 @@ TEST(RocketComputerTypes, KnownSizes) {
     EXPECT_EQ(offsetof(PadCalStatusData, pad_lat_e7), 26u);
     EXPECT_EQ(offsetof(PadCalStatusData, pad_alt_mm), 34u);
     EXPECT_EQ(offsetof(PadCalStatusData, pos_sigma_cm), 38u);
+    // #1508: the physics checks on the GNSS (0x9A), log-only
+    EXPECT_EQ(sizeof(GnssCheckData), 24u);
+    EXPECT_EQ(offsetof(GnssCheckData, verdict), 4u);
+    EXPECT_EQ(offsetof(GnssCheckData, span_ms), 6u);
+    EXPECT_EQ(offsetof(GnssCheckData, pos_err_m), 8u);
+    EXPECT_EQ(offsetof(GnssCheckData, vel_tol_mps), 20u);
+    // the raw-GNSS filter's attitude 1-sigma and IMU biases (0x9B), beside 0x96
+    EXPECT_EQ(sizeof(RawGnssAttData), 46u);
+    EXPECT_EQ(offsetof(RawGnssAttData, time_us), 0u);
+    EXPECT_EQ(offsetof(RawGnssAttData, acc_bias_mps2), 10u);
+    EXPECT_EQ(offsetof(RawGnssAttData, acc_bias_sigma_mmps2), 34u);
+    // the IMU's die temperature (0x9C), 1 Hz
+    EXPECT_EQ(sizeof(Ism6TempData), 6u);
+    EXPECT_EQ(offsetof(Ism6TempData, temp_raw), 4u);
+    // the GPS-to-MCU clock line (0x9D), ~1 Hz on LC86G boards
+    EXPECT_EQ(sizeof(GnssClockData), 68u);
+    EXPECT_EQ(offsetof(GnssClockData, gps0_s), 8u);
+    EXPECT_EQ(offsetof(GnssClockData, mcu0_us), 12u);
+    EXPECT_EQ(offsetof(GnssClockData, latency_s), 44u);
+    EXPECT_EQ(offsetof(GnssClockData, flags), 67u);
+    // the heading from thrust (0x9F), each fit (~1 Hz in flight)
+    EXPECT_EQ(sizeof(HeadingFitData), 32u);
+    EXPECT_EQ(offsetof(HeadingFitData, psi_cdeg), 4u);
+    EXPECT_EQ(offsetof(HeadingFitData, bias_mmps2), 12u);
+    EXPECT_EQ(offsetof(HeadingFitData, n), 22u);
+    EXPECT_EQ(offsetof(HeadingFitData, flags), 25u);
+    EXPECT_EQ(offsetof(HeadingFitData, seed_ms), 30u);
     EXPECT_EQ(sizeof(FcBootStatusData), 4u); // FC->OC boot progress (0xFA)
     EXPECT_EQ(sizeof(i24le_t),         3u);
     EXPECT_EQ(sizeof(Vec3i16),         6u);
@@ -90,6 +129,111 @@ TEST(RocketComputerTypes, KnownSizes) {
 // FC boot progress: the app renders a step name and a stall from these, so the
 // enum ordering and the degraded bits are wire contract, not implementation
 // detail.  Append-only — the apps map an unknown step to a generic message.
+// #1409: FcStatusData.scap_mv, the V10/V11's hold-up cap voltage from the
+// flight computer to the out computer.
+TEST(FcStatusScap1409, FlagBitsDoNotOverlap) {
+    EXPECT_EQ(FCS_CAMERA_ENGAGED & FCS_RAW_VOTES_WITHHELD, 0);
+    EXPECT_EQ(FCS_SCAP_SENSE & (FCS_CAMERA_ENGAGED | FCS_RAW_VOTES_WITHHELD), 0);
+    EXPECT_EQ(FCS_SCAP_SENSE, 0x04);
+    EXPECT_EQ(FCS_SCAP_NO_READING, 0xFFFFu);
+}
+
+TEST(FcStatusScap1409, VoltsToFieldRoundsAndNeverReachesTheSentinel) {
+    EXPECT_EQ(fcStatusScapMv(2.5f),    2500u);
+    EXPECT_EQ(fcStatusScapMv(2.2004f), 2200u);
+    EXPECT_EQ(fcStatusScapMv(2.2006f), 2201u);   // rounded, not truncated
+    EXPECT_EQ(fcStatusScapMv(0.0f),    0u);      // an empty cap is a reading
+    EXPECT_EQ(fcStatusScapMv(-0.01f),  0u);
+    EXPECT_EQ(fcStatusScapMv(NAN),     FCS_SCAP_NO_READING);
+    EXPECT_EQ(fcStatusScapMv(70.0f),   FCS_SCAP_NO_READING - 1u);   // clamped under it
+    EXPECT_EQ(fcStatusScapMv(65.535f), FCS_SCAP_NO_READING - 1u);
+}
+
+namespace {
+std::vector<uint8_t> fcStatusBytes(uint8_t flags, uint16_t scap_mv)
+{
+    FcStatusData d{};
+    d.time_us = 123456u;
+    d.flags   = flags;
+    d.scap_mv = scap_mv;
+    std::vector<uint8_t> b(sizeof d);
+    memcpy(b.data(), &d, sizeof d);
+    return b;
+}
+}  // namespace
+
+TEST(FcStatusScap1409, ReportReadsTheV10Reading) {
+    const auto b = fcStatusBytes(FCS_SCAP_SENSE | FCS_CAMERA_ENGAGED, 2487);
+    uint16_t mv = 0;
+    EXPECT_EQ(fcStatusScapReport(b.data(), b.size(), &mv), FC_SCAP_VOLTS);
+    EXPECT_EQ(mv, 2487u);
+    // An empty cap reads 0 mV, a voltage, not "no reading".
+    const auto z = fcStatusBytes(FCS_SCAP_SENSE, 0);
+    mv = 99;
+    EXPECT_EQ(fcStatusScapReport(z.data(), z.size(), &mv), FC_SCAP_VOLTS);
+    EXPECT_EQ(mv, 0u);
+}
+
+TEST(FcStatusScap1409, ASenseWithNoReadingIsNotAVoltage) {
+    const auto b = fcStatusBytes(FCS_SCAP_SENSE, FCS_SCAP_NO_READING);
+    uint16_t mv = 1234;
+    EXPECT_EQ(fcStatusScapReport(b.data(), b.size(), &mv), FC_SCAP_NO_READING);
+    EXPECT_EQ(mv, 1234u);   // untouched
+}
+
+TEST(FcStatusScap1409, NoSenseOrAV1FrameSaysNothing) {
+    // Every board but the V10/V11: the flag is clear, whatever the field holds.
+    const auto v9 = fcStatusBytes(FCS_CAMERA_ENGAGED, FCS_SCAP_NO_READING);
+    EXPECT_EQ(fcStatusScapReport(v9.data(), v9.size(), nullptr), FC_SCAP_ABSENT);
+    const auto stray = fcStatusBytes(0, 2500);
+    EXPECT_EQ(fcStatusScapReport(stray.data(), stray.size(), nullptr), FC_SCAP_ABSENT);
+    // A v1 frame (an FC image older than #1409) is five bytes: no voltage,
+    // whatever its flags say.
+    const auto v1 = fcStatusBytes(FCS_SCAP_SENSE, 2500);
+    EXPECT_EQ(fcStatusScapReport(v1.data(), FC_STATUS_V1_SIZE, nullptr), FC_SCAP_ABSENT);
+    EXPECT_EQ(fcStatusScapReport(nullptr, sizeof(FcStatusData), nullptr), FC_SCAP_ABSENT);
+}
+
+// The gnss-sdr-dev board's IMU aiding (FCS_GNSS_IMU_*, a SensorHealthState in
+// bits 3-4), the apps' "GNSS IMU" dot.
+TEST(FcStatusGnssImu, BitsSitAboveTheOthers) {
+    EXPECT_EQ(FCS_GNSS_IMU_MASK, 0x18);
+    EXPECT_EQ(FCS_GNSS_IMU_MASK & (FCS_CAMERA_ENGAGED | FCS_RAW_VOTES_WITHHELD | FCS_SCAP_SENSE), 0);
+}
+
+TEST(FcStatusGnssImu, SetLeavesTheOtherFlags) {
+    const uint8_t others = FCS_CAMERA_ENGAGED | FCS_RAW_VOTES_WITHHELD | FCS_SCAP_SENSE | 0xE0;
+    for (uint8_t st : {SH_NA, SH_OK, SH_DEGRADED, SH_BAD})
+    {
+        const uint8_t f = fcStatusWithGnssImu(others, st);
+        EXPECT_EQ(f & (uint8_t)~FCS_GNSS_IMU_MASK, others);
+        const auto b = fcStatusBytes(f, 2500);
+        EXPECT_EQ(fcStatusGnssImu(b.data(), b.size()), st);
+        EXPECT_EQ(fcStatusGnssImu(b.data(), FC_STATUS_V1_SIZE), st);   // in v1's flags too
+    }
+    // a new state replaces the old, and only two bits are taken
+    EXPECT_EQ(fcStatusWithGnssImu(fcStatusWithGnssImu(0, SH_BAD), SH_OK), (uint8_t)(SH_OK << FCS_GNSS_IMU_SHIFT));
+    EXPECT_EQ(fcStatusWithGnssImu(0, 0xFF), FCS_GNSS_IMU_MASK);
+}
+
+TEST(FcStatusGnssImu, AnOlderImageOrNoFrameSaysNoBoard) {
+    // An FC image from before this leaves the bits 0: SH_NA, not sent to the apps.
+    const auto old = fcStatusBytes(FCS_CAMERA_ENGAGED | FCS_SCAP_SENSE, 2500);
+    EXPECT_EQ(fcStatusGnssImu(old.data(), old.size()), SH_NA);
+    EXPECT_EQ(fcStatusGnssImu(old.data(), FC_STATUS_V1_SIZE - 1), SH_NA);
+    EXPECT_EQ(fcStatusGnssImu(nullptr, sizeof(FcStatusData)), SH_NA);
+}
+
+TEST(FcStatusScap1409, FieldRoundTripsThroughTheReport) {
+    for (float v : {0.05f, 1.0f, 2.2f, 2.5f, 2.7f})
+    {
+        const auto b = fcStatusBytes(FCS_SCAP_SENSE, fcStatusScapMv(v));
+        uint16_t mv = 0;
+        ASSERT_EQ(fcStatusScapReport(b.data(), b.size(), &mv), FC_SCAP_VOLTS) << v;
+        EXPECT_NEAR(mv * 0.001f, v, 0.0005f) << v;
+    }
+}
+
 TEST(RocketComputerTypes, FcBootStepContract) {
     EXPECT_EQ(FCB_LINKS,      0u);
     EXPECT_EQ(FCB_NVS,        1u);
@@ -98,6 +242,14 @@ TEST(RocketComputerTypes, FcBootStepContract) {
     EXPECT_EQ(FCB_SERVOS,     4u);
     EXPECT_EQ(FCB_COMPLETE,   5u);
     EXPECT_EQ(FCB_STEP_COUNT, 6u);
+    // Rescue mode is a state, not a step: outside the progress range, and the
+    // apps key their rescue wording on this exact value.
+    EXPECT_EQ(FCB_RESCUE,     64u);
+    EXPECT_GT(FCB_RESCUE, FCB_STEP_COUNT);
+    // So is "no flight loop" (the flight task was never created), and the
+    // apps key their "not running" wording on it the same way.
+    EXPECT_EQ(FCB_NO_FLIGHT_LOOP, 65u);
+    EXPECT_GT(FCB_NO_FLIGHT_LOOP, FCB_STEP_COUNT);
     // Degraded bits are independent — a boot can finish with several set.
     EXPECT_EQ(FCB_DEG_SENSORS, 0x01u);
     EXPECT_EQ(FCB_DEG_GNSS,    0x02u);
@@ -298,6 +450,34 @@ TEST(RocketComputerTypes, GuidanceConfigData_Layout) {
     // framed = 4 (sync/hdr) + 1 (type) + 1 (len) + 45 + 2 (crc) = 53, staged
     // after a 10-byte status response inside FC_COMBINED_READ_SIZE (96).
     EXPECT_LE(10u + 4u + 1u + 1u + sizeof(GuidanceConfigData) + 2u, 96u);
+}
+
+TEST(RocketComputerTypes, GuidanceConfigFrame_Layout) {
+    // cmd 65 v3: the 45-byte GuidanceConfigData, then the tilt limits
+    // appended at 45 — unaligned, and that is the point: the v2 frame stays
+    // a byte-exact prefix.
+    EXPECT_EQ(sizeof(GuidanceTiltLimitData), 8u);
+    EXPECT_EQ(offsetof(GuidanceTiltLimitData, tilt_limit_boost_deg), 0u);
+    EXPECT_EQ(offsetof(GuidanceTiltLimitData, tilt_limit_coast_deg), 4u);
+    EXPECT_EQ(sizeof(GuidanceConfigFrame), 53u);
+    EXPECT_EQ(offsetof(GuidanceConfigFrame, config), 0u);
+    EXPECT_EQ(offsetof(GuidanceConfigFrame, tilt),   45u);
+    // Still fits the OC->FC combined-read window: 10 + 4 + 1 + 1 + 53 + 2 = 71.
+    EXPECT_LE(10u + 4u + 1u + 1u + sizeof(GuidanceConfigFrame) + 2u, 96u);
+
+    // A 45-byte frame from an older app, as the OC relays it: copied into a
+    // zeroed frame, the config intact and both limits 0 ("keep yours").
+    GuidanceConfigData g{};
+    g.nav_gain = 4.0f; g.kd_vel_per_s = 1.5f; g.guidance_law = GUIDE_LAW_STATION_KEEP;
+    uint8_t frame[sizeof(GuidanceConfigFrame)] = {};
+    memcpy(frame, &g, sizeof(g));
+    GuidanceConfigFrame f;
+    memcpy(&f, frame, sizeof(f));
+    EXPECT_FLOAT_EQ(f.config.nav_gain, 4.0f);
+    EXPECT_FLOAT_EQ(f.config.kd_vel_per_s, 1.5f);
+    EXPECT_EQ((unsigned)f.config.guidance_law, (unsigned)GUIDE_LAW_STATION_KEEP);
+    EXPECT_EQ(f.tilt.tilt_limit_boost_deg, 0.0f);
+    EXPECT_EQ(f.tilt.tilt_limit_coast_deg, 0.0f);
 }
 
 TEST(RocketComputerTypes, GuidanceLawCodes_MatchGuidanceLibrary) {
@@ -1101,9 +1281,9 @@ TEST(LoraMinValidSnrDb, AcceptsGenuineBorderlinePackets) {
 // field after it — and the app would then display the result as VERIFIED,
 // which is worse than the "cannot verify" state this frame exists to remove.
 TEST(RocketComputerTypes, ConfigReportData_Layout) {
-    // v3 (#1472): v2's 193 bytes (v1's 169 + the 24-byte PyroConfigData)
-    // + the one-byte camera type.
-    EXPECT_EQ(sizeof(ConfigReportData), 194u);
+    // v5: v4's 201 bytes (v3's 194 + the 7-byte GNSS antenna offset) + the
+    // 8-byte guidance tilt limits.
+    EXPECT_EQ(sizeof(ConfigReportData), 209u);
     // Rides the same I2S frame path as everything else FC→OC.
     EXPECT_LE(sizeof(ConfigReportData), MAX_PAYLOAD);
 
@@ -1131,7 +1311,20 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     EXPECT_EQ(offsetof(ConfigReportData, camera_type),      193u);
     EXPECT_EQ(offsetof(ConfigReportData, pyro) + sizeof(PyroConfigData),
               offsetof(ConfigReportData, camera_type));
+    // v4: appended AFTER camera_type, so a v3 report is a byte-exact prefix
+    // of v4 — the OC copies a v3 frame by exactly this many bytes and serves
+    // the OC's cached antenna offset for it.  Move it and a v3 sender is
+    // misparsed, and a v3 FC's zero would read as "unknown".
+    EXPECT_EQ(offsetof(ConfigReportData, antenna),          194u);
     EXPECT_EQ(offsetof(ConfigReportData, camera_type) + sizeof(uint8_t),
+              offsetof(ConfigReportData, antenna));
+    EXPECT_EQ(offsetof(ConfigReportData, antenna) + sizeof(AntennaOffsetConfigData),
+              offsetof(ConfigReportData, guidance_tilt));
+    // v5: appended AFTER antenna, so a v4 report is a byte-exact prefix of
+    // v5 — the OC copies a v4 frame by exactly this many bytes and serves no
+    // config_tilt for it.
+    EXPECT_EQ(offsetof(ConfigReportData, guidance_tilt),    201u);
+    EXPECT_EQ(offsetof(ConfigReportData, guidance_tilt) + sizeof(GuidanceTiltLimitData),
               sizeof(ConfigReportData));
 
     // The starts are the running sum of the nested sizes — spelled out so a
@@ -1142,17 +1335,69 @@ TEST(RocketComputerTypes, ConfigReportData_Layout) {
     EXPECT_EQ(sizeof(GuidanceConfigData), 45u);
     EXPECT_EQ(sizeof(RollProfileData),    76u);
     EXPECT_EQ(sizeof(PyroConfigData),     24u);
+    EXPECT_EQ(sizeof(AntennaOffsetConfigData), 7u);
+    EXPECT_EQ(sizeof(GuidanceTiltLimitData), 8u);
 
     // Flag bits are wire ABI: the OC reads F_ORIENT_FROM_NVS to decide
     // whether to leave the FC's orientation alone or re-push its own, and
     // relays F_PYRO_FROM_NVS to the app as "fnv" so an all-disabled report
     // can be told apart from a board that has never been configured, and
-    // F_CAMERA_FROM_NVS (#1472) as "camfnv" for the same reason.
+    // F_CAMERA_FROM_NVS (#1472) as "camfnv" for the same reason; and reads
+    // F_ANTENNA_FROM_NVS (v4) to re-send its antenna offset to an FC with
+    // none of its own, as it does the orientation.
     // Bit 0 was F_SOUNDS; retired with the piezo and left unassigned.
     EXPECT_EQ(ConfigReportData::F_ORIENT_FROM_NVS,  1u);
     EXPECT_EQ(ConfigReportData::F_PYRO_FROM_NVS,    2u);
     EXPECT_EQ(ConfigReportData::F_CAMERA_FROM_NVS,  3u);
-    EXPECT_EQ(ConfigReportData::VERSION,            3u);
+    EXPECT_EQ(ConfigReportData::F_ANTENNA_FROM_NVS, 4u);
+    EXPECT_EQ(ConfigReportData::VERSION,            5u);
+}
+
+// The OC accepts every older report by copying the length that version
+// implies (its CONFIG_REPORT_MSG handler): each is the whole of the next
+// version's prefix, and a v5 report copied whole carries the antenna and the
+// tilt limits at the offsets the FC wrote them.
+TEST(RocketComputerTypes, ConfigReportData_V5PrefixRoundTrip) {
+    ConfigReportData r;
+    memset(&r, 0, sizeof(r));
+    r.version     = ConfigReportData::VERSION;
+    r.camera_type = CAM_TYPE_GOPRO;
+    r.flags       = (uint8_t)(1U << ConfigReportData::F_ANTENNA_FROM_NVS);
+    r.antenna.known = 1;
+    r.antenna.x_mm  = -12;
+    r.antenna.y_mm  = 34;
+    r.antenna.z_mm  = 2000;
+    r.guidance_tilt.tilt_limit_boost_deg = 25.0f;
+    r.guidance_tilt.tilt_limit_coast_deg = 32.5f;
+    uint8_t wire[sizeof(ConfigReportData)];
+    memcpy(wire, &r, sizeof(r));
+
+    // a v5 OC reading the whole frame
+    ConfigReportData v5 = {};
+    memcpy(&v5, wire, sizeof(v5));
+    EXPECT_FLOAT_EQ(v5.guidance_tilt.tilt_limit_boost_deg, 25.0f);
+    EXPECT_FLOAT_EQ(v5.guidance_tilt.tilt_limit_coast_deg, 32.5f);
+
+    // a v4 sender's frame, copied by v4's length: the antenna arrives, the
+    // tilt limits stay the zeros the OC never serves
+    ConfigReportData v4 = {};
+    memcpy(&v4, wire, offsetof(ConfigReportData, guidance_tilt));
+    EXPECT_EQ(v4.guidance_tilt.tilt_limit_boost_deg, 0.0f);
+    EXPECT_EQ(v4.guidance_tilt.tilt_limit_coast_deg, 0.0f);
+    EXPECT_EQ((unsigned)v4.antenna.known, 1u);
+    EXPECT_EQ((int)v4.antenna.x_mm, -12);
+    EXPECT_EQ((int)v4.antenna.y_mm, 34);
+    EXPECT_EQ((int)v4.antenna.z_mm, 2000);
+    EXPECT_TRUE(antennaOffsetValid(v4.antenna));
+    EXPECT_EQ((unsigned)v4.camera_type, (unsigned)CAM_TYPE_GOPRO);
+
+    // a v3 sender's frame, copied by v3's length: the camera type arrives,
+    // the antenna stays the zero the OC never serves
+    ConfigReportData v3 = {};
+    memcpy(&v3, wire, offsetof(ConfigReportData, antenna));
+    EXPECT_EQ((unsigned)v3.camera_type, (unsigned)CAM_TYPE_GOPRO);
+    EXPECT_EQ((unsigned)v3.antenna.known, 0u);
+    EXPECT_EQ((int)v3.antenna.z_mm, 0);
 }
 
 // --- Flight settings snapshot (#165) ---
@@ -1415,6 +1660,30 @@ TEST(RocketComputerTypes, OutStatusByte_TokenPoweredNeverWithoutReady) {
     }
     EXPECT_NE(outStatusByte(true, true)  & OUT_STATUS_TOKEN_POWERED_BIT, 0);
     EXPECT_EQ(outStatusByte(true, false) & OUT_STATUS_TOKEN_POWERED_BIT, 0);
+}
+
+// CENJARS 2026-11-01: bits 2-3 carry the OC's camera-rail verdict. Same rule as
+// #1188's bit (never without ready), plus DRAWING never without MONITORED: an
+// FC must not read "running" from an OC that cannot see the rail.
+TEST(RocketComputerTypes, OutStatusByte_CameraBits) {
+    EXPECT_EQ(OUT_STATUS_CAM_MONITORED_BIT, 0x04u);
+    EXPECT_EQ(OUT_STATUS_CAM_DRAWING_BIT,   0x08u);
+    // The two-argument form is unchanged: byte-identical to every older OC.
+    EXPECT_EQ(outStatusByte(true, false), 0x01u);
+    EXPECT_EQ(outStatusByte(true, true),  0x03u);
+    EXPECT_EQ(outStatusByte(true, false, true,  false), 0x05u);   // monitored, dark
+    EXPECT_EQ(outStatusByte(true, false, true,  true),  0x0Du);   // monitored, running
+    EXPECT_EQ(outStatusByte(true, true,  true,  true),  0x0Fu);
+    EXPECT_EQ(outStatusByte(true, false, false, true),  0x01u);   // drawing without a monitor drops
+    for (bool tok : {false, true})
+        for (bool mon : {false, true})
+            for (bool draw : {false, true}) {
+                EXPECT_EQ(outStatusByte(false, tok, mon, draw), 0u);        // never without ready
+                EXPECT_NE(outStatusByte(true,  tok, mon, draw), 0u);        // `!= 0` is still "ready"
+                const uint8_t b = outStatusByte(true, tok, mon, draw);
+                EXPECT_EQ((b & OUT_STATUS_CAM_DRAWING_BIT) != 0, mon && draw);
+                EXPECT_EQ((b & OUT_STATUS_TOKEN_POWERED_BIT) != 0, tok);    // independent of the camera
+            }
 }
 
 TEST(RocketComputerTypes, OutStatusQuery_MagType_V6) {
@@ -1795,6 +2064,7 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(SENSOR_CAL_APPLY_PENDING), MT(SENSOR_CAL_APPLY_MSG),
         MT(SENSOR_CAL_READ),          MT(SENSOR_CAL_STATUS_MSG),
         MT(FLIGHT_SETTINGS_MSG),      MT(LOG_BUFFER_STATS_MSG),
+        MT(OC_IDENTITY_MSG),          // #1658: OC→self, the computer that wrote the log
         // OTA relay control block (#8 Phase 4): OC->FC control over I2C
         // (0xE3-0xE6), FC->OC status over I2S (OTA_STATUS_MSG=0xE7).  The
         // sensor-cal block was deliberately moved to 0xE8+ to keep 0xE3-0xE7
@@ -1846,6 +2116,36 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
         MT(PAD_CAL_PENDING),
         MT(PAD_CAL_CONFIG_MSG),
         MT(PAD_CAL_STATUS_MSG),
+        // #1508: the receiver's fix and raw measurements against the IMU, log-only.
+        MT(GNSS_CHECK_MSG),
+        // the raw-GNSS filter's attitude 1-sigma and IMU biases, log-only.
+        MT(RAW_GNSS_ATT_MSG),
+        // the IMU's die temperature, log-only.
+        MT(IMU_TEMP_MSG),
+        // the GPS-to-MCU clock line, log-only.
+        MT(GNSS_CLOCK_MSG),
+        // what a replay needs from the pad, once after launch, log-only.
+        MT(PAD_CONTEXT_MSG),
+        // the heading from thrust, each fit, log-only.
+        MT(HEADING_FIT_MSG),
+        // the low-g accelerometer's six-face hand calibration (#1629): the
+        // apply pair, the read, the face window and the FC's status reply --
+        // the 0x80 block's first codes.
+        MT(ACC_CAL_APPLY_PENDING),    MT(ACC_CAL_APPLY_MSG),
+        MT(ACC_CAL_READ),             MT(ACC_CAL_STATUS_MSG),
+        MT(ACC_FACE_PENDING),
+        // the high-g's six-face alignment to the low-g: the apply pair (BLE 80).
+        MT(HG_CAL_APPLY_PENDING),     MT(HG_CAL_APPLY_MSG),
+        // GNSS log setting (BLE cmd 79): two codes from the top of the 0x80
+        // block.
+        MT(GNSS_LOG_CONFIG_PENDING),  MT(GNSS_LOG_CONFIG_MSG),
+        // GNSS antenna offset (BLE cmd 81): the pair below the GNSS log's.
+        MT(ANTENNA_CONFIG_PENDING),   MT(ANTENNA_CONFIG_MSG),
+        // the gnss-sdr-dev board's IMU on its flight board (BLE cmd 83): the
+        // FC's relay of the board's report and the command pair, after
+        // OC_IDENTITY_MSG.
+        MT(SDR_ALIGN_STATUS_MSG),
+        MT(SDR_ALIGN_CMD_PENDING),    MT(SDR_ALIGN_CMD_MSG),
     };
 #undef MT
 
@@ -1886,7 +2186,28 @@ TEST(RocketComputerTypes, MessageTypeCodes_AllUnique) {
     // 100 = 99 + RAW_GNSS_EKF_MSG (0x96, the raw-GNSS shadow filter, #1600).
     // 103 = 100 + the pad calibration's PAD_CAL_PENDING / PAD_CAL_CONFIG_MSG /
     //       PAD_CAL_STATUS_MSG (0x97-0x99, #1600 phase 5).
-    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 103u)
+    // 104 = 103 + GNSS_CHECK_MSG (0x9A, the physics checks on the GNSS, #1508).
+    // 105 = 104 + RAW_GNSS_ATT_MSG (0x9B, the raw-GNSS filter's attitude 1-sigma).
+    // 106 = 105 + IMU_TEMP_MSG (0x9C, the IMU's die temperature).
+    // 107 = 106 + GNSS_CLOCK_MSG (0x9D, the GPS-to-MCU clock line).
+    // 108 = 107 + PAD_CONTEXT_MSG (0x9E, the pad, written once after launch).
+    // 109 = 108 + HEADING_FIT_MSG (0x9F, the heading from thrust): the 0x90
+    //       block is full; new codes go in 0x09-0x8F.
+    // 114 = 109 + the low-g hand calibration's ACC_CAL_APPLY_PENDING /
+    //       ACC_CAL_APPLY_MSG / ACC_CAL_READ / ACC_CAL_STATUS_MSG /
+    //       ACC_FACE_PENDING (0x80-0x84, #1629).
+    // 116 = 114 + the GNSS log setting pair GNSS_LOG_CONFIG_PENDING /
+    //       GNSS_LOG_CONFIG_MSG (0x8E/0x8F, BLE cmd 79), from the top of
+    //       the 0x80 block.
+    // 118 = 116 + the high-g alignment's HG_CAL_APPLY_PENDING /
+    //       HG_CAL_APPLY_MSG (0x85/0x86, BLE cmd 80).
+    // 120 = 118 + the GNSS antenna offset pair ANTENNA_CONFIG_PENDING /
+    //       ANTENNA_CONFIG_MSG (0x8C/0x8D, BLE cmd 81), below the GNSS log's.
+    // 121 = 120 + OC_IDENTITY_MSG (0x87, #1658), the OC's own record of which
+    //       computer wrote the log, after the high-g pair.
+    // 124 = 121 + the gnss-sdr-dev board's IMU: SDR_ALIGN_STATUS_MSG /
+    //       SDR_ALIGN_CMD_PENDING / SDR_ALIGN_CMD_MSG (0x88-0x8A, BLE cmd 83).
+    EXPECT_EQ(sizeof(codes) / sizeof(codes[0]), 124u)
         << "Message-type count changed: update the registry in this test to "
            "match the '### Message Types from In ESP32 ###' header block.";
 }
@@ -2554,24 +2875,29 @@ TEST(LoraHopChangeAllowed, PrelaunchStillAllowsAnEnable) {
 // ── #1147 item 4: a name beacon must never look like a telemetry frame ──
 //
 // The beacon carries no length field, and the base station disambiguates
-// beacon from telemetry PURELY by length. SIZE_OF_LORA_SLOW is 22, and the
-// beacon is 3 + strlen(name), so a 19-character rocket name produced exactly
-// 22 bytes: the beacon fell through to the telemetry branch, read ver_type
-// from unit_name[2], failed the protocol-version check and was logged as a
-// firmware mismatch. That rocket never appeared in the BS's list.
+// beacon from telemetry PURELY by length. SIZE_OF_LORA_SLOW was 22 (v5), and
+// the beacon is 3 + strlen(name), so a 19-character rocket name produced
+// exactly 22 bytes: the beacon fell through to the telemetry branch, read
+// ver_type from unit_name[2], failed the protocol-version check and was logged
+// as a firmware mismatch. That rocket never appeared in the BS's list. Since
+// v6 (SLOW 23 B, v5's 22 still read) both slow sizes are padded around.
 
 TEST(LoraBeaconPadBytes, NineteenCharacterNameIsThePathologicalCase) {
-    // 3 + 19 == SIZE_OF_LORA_SLOW: the exact reported collision.
-    ASSERT_EQ(SIZE_OF_LORA_SLOW, 22u);
-    EXPECT_EQ(loraBeaconPadBytes(3 + 19), 1u);
-    EXPECT_NE(3 + 19 + loraBeaconPadBytes(3 + 19), SIZE_OF_LORA_SLOW);
+    // 3 + 19 == SIZE_OF_LORA_SLOW_V5: the exact reported collision; 3 + 20 is
+    // v6's, so both step past both.
+    ASSERT_EQ(SIZE_OF_LORA_SLOW_V5, 22u);
+    ASSERT_EQ(SIZE_OF_LORA_SLOW, 23u);
+    EXPECT_EQ(loraBeaconPadBytes(3 + 19), 2u);
+    EXPECT_EQ(loraBeaconPadBytes(3 + 20), 1u);
+    EXPECT_EQ(3 + 19 + loraBeaconPadBytes(3 + 19), 24u);
+    EXPECT_EQ(3 + 20 + loraBeaconPadBytes(3 + 20), 24u);
 }
 
 TEST(LoraBeaconPadBytes, OrdinaryNamesAreNotPadded) {
     // Padding costs a byte of airtime, so it must apply only where needed.
     for (size_t name_len = 1; name_len <= 20; ++name_len) {
         const size_t len = 3 + name_len;
-        if (len == SIZE_OF_LORA_SLOW || len == SIZE_OF_LORA_FAST) continue;
+        if (len == SIZE_OF_LORA_SLOW || len == SIZE_OF_LORA_SLOW_V5 || len == SIZE_OF_LORA_FAST) continue;
         EXPECT_EQ(loraBeaconPadBytes(len), 0u) << "padded a safe name_len "
                                                << name_len;
     }
@@ -2584,6 +2910,7 @@ TEST(LoraBeaconPadBytes, NoReachableNameLengthCanCollideAfterPadding) {
         const size_t len = 3 + name_len + loraBeaconPadBytes(3 + name_len);
         EXPECT_NE(len, SIZE_OF_LORA_FAST) << "name_len " << name_len;
         EXPECT_NE(len, SIZE_OF_LORA_SLOW) << "name_len " << name_len;
+        EXPECT_NE(len, SIZE_OF_LORA_SLOW_V5) << "name_len " << name_len;
     }
 }
 
@@ -2595,6 +2922,8 @@ TEST(LoraBeaconPadBytes, PaddingWouldStepPastTwoAdjacentFrameSizes) {
     const size_t len = SIZE_OF_LORA_FAST + loraBeaconPadBytes(SIZE_OF_LORA_FAST);
     EXPECT_NE(len, SIZE_OF_LORA_FAST);
     EXPECT_NE(len, SIZE_OF_LORA_SLOW);
+    // v6's two slow sizes ARE adjacent: a v5-slow-length beacon clears both.
+    EXPECT_EQ(SIZE_OF_LORA_SLOW_V5 + loraBeaconPadBytes(SIZE_OF_LORA_SLOW_V5), SIZE_OF_LORA_SLOW + 1);
 }
 
 TEST(LoraBeaconPadBytes, TheBaseStationStillReadsTheSameName) {
@@ -2613,7 +2942,7 @@ TEST(LoraBeaconPadBytes, TheBaseStationStillReadsTheSameName) {
     memcpy(&beacon[3], nineteen, 19);
     size_t len = 3 + 19;
     len += loraBeaconPadBytes(len);          // the OC's padding, verbatim
-    ASSERT_EQ(len, 23u);
+    ASSERT_EQ(len, 24u);
 
     // The base station's extraction, verbatim.
     char received[24] = {};
@@ -2623,6 +2952,41 @@ TEST(LoraBeaconPadBytes, TheBaseStationStillReadsTheSameName) {
     received[name_len] = '\0';
 
     EXPECT_STREQ(received, nineteen);
+}
+
+// ── LoRa v6: which frames the base station reads as telemetry ──
+// v6 frames, and a v5 rocket's (the same FAST frame, the SLOW one without its
+// status byte); every other combination is a beacon, corrupt, or another build.
+TEST(LoraTelemetryLenOk, V6AndV5FramesAndNothingElse) {
+    EXPECT_EQ(LORA_PROTO_VERSION, 6u);
+    EXPECT_EQ(LORA_PROTO_VERSION_V5, 5u);
+    EXPECT_TRUE(loraTelemetryLenOk(6, LORA_FRAME_FAST, 55));
+    EXPECT_TRUE(loraTelemetryLenOk(6, LORA_FRAME_SLOW, 23));
+    EXPECT_TRUE(loraTelemetryLenOk(5, LORA_FRAME_FAST, 55));
+    EXPECT_TRUE(loraTelemetryLenOk(5, LORA_FRAME_SLOW, 22));
+    EXPECT_FALSE(loraTelemetryLenOk(6, LORA_FRAME_SLOW, 22));   // v6 always sends the byte
+    EXPECT_FALSE(loraTelemetryLenOk(5, LORA_FRAME_SLOW, 23));   // v5 never had it
+    EXPECT_FALSE(loraTelemetryLenOk(6, LORA_FRAME_SLOW, 55));   // type and length disagree
+    EXPECT_FALSE(loraTelemetryLenOk(6, LORA_FRAME_FAST, 23));
+    EXPECT_FALSE(loraTelemetryLenOk(4, LORA_FRAME_FAST, 55));   // another build's
+    EXPECT_FALSE(loraTelemetryLenOk(7, LORA_FRAME_SLOW, 23));
+    EXPECT_FALSE(loraTelemetryLenOk(6, 2, 23));                 // no such frame type
+}
+
+TEST(LoraTelemetryLenOk, AV5RocketsLongNameBeaconIsNotTelemetry) {
+    // A v5 rocket pads its beacon only around 22 and 55, so a 20-character
+    // name sends 23 bytes: v6's SLOW length. Its "ver_type" is unit_name[2].
+    uint8_t beacon[32] = {};
+    beacon[0] = LORA_BEACON_SYNC;
+    beacon[2] = 7;
+    memcpy(&beacon[3], "TwentyCharacterNameX", 20);
+    const uint8_t vt = beacon[offsetof(LoRaFrameHeader, ver_type)];
+    EXPECT_FALSE(loraTelemetryLenOk(loraFrameVersion(vt), loraFrameType(vt), 23));
+}
+
+TEST(LoraSlowStatus, TheGnssImuBitsOnly) {
+    EXPECT_EQ(LORA_SLOW_GNSS_IMU_MASK, 0x03u);
+    EXPECT_EQ(SIZE_OF_LORA_SLOW_V5, offsetof(LoRaSlowData, status));
 }
 
 // ============================================================================
@@ -2645,4 +3009,124 @@ TEST(GnssRtcmRecord, PartsCoverTheFrame)
     EXPECT_EQ(gnssRtcmParts(219), 1u);
     EXPECT_EQ(gnssRtcmParts(220), 2u);          // 14 satellites of one constellation
     EXPECT_EQ(gnssRtcmParts(GNSS_RTCM_MAX_FRAME), 5u);
+}
+
+// ============================================================================
+// PAD_CONTEXT_MSG (0x9E): the pad, written once after launch
+// ============================================================================
+// A header, then one kind's body; the covariance and the pad survey in parts.
+// The decoders read these offsets and sizes.
+
+TEST(PadContextRecord, TheKindsAreTheSizesTheDecodersRead)
+{
+    EXPECT_EQ(sizeof(PadContextHeader), 7u);
+    EXPECT_EQ(offsetof(PadContextHeader, kind), 4u);
+    EXPECT_EQ(offsetof(PadContextHeader, parts), 6u);
+    EXPECT_EQ(sizeof(PadContextCal), 41u);
+    EXPECT_EQ(offsetof(PadContextCal, hg_bias_mps2), 6u);
+    EXPECT_EQ(offsetof(PadContextCal, mag_offset_lsb), 18u);
+    EXPECT_EQ(offsetof(PadContextCal, mag_offset_set), 24u);
+    EXPECT_EQ(offsetof(PadContextCal, cal_gravity_mps2), 25u);
+    EXPECT_EQ(offsetof(PadContextCal, mmc_offset_counts), 29u);
+    EXPECT_EQ(sizeof(PadContextNav), 124u);
+    EXPECT_EQ(offsetof(PadContextNav, lla), 4u);
+    EXPECT_EQ(offsetof(PadContextNav, quat), 40u);
+    EXPECT_EQ(offsetof(PadContextNav, clk_bias_m), 80u);
+    EXPECT_EQ(offsetof(PadContextNav, field_ut), 108u);
+    EXPECT_EQ(offsetof(PadContextNav, iono), 112u);
+    EXPECT_EQ(offsetof(PadContextNav, iono_gps_day), 120u);
+    EXPECT_EQ(offsetof(PadContextNav, flags), 123u);
+    EXPECT_EQ(sizeof(PadSurveyEntry), 6u);
+    EXPECT_EQ(offsetof(PadContextSurvey, rms_m), 4u);
+    EXPECT_EQ(offsetof(PadContextSurvey, n), 12u);
+    EXPECT_EQ(offsetof(PadContextSurvey, e), 13u);
+}
+
+TEST(PadContextRecord, ThePartsCoverTheCovarianceAndFitAFrame)
+{
+    EXPECT_EQ(PCX_COV_VALUES, 190);            // 19 error states' upper triangle
+    EXPECT_EQ(padContextCovWireSize(PCX_COV_PER_PART), sizeof(PadContextCov));
+    EXPECT_EQ(padContextCovWireSize(190 - 3 * 48), 188u);   // the last of four parts: 46 values
+    EXPECT_EQ(padContextSurveyWireSize(PCX_SURVEY_PER_PART), sizeof(PadContextSurvey));
+    EXPECT_EQ(padContextSurveyWireSize(0), 13u);            // the summary alone
+    EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextNav), MAX_PAYLOAD);
+    EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextCov), MAX_PAYLOAD);
+    EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextSurvey), MAX_PAYLOAD);
+    EXPECT_LE(sizeof(PadContextHeader) + PCX_EPH_MAX_FRAME, MAX_PAYLOAD);
+}
+
+// #1629: the low-g accelerometer's hand calibration rides the OC<->FC link and
+// BLE byte for byte -- tools/accel_cal_six_face.py packs and unpacks these.
+TEST(RocketComputerTypes, AccelCalStructsKeepTheirWireSizes) {
+    EXPECT_EQ(sizeof(AccelCalApplyData), 12u);
+    EXPECT_EQ(sizeof(AccelCalStatusData), 40u);
+    EXPECT_EQ(sizeof(PadContextAcc), 13u);
+    EXPECT_EQ(offsetof(AccelCalStatusData, offset_mps2), 2u);
+    EXPECT_EQ(offsetof(AccelCalStatusData, face_mean_mps2), 14u);
+    EXPECT_EQ(offsetof(AccelCalStatusData, face_sd_mps2), 26u);
+    EXPECT_EQ(offsetof(AccelCalStatusData, face_n), 38u);
+    EXPECT_NE(PCX_ACC, PCX_CAL);
+    EXPECT_NE(PCX_ACC, PCX_EPH);
+}
+
+// The gnss-sdr-dev board's IMU on its flight board: the FC's relay of the
+// board's report (0xD2 on file-ops) and the command payload (BLE 83) -- both
+// apps unpack and pack these byte for byte.
+TEST(RocketComputerTypes, SdrAlignStructsKeepTheirWireSizes) {
+    EXPECT_EQ(sizeof(SdrAlignCmdData), 2u);
+    EXPECT_EQ(offsetof(SdrAlignCmdData, id), 1u);
+    EXPECT_EQ(sizeof(SdrAlignStatusData), 111u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, flags), 1u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, cal_axes), 7u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, cmd_id), 12u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, fc_cmd_state), 15u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, rests_sent), 18u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, rest_age_ds), 19u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, board_age_ds), 21u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, spread_deg), 23u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, q), 35u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, scale), 51u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, bias_mps2), 63u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, pose_dir), 75u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, pose_pairs), 99u);
+    EXPECT_EQ(offsetof(SdrAlignStatusData, moved_deg), 107u);
+    EXPECT_LE(sizeof(SdrAlignStatusData), MAX_PAYLOAD);
+}
+
+// The high-g's six-face alignment: its apply payload (BLE 80), the high-g
+// part an FC sends after AccelCalStatusData, and its pad-context record --
+// the apps and tools/accel_cal_six_face.py pack and unpack these byte for byte.
+TEST(RocketComputerTypes, HighGCalStructsKeepTheirWireSizes) {
+    EXPECT_EQ(sizeof(HighGCalApplyData), 49u);
+    EXPECT_EQ(offsetof(HighGCalApplyData, matrix), 1u);
+    EXPECT_EQ(offsetof(HighGCalApplyData, bias_mps2), 37u);
+    EXPECT_EQ(sizeof(AccelCalHighGStatus), 74u);
+    EXPECT_EQ(offsetof(AccelCalHighGStatus, face_hg_sd_mps2), 12u);
+    EXPECT_EQ(offsetof(AccelCalHighGStatus, hg_flags), 24u);
+    EXPECT_EQ(offsetof(AccelCalHighGStatus, hg_bias_src), 25u);
+    EXPECT_EQ(offsetof(AccelCalHighGStatus, hg_matrix), 26u);
+    EXPECT_EQ(offsetof(AccelCalHighGStatus, hg_bias_mps2), 62u);
+    // the low-g's 40 bytes first, unchanged, so an older app or out computer
+    // reads (or relays) them as before
+    EXPECT_EQ(sizeof(AccelCalStatusFrame), 114u);
+    EXPECT_EQ(offsetof(AccelCalStatusFrame, lg), 0u);
+    EXPECT_EQ(offsetof(AccelCalStatusFrame, hg), sizeof(AccelCalStatusData));
+    EXPECT_LE(sizeof(AccelCalStatusFrame), MAX_PAYLOAD);
+    EXPECT_EQ(sizeof(PadContextHg), 37u);
+    EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextHg), MAX_PAYLOAD);
+    EXPECT_NE(PCX_HG, PCX_ACC);
+    EXPECT_NE(PCX_HG, PCX_EPH);
+    // the GNSS antenna's offset beside them (BLE cmd 81): the setting, the
+    // filter's frame, whether the filter used it, and the one it flew with
+    EXPECT_EQ(sizeof(PadContextAnt), 33u);
+    EXPECT_EQ(offsetof(PadContextAnt, board_mm), 1u);
+    EXPECT_EQ(offsetof(PadContextAnt, body_m), 7u);
+    EXPECT_EQ(offsetof(PadContextAnt, used), 19u);
+    EXPECT_EQ(offsetof(PadContextAnt, applied_known), 20u);
+    EXPECT_EQ(offsetof(PadContextAnt, applied_body_m), 21u);
+    EXPECT_LE(sizeof(PadContextHeader) + sizeof(PadContextAnt), MAX_PAYLOAD);
+    EXPECT_NE(PCX_ANT, PCX_HG);
+    EXPECT_NE(PCX_ANT, PCX_EPH);
+    // the OC stages config payloads behind its status frame in one 96-byte read
+    EXPECT_LE(sizeof(HighGCalApplyData), 76u);
 }

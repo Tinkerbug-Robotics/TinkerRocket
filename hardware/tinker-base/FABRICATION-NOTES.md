@@ -1,5 +1,19 @@
 # Tinker-Base (base station) — fabrication and assembly notes
 
+> **V2 in work (2026-10-29):** everything below is V1, as ordered
+> (`tinker-base-v1.0.0`). V2 drops the WLCSP `U1` for an in-package-flash
+> ESP32-S3FH4R2 and adds a SOP-8 log flash, `U23`. Before a V2 order, rewrite
+> every `U1` line in the order block: items 2 and 7, the tightest stencil
+> aperture, and the WLCSP orientation note. The *Stencil* and *Assembly*
+> paragraphs after the block need the same rewrite. `J2` is now the GCT
+> USB4110-GF-A (all-SMT shell, two 0.65 mm NPTH pegs), so item 6's shell slots,
+> the J2 hand-solder step, `BT2`'s 0.84 mm note and the J2 line under the
+> stencil notes change too. `U9` is now the fixed 3.3 V TPS62152RGTR, so add
+> this line to the block: "U9 must be TPS62152RGTR, LCSC C2070611. Do not
+> substitute TPS62150, TPS62151 or TPS62153: same footprint, wrong output." A
+> V1 board ran its 3.3 V rail at 6.4 V, probably from a TPS63021 fitted in
+> place of the TPS63020. See *Status* in [`README.md`](README.md).
+
 **Paste the block below into the fab's order notes verbatim.**
 
 It exists because none of it can travel in the design files. Surface finish, via treatment, the deliberate antenna void

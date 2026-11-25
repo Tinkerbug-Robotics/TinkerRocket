@@ -209,6 +209,108 @@ class TelemetryDispatchTest {
     }
 
     @Test
+    fun `config glog lands only for the two settings`() {
+        // The GNSS log setting (cmd 79): 0 detailed, 1 reduced. Absent on
+        // firmware that has no such setting, which the settings screen reads
+        // as "this rocket can't change it".
+        assertEquals(0, config("""{"type":"config","glog":0}""").gnssLogSetting)
+        assertEquals(1, config("""{"type":"config","glog":1}""").gnssLogSetting)
+        assertNull(config("""{"type":"config","glog":2}""").gnssLogSetting)
+        assertNull(config("""{"type":"config","glog":-1}""").gnssLogSetting)
+        assertNull(config("""{"type":"config"}""").gnssLogSetting)
+    }
+
+    @Test
+    fun `config antenna offset lands only whole and in range`() {
+        // The GNSS antenna offset (cmd 81): "antk" 0/1 and "antx"/"anty"/
+        // "antz" in mm, each within -2000..2000. All four absent on firmware
+        // that has no such setting, which the settings screen reads as "this
+        // rocket can't change it"; anything partial or refused reads the same.
+        assertEquals(
+            AntennaOffset(true, 312, -25, 4),
+            config("""{"type":"config","antk":1,"antx":312,"anty":-25,"antz":4}""").antennaOffset,
+        )
+        assertEquals(
+            AntennaOffset.UNKNOWN,
+            config("""{"type":"config","antk":0,"antx":0,"anty":0,"antz":0}""").antennaOffset,
+        )
+        assertEquals(
+            AntennaOffset(true, -2000, 2000, 0),
+            config("""{"type":"config","antk":1,"antx":-2000,"anty":2000,"antz":0}""").antennaOffset,
+        )
+        // Lenient numbers (flexInt/nsInt): an integral double still lands.
+        assertEquals(
+            AntennaOffset(true, 10, 0, 0),
+            config("""{"type":"config","antk":1,"antx":10.0,"anty":0,"antz":0}""").antennaOffset,
+        )
+        // Unknown carries zeros whatever came with it.
+        assertEquals(
+            AntennaOffset.UNKNOWN,
+            config("""{"type":"config","antk":0,"antx":5,"anty":6,"antz":7}""").antennaOffset,
+        )
+        assertNull(config("""{"type":"config"}""").antennaOffset)
+        assertNull(config("""{"type":"config","glog":0}""").antennaOffset)
+        assertNull(config("""{"type":"config","antk":1,"antx":312,"anty":-25}""").antennaOffset)
+        assertNull(config("""{"type":"config","antx":312,"anty":-25,"antz":4}""").antennaOffset)
+        assertNull(config("""{"type":"config","antk":2,"antx":0,"anty":0,"antz":0}""").antennaOffset)
+        assertNull(config("""{"type":"config","antk":-1,"antx":0,"anty":0,"antz":0}""").antennaOffset)
+        assertNull(config("""{"type":"config","antk":1,"antx":2001,"anty":0,"antz":0}""").antennaOffset)
+        assertNull(config("""{"type":"config","antk":1,"antx":0,"anty":0,"antz":-2001}""").antennaOffset)
+        assertNull(config("""{"type":"config","antk":1,"antx":"12","anty":0,"antz":0}""").antennaOffset)
+        assertNull(config("""{"type":"config","antk":1,"antx":1.5,"anty":0,"antz":0}""").antennaOffset)
+    }
+
+    @Test
+    fun `config antenna offset says whose report it is`() {
+        // "antsrc": "fc" when the four keys are the flight computer's own
+        // report, "oc" when they are the out computer's copy of the last
+        // cmd 81 it relayed (the rail off, or a flight computer too old to
+        // report it). Only "fc" counts; absent is an out computer that
+        // predates the key, which can only hold its copy.
+        val fc = config("""{"type":"config","antk":1,"antx":312,"anty":-25,"antz":4,"antsrc":"fc"}""")
+        assertEquals(AntennaOffset(true, 312, -25, 4), fc.antennaOffset)
+        assertTrue(fc.antennaOffsetFromFlightComputer)
+
+        val oc = config("""{"type":"config","antk":1,"antx":312,"anty":-25,"antz":4,"antsrc":"oc"}""")
+        assertEquals(AntennaOffset(true, 312, -25, 4), oc.antennaOffset)
+        assertFalse(oc.antennaOffsetFromFlightComputer)
+
+        val absent = config("""{"type":"config","antk":0,"antx":0,"anty":0,"antz":0}""")
+        assertEquals(AntennaOffset.UNKNOWN, absent.antennaOffset)
+        assertFalse(absent.antennaOffsetFromFlightComputer)
+
+        assertFalse(config("""{"type":"config","antk":0,"antx":0,"anty":0,"antz":0,"antsrc":"FC"}""")
+            .antennaOffsetFromFlightComputer)
+        assertFalse(config("""{"type":"config","antk":0,"antx":0,"anty":0,"antz":0,"antsrc":1}""")
+            .antennaOffsetFromFlightComputer)
+        // No offset, nothing to vouch for.
+        val none = config("""{"type":"config","antsrc":"fc"}""")
+        assertNull(none.antennaOffset)
+        assertFalse(none.antennaOffsetFromFlightComputer)
+        // A fresh readback says it again: the source never carries over.
+        assertFalse(config("""{"type":"config","antk":0,"antx":0,"anty":0,"antz":0}""", previous = fc)
+            .antennaOffsetFromFlightComputer)
+    }
+
+    @Test
+    fun `antenna offset typed millimeters`() {
+        assertEquals(312, AntennaOffset.parseMm("312"))
+        assertEquals(-25, AntennaOffset.parseMm("-25"))
+        assertEquals(4, AntennaOffset.parseMm(" 4 "))
+        assertEquals(2000, AntennaOffset.parseMm("2000"))
+        assertEquals(-2000, AntennaOffset.parseMm("-2000"))
+        assertNull(AntennaOffset.parseMm("2001"))
+        assertNull(AntennaOffset.parseMm("-2001"))
+        assertNull(AntennaOffset.parseMm("12.5"))
+        assertNull(AntennaOffset.parseMm(""))
+        assertNull(AntennaOffset.parseMm("abc"))
+        assertNull(AntennaOffset.parseMm("99999999999999999999"))
+        assertEquals("X 312, Y -25, Z 4 mm", AntennaOffset(true, 312, -25, 4).label)
+        assertEquals("Unknown", AntennaOffset.UNKNOWN.label)
+        assertEquals(AntennaOffset.UNKNOWN, AntennaOffset.of(false, 1, 2, 3))
+    }
+
+    @Test
     fun `config absent lora keys read as null`() {
         val cfg = config("""{"type":"config","sb1":1}""")
         assertNull(cfg.loraFreqMHz)
@@ -406,6 +508,53 @@ class TelemetryDispatchTest {
         assertEquals(listOf("Camera"), cfg.unreportedGroups)
     }
 
+    // ── guidance tilt limits (config_tilt) ────────────────────────────────
+
+    @Test
+    fun `config_tilt carries both tilt limits`() {
+        val msg = assertIs<TelemetryCharMessage.ConfigTilt>(
+            TelemetryDispatch.parse("""{"type":"config_tilt","gtlb":15.0,"gtlc":20.0}"""),
+        )
+        assertEquals(GuidanceTilt(boostDeg = 15f, coastDeg = 20f), msg.tilt)
+    }
+
+    @Test
+    fun `config_tilt missing either key is malformed`() {
+        for (frame in listOf(
+            """{"type":"config_tilt","gtlb":15.0}""",
+            """{"type":"config_tilt","gtlc":20.0}""",
+        )) {
+            assertNull(assertIs<TelemetryCharMessage.ConfigTilt>(TelemetryDispatch.parse(frame)).tilt, frame)
+        }
+    }
+
+    @Test
+    fun `config_guid parses with no tilt frame, and the tilt stays unreported`() {
+        val msg = assertIs<TelemetryCharMessage.ConfigGuid>(
+            TelemetryDispatch.parse(
+                """{"type":"config_guid","gng":3.00,"gma":30.0,"gaf":0.50,"gmf":15.0,"gms":30.0,""" +
+                    """"gcd":0,"gtm":0,"gte":0.0,"gtn":0.0,"gta":0.0,"gkp":0.00,"gkd":0.00,"glw":0}""",
+            ),
+        )
+        assertEquals(3f, msg.extras?.navGain)
+        // A rocket that sent only config_guid has no tilt to report, and the
+        // tilt limits are not a group the #915 re-adopt waits on.
+        val cfg = RocketConfig(
+            servoExtras = RocketServoExtras(0, 0, 0, -60f, 60f, listOf(0f, 90f, 180f, 270f), 0, 0),
+            guidanceExtras = msg.extras,
+            rollWaypoints = emptyList(),
+        )
+        assertNull(cfg.guidanceTilt)
+        assertFalse(cfg.configReportGroupsMissing)
+    }
+
+    @Test
+    fun `a config rebuild keeps the reported tilt`() {
+        val before = RocketConfig(guidanceTilt = GuidanceTilt(25f, 32.5f))
+        val after = config("""{"type":"config","shz":333}""", previous = before)
+        assertEquals(GuidanceTilt(25f, 32.5f), after.guidanceTilt)
+    }
+
     @Test
     fun `config then config_pyro then config keeps both sides`() {
         // The real connect-time sequence: OC pushes config, then config_pyro,
@@ -459,6 +608,28 @@ class TelemetryDispatchTest {
             assertIs<TelemetryCharMessage.FcIdentity>(
                 TelemetryDispatch.parse("""{"type":"fc_identity"}"""),
             ).msg.fcFirmwareVersion,
+        )
+    }
+
+    @Test
+    fun `fc_identity names the GNSS receiver the FC found`() {
+        val msg = assertIs<TelemetryCharMessage.FcIdentity>(
+            TelemetryDispatch.parse(
+                """{"type":"fc_identity","fc_fw":"abc","fc_board":"V9","oc_board":"V9","fc_gnss":"mosaic-G5"}""",
+            ),
+        )
+        assertEquals("mosaic-G5", msg.msg.fcGnss)
+        // "" is a real answer (none came up); absent is an OC that predates it.
+        assertEquals(
+            "",
+            assertIs<TelemetryCharMessage.FcIdentity>(
+                TelemetryDispatch.parse("""{"type":"fc_identity","fc_gnss":""}"""),
+            ).msg.fcGnss,
+        )
+        assertNull(
+            assertIs<TelemetryCharMessage.FcIdentity>(
+                TelemetryDispatch.parse("""{"type":"fc_identity","fc_fw":"abc"}"""),
+            ).msg.fcGnss,
         )
     }
 

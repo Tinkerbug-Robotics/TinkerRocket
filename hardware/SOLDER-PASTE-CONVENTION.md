@@ -12,7 +12,7 @@ restating them.
 ## 1. Stencil thickness: size to the table, not to the part
 
 **100 µm (4 mil), flat, laser cut, electropolished and nano-coated**, unless a
-board states otherwise. Seven boards do, and each says why in its own notes:
+board states otherwise. Eight boards do, and each says why in its own notes:
 
 | board | foil | why |
 |---|---|---|
@@ -23,6 +23,7 @@ board states otherwise. Seven boards do, and each says why in its own notes:
 | `gnss-sam10m8-18mm-hv` | **120 µm** | u-blox requirement (UBX-22020019 R02 §4.4.1), not an area-ratio limit |
 | `legacy/gnss-px1105r-18mm-highpower-ext-ant` | **80 µm** | its two TSNP low-noise amplifiers print 0.25 mm round apertures, AR 0.63 at 100 µm |
 | `gnss-px1105r-18mm-hv` | **80 µm** | the same two TSNP low-noise amplifiers, AR 0.63 at 100 µm |
+| `gnss-px100-18mm-hv` | **80 µm** | the same two TSNP low-noise amplifiers, and the Murata 1109 SAW's 0.20 × 0.25 mm lands, AR 0.56 at 100 µm (0.69 at 80 µm) |
 
 **Area ratio ≥ 0.66** (IPC-7525) at the ordered thickness:
 

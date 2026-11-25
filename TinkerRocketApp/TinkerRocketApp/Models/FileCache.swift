@@ -17,6 +17,14 @@ private struct FlightSummaryHeadline: Decodable {
     let apogee_time_s: Double?
 }
 
+/// #1658: where the flight came from, decoded on its own like the headline,
+/// so neither block can blank the other or the row.
+private struct FlightSummaryIdentity: Decodable {
+    struct SettingsBoard: Decodable { let board: String? }
+    let source: FlightSource?
+    let settings: SettingsBoard?
+}
+
 // MARK: - CachedFlight Model
 
 enum CachedFlightType {
@@ -36,8 +44,24 @@ struct CachedFlight: Identifiable {
     let maxSpeedMps: Double?  // From flight summary JSON
     let burnoutTimeS: Double? // From flight summary JSON (seconds after launch)
     let apogeeTimeS: Double?  // From flight summary JSON (seconds after launch)
+    /// Base-station logs: the rocket a per-rocket CSV holds (FileCache splits
+    /// a log that carries more than one rocket at download). nil for the
+    /// combined log and for everything else.
+    var bsLogRocketID: UInt8? = nil
+    /// #1658: the rocket and computer it was downloaded from (summary
+    /// `source`); nil for flights downloaded before the app recorded it.
+    var source: FlightSource? = nil
+    /// #1658: the FC's board from the log (summary `settings.board`). nil when
+    /// the summary predates the field; FlightDetailView then reads the log.
+    var fcBoard: String? = nil
 
     var id: String { name }
+
+    /// The name the list shows beside the date: the rocket profile, else the
+    /// computer's unit name.
+    var rocketLabel: String? {
+        source?.rocket_profile ?? source?.unit_name
+    }
 
     // Reusable formatters — DateFormatter is expensive to allocate
     private static let utcDateFormatter: DateFormatter = {
@@ -66,16 +90,26 @@ struct CachedFlight: Identifiable {
         return f
     }()
 
-    /// Friendly display title — localized date/time for flights with timestamps, raw name otherwise
+    /// Friendly display title — localized date/time for flights with timestamps, raw name otherwise.
+    /// One rocket's CSV of a shared base-station log says which rocket.
     var displayTitle: String {
+        if let rid = bsLogRocketID {
+            return baseDisplayTitle + " · Rocket \(rid)"
+        }
+        return baseDisplayTitle
+    }
+
+    private var baseDisplayTitle: String {
         if let date = flightDate {
             return Self.localDisplayFormatter.string(from: date)
         }
         // Fallback: strip .csv extension for cleaner display
-        if name.hasSuffix(".csv") {
-            return String(name.dropLast(4))
+        var stem = name.hasSuffix(".csv") ? String(name.dropLast(4)) : name
+        // A unit-qualified cache name reads "flight_3 · a1cae150".
+        if let unit = FileCache.unitID(inCacheName: name) {
+            stem = String(stem.dropLast(unit.count + 2)) + " · " + unit
         }
-        return name
+        return stem
     }
 
     /// Parse UTC timestamp from filename
@@ -120,16 +154,90 @@ nonisolated class FileCache {
 
     static let shared = FileCache()
 
+    /// The name a board's flight is cached under on this phone. Boards name
+    /// logs on their own — `flight_<n>.bin` when no phone has synced the
+    /// time — so two boards can both write `flight_3.bin`, and caching by
+    /// that name alone let the second download replace the first board's
+    /// flight. The unit ID keeps them apart: "flight_3.bin" from a1cae150 is
+    /// cached as "flight_3__a1cae150.bin", and its CSV and summary follow.
+    /// Only rocket flights (`flight_*`); base-station logs keep their names.
+    /// An empty or malformed unit ID (identity not yet received) keeps the
+    /// board's name, as before.
+    static func cacheName(for boardFilename: String, unitID: String) -> String {
+        guard boardFilename.hasPrefix("flight_"),
+              (1...16).contains(unitID.count),
+              unitID.allSatisfy(\.isHexDigit) else { return boardFilename }
+        let stem = (boardFilename as NSString).deletingPathExtension
+        let ext = (boardFilename as NSString).pathExtension
+        if stem.hasSuffix("__" + unitID) { return boardFilename }
+        return stem + "__" + unitID + (ext.isEmpty ? "" : "." + ext)
+    }
+
+    /// The unit ID a cache name carries ("flight_3__a1cae150.csv" ->
+    /// "a1cae150"), or nil for a name cached before unit IDs were added.
+    static func unitID(inCacheName name: String) -> String? {
+        let stem = (name as NSString).deletingPathExtension
+        guard let r = stem.range(of: "__", options: .backwards) else { return nil }
+        let id = stem[r.upperBound...]
+        return (1...16).contains(id.count) && id.allSatisfy(\.isHexDigit) ? String(id) : nil
+    }
+
+    /// The name this unit's copy of a board file is cached under: the
+    /// unit-qualified name, or the board's own name for a copy downloaded
+    /// before unit IDs were added that is not known to be another unit's.
+    /// Lookups use this; a download always writes the qualified name.
+    func cachedName(for boardFilename: String, unitID: String) -> String {
+        let qualified = Self.cacheName(for: boardFilename, unitID: unitID)
+        guard qualified != boardFilename,
+              getCachedBinary(for: qualified) == nil,
+              getCachedCSV(for: qualified) == nil,
+              legacyCopy(of: boardFilename, couldBeFrom: unitID)
+        else { return qualified }
+        return boardFilename
+    }
+
+    /// Whether a flight cached under the board's own name (downloaded before
+    /// unit IDs were added to cache names) may be this unit's. Yes unless its
+    /// summary says it came from another unit: an old copy with no `source`
+    /// keeps reading as downloaded, as it did before.
+    func legacyCopy(of boardFilename: String, couldBeFrom unitID: String) -> Bool {
+        guard getCachedBinary(for: boardFilename) != nil || getCachedCSV(for: boardFilename) != nil
+        else { return false }
+        guard let url = getCachedSummary(for: boardFilename),
+              let data = try? Data(contentsOf: url),
+              let id = try? JSONDecoder().decode(FlightSummaryIdentity.self, from: data),
+              let owner = id.source?.unit_id
+        else { return true }
+        return owner == unitID
+    }
+
+    /// #1658: the FC's board for a flight whose summary predates
+    /// `settings.board`, read from the first flight-settings frame in its log.
+    /// nil when the log predates the field (v9, #413) or cannot be read. It
+    /// reads the whole .bin, so call it off the main thread.
+    static func boardFromLog(_ binaryURL: URL) -> String? {
+        guard let frame = try? MessageParser().firstFrame(
+                  ofType: MessageType.flightSettings.rawValue, in: binaryURL),
+              let settings = try? FlightSettingsData(from: frame.payload)
+        else { return nil }
+        return settings.boardRevName
+    }
+
     private let documentsURL: URL
     private let csvCacheURL: URL  // Documents/CSVCache/
     private let binaryCacheURL: URL  // Documents/BinaryCache/
 
-    init() {
-        // Get documents directory
-        documentsURL = FileManager.default.urls(
+    convenience init() {
+        self.init(documentsURL: FileManager.default.urls(
             for: .documentDirectory,
             in: .userDomainMask
-        )[0]
+        )[0])
+    }
+
+    /// `documentsURL` is a seam for tests, which must not touch the app's
+    /// own cache; the app uses `shared`.
+    init(documentsURL: URL) {
+        self.documentsURL = documentsURL
 
         // Create cache subdirectory paths
         csvCacheURL = documentsURL.appendingPathComponent("CSVCache")
@@ -310,6 +418,64 @@ nonisolated class FileCache {
         try? FileManager.default.removeItem(at: cachedURL)
     }
 
+    // MARK: - Base-station logs: the combined CSV + one per rocket
+
+    /// The base station writes ONE log for every rocket it hears (each frame
+    /// carries its rocket id). A log holding more than one rocket is also
+    /// rendered as one CSV per rocket beside the combined one:
+    /// "lora_X.csv" → "lora_X_rocket2.csv". The date parsers read only the
+    /// fixed-width timestamp, so the suffix keeps the log's date.
+    static func bsRocketCSVName(combined: String, rocketID: Int) -> String {
+        let stem = combined.hasSuffix(".csv") ? String(combined.dropLast(4)) : combined
+        return "\(stem)_rocket\(rocketID).csv"
+    }
+
+    private static let bsRocketSplitRegex = try! NSRegularExpression(
+        pattern: #"^(lora_.+)_rocket([0-9]{1,3})\.csv$"#)
+
+    /// For a per-rocket CSV's name: the combined CSV it was split from and its
+    /// rocket. nil for any other name.
+    static func bsRocketSplit(of name: String) -> (combined: String, rocketID: UInt8)? {
+        let whole = NSRange(name.startIndex..., in: name)
+        guard let m = bsRocketSplitRegex.firstMatch(in: name, range: whole),
+              let stem = Range(m.range(at: 1), in: name),
+              let rid = Range(m.range(at: 2), in: name),
+              let id = UInt8(name[rid])
+        else { return nil }
+        return (String(name[stem]) + ".csv", id)
+    }
+
+    /// Render a base-station log into the CSV cache: the combined CSV under
+    /// the usual name and, when the log holds more than one rocket, one CSV
+    /// per rocket ID beside it. A single-rocket log gets no split — it would
+    /// be the combined file again. Splits left by an earlier rendering of
+    /// the same log are removed first, so a re-download cannot leave a rocket
+    /// that is no longer in it. Returns the combined CSV.
+    @discardableResult
+    func cacheBaseStationLogCSVs(bytes: [UInt8], binaryFilename: String) throws -> URL {
+        let (combined, byRocket) = try BSLogCSVGenerator.writeCSVs(bytes)
+        let combinedName = csvName(for: binaryFilename)
+        let combinedURL = csvCacheURL.appendingPathComponent(combinedName)
+        try combined.write(to: combinedURL, atomically: true, encoding: .utf8)
+
+        removeBaseStationSplits(ofCombined: combinedName)
+        if byRocket.count > 1 {
+            for (rid, csv) in byRocket {
+                let url = csvCacheURL.appendingPathComponent(
+                    Self.bsRocketCSVName(combined: combinedName, rocketID: rid))
+                try csv.write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+        return combinedURL
+    }
+
+    private func removeBaseStationSplits(ofCombined combinedName: String) {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: csvCacheURL.path)) ?? []
+        for name in names where Self.bsRocketSplit(of: name)?.combined == combinedName {
+            try? FileManager.default.removeItem(at: csvCacheURL.appendingPathComponent(name))
+        }
+    }
+
     // MARK: - Direct CSV Caching (for base station LoRa logs that are already CSV)
 
     /// Cache a CSV file using its original filename (no .csv suffix appended)
@@ -377,7 +543,41 @@ nonisolated class FileCache {
         }
         let attrs = try? FileManager.default.attributesOfItem(atPath: binaryURL.path)
         let cachedSize = (attrs?[.size] as? UInt64) ?? 0
-        return cachedSize == UInt64(expectedSize)
+        return Self.cachedSizeSatisfiesListing(cachedSize: cachedSize, listedSize: expectedSize,
+                                               shortRecord: shortDownloadRecord(for: filename))
+    }
+
+    // MARK: - Board-confirmed short downloads
+
+    private static let shortDownloadsKey = "FileCache.shortDownloads"
+
+    /// A download the board itself ended (EOF, its byte count matching what
+    /// arrived) short of the size it listed — out-computer firmware before the
+    /// byte-exact stream left out stored bytes that were not part of a whole
+    /// log frame. BLEDevice keeps such a file; this remembers the two sizes so
+    /// the row reads as downloaded for THAT listing, instead of offering the
+    /// same short download forever. A different listing (a new flight reusing
+    /// the name) does not match the record.
+    func recordShortDownload(_ filename: String, listedSize: UInt32, receivedSize: UInt32) {
+        var all = UserDefaults.standard.dictionary(forKey: Self.shortDownloadsKey) as? [String: [Int]] ?? [:]
+        all[filename] = [Int(listedSize), Int(receivedSize)]
+        UserDefaults.standard.set(all, forKey: Self.shortDownloadsKey)
+    }
+
+    func shortDownloadRecord(for filename: String) -> (listed: UInt32, received: UInt32)? {
+        guard let all = UserDefaults.standard.dictionary(forKey: Self.shortDownloadsKey) as? [String: [Int]],
+              let r = all[filename], r.count == 2, r[0] >= 0, r[1] >= 0 else { return nil }
+        return (UInt32(r[0]), UInt32(r[1]))
+    }
+
+    /// The cached binary counts as this listing's file when it is the listed
+    /// size, or when the board confirmed a short download of exactly this
+    /// listing and the cached file is what it sent.
+    static func cachedSizeSatisfiesListing(cachedSize: UInt64, listedSize: UInt32,
+                                           shortRecord: (listed: UInt32, received: UInt32)?) -> Bool {
+        if cachedSize == UInt64(listedSize) { return true }
+        guard let r = shortRecord else { return false }
+        return r.listed == listedSize && UInt64(r.received) == cachedSize
     }
 
     /// Clear all cached CSV files
@@ -434,6 +634,14 @@ nonisolated class FileCache {
         // Remove CSV file
         try? FileManager.default.removeItem(at: flight.csvURL)
 
+        // One rocket's CSV of a shared base-station log: the .bin (and the
+        // combined CSV) belong to every rocket in it — leave them.
+        if flight.bsLogRocketID != nil { return }
+        // The combined log takes its per-rocket CSVs with it.
+        if flight.type == .loraLog {
+            removeBaseStationSplits(ofCombined: flight.name)
+        }
+
         // Remove binary file if present (rocket flights, and base-station logs)
         if let binaryURL = flight.binaryURL {
             try? FileManager.default.removeItem(at: binaryURL)
@@ -468,6 +676,7 @@ nonisolated class FileCache {
             let type: CachedFlightType
             var binaryURL: URL? = nil
             var summaryURL: URL? = nil
+            var split: (combined: String, rocketID: UInt8)? = nil
 
             if filename.hasPrefix("flight_") && (filename.hasSuffix(".csv") || filename.hasSuffix(".bin.csv")) && !filename.hasPrefix("lora_") {
                 type = .rocket
@@ -496,9 +705,12 @@ nonisolated class FileCache {
                 // them is a rendering. Associate the raw .bin so it rides the
                 // Share sheet — the post-flight tools read the binary directly,
                 // the same way they read the rocket computer's log, and a CSV
-                // cannot be converted back into one.
+                // cannot be converted back into one. A per-rocket CSV shares
+                // the combined log's .bin.
+                split = Self.bsRocketSplit(of: filename)
+                let combined = split?.combined ?? filename
                 let binURL = binaryCacheURL
-                    .appendingPathComponent(String(filename.dropLast(4)) + ".bin")
+                    .appendingPathComponent(String(combined.dropLast(4)) + ".bin")
                 if FileManager.default.fileExists(atPath: binURL.path) {
                     binaryURL = binURL
                 }
@@ -514,7 +726,11 @@ nonisolated class FileCache {
             // 5-8x larger, so the same flight read as a different size on
             // each phone.
             let resourceValues = try? csvURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            let binSize = binaryURL.flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize }
+            // A per-rocket CSV shows its own size: the shared .bin's would
+            // read as if each rocket had the whole log.
+            let binSize = split == nil
+                ? binaryURL.flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize }
+                : nil
             let size = UInt64(binSize ?? resourceValues?.fileSize ?? 0)
             let modDate = resourceValues?.contentModificationDate
 
@@ -537,6 +753,9 @@ nonisolated class FileCache {
                 burnoutT = head.burnout_time_s
                 apogeeT = head.apogee_time_s
             }
+            let identity = summaryURL
+                .flatMap { try? Data(contentsOf: $0) }
+                .flatMap { try? JSONDecoder().decode(FlightSummaryIdentity.self, from: $0) }
 
             results.append(CachedFlight(
                 name: filename,
@@ -549,12 +768,31 @@ nonisolated class FileCache {
                 maxAltitudeM: maxAlt,
                 maxSpeedMps: maxSpd,
                 burnoutTimeS: burnoutT,
-                apogeeTimeS: apogeeT
+                apogeeTimeS: apogeeT,
+                bsLogRocketID: split?.rocketID,
+                source: identity?.source,
+                fcBoard: identity?.settings?.board
             ))
         }
 
-        // Sort newest first by modification date
-        results.sort { ($0.modificationDate ?? .distantPast) > ($1.modificationDate ?? .distantPast) }
+        // Newest first by modification date, with each base-station log's
+        // per-rocket CSVs right under it in rocket order (they are written a
+        // moment after the combined one, so their own dates would put them
+        // above it).
+        let dates = Dictionary(results.map { ($0.name, $0.modificationDate ?? .distantPast) },
+                               uniquingKeysWith: { a, _ in a })
+        func group(_ f: CachedFlight) -> (Date, String, Int) {
+            guard let rid = f.bsLogRocketID,
+                  let combined = Self.bsRocketSplit(of: f.name)?.combined
+            else { return (dates[f.name] ?? .distantPast, f.name, -1) }
+            return (dates[combined] ?? dates[f.name] ?? .distantPast, combined, Int(rid))
+        }
+        results.sort { a, b in
+            let (da, ga, ra) = group(a), (db, gb, rb) = group(b)
+            if da != db { return da > db }
+            if ga != gb { return ga < gb }
+            return ra < rb
+        }
 
         return results
     }

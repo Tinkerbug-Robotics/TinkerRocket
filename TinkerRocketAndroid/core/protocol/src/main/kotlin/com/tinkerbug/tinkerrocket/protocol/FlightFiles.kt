@@ -220,8 +220,34 @@ public object FlightFiles {
         csvCached: Boolean,
         cachedBinarySizeBytes: Long?,
         expectedSizeBytes: Long,
+        shortRecord: ShortDownload? = null,
     ): Boolean {
         if (!binaryCached || !csvCached) return false
-        return (cachedBinarySizeBytes ?: 0L) == expectedSizeBytes
+        return cachedSizeSatisfiesListing(cachedBinarySizeBytes ?: 0L, expectedSizeBytes, shortRecord)
+    }
+
+    /**
+     * A download the board itself ended (EOF, its byte count matching what
+     * arrived) short of the size it listed: out-computer firmware before the
+     * byte-exact stream left out stored bytes outside whole log frames. The
+     * app keeps such a file and remembers both sizes.
+     */
+    public data class ShortDownload(val listedSizeBytes: Long, val receivedSizeBytes: Long)
+
+    /**
+     * The cached binary counts as this listing's file when it is the listed
+     * size, or when the board confirmed a short download of exactly this
+     * listing and the cached file is what it sent. A record left by a
+     * different listing (a new flight reusing the name) does not match.
+     * Mirrors iOS `FileCache.cachedSizeSatisfiesListing`.
+     */
+    public fun cachedSizeSatisfiesListing(
+        cachedSizeBytes: Long,
+        listedSizeBytes: Long,
+        shortRecord: ShortDownload?,
+    ): Boolean {
+        if (cachedSizeBytes == listedSizeBytes) return true
+        val r = shortRecord ?: return false
+        return r.listedSizeBytes == listedSizeBytes && r.receivedSizeBytes == cachedSizeBytes
     }
 }

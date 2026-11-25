@@ -2,15 +2,15 @@
 
 #include <stdint.h>
 
-// V9/V10 PCB pin map + board topology for the flight computer (ESP32-P4).
+// V9 PCB pin map + board topology for the flight computer (ESP32-P4).
 // Selected with TR_BOARD_V9=1:
 //   idf.py -B build_v9 -DTR_BOARD_V9=1 build
 //
-// This is the map of the board files in hardware/tinker-mantis/ (Tinker-Mantis;
-// the folder was hardware/rocket-computer/ until 2026-09-24) — the
-// .kicad_pcb title block reads V9 up to 25fb08d and V10 at HEAD. It is NOT
-// board_v8.h: no V8 PCB was ever committed (the physical V8 bench boards
-// predate the import), and three pyro pins moved between them.
+// This is the map of the Tinker-Mantis as fabbed, tag rocket-computer-v9.0.0
+// (the folder was hardware/rocket-computer/ until 2026-09-24). The V10 (tag
+// tinker-mantis-v10.0.0) has its own map: board_v10.h. It is NOT board_v8.h either: no V8 PCB was ever committed (the
+// physical V8 bench boards predate the import), and three pyro pins moved
+// between them.
 //
 // Verified 2026-08-17 two independent ways: `kicad-cli sch export netlist` on
 // rocket-computer.kicad_sch, and a pad -> pinfunction -> net walk of U17 in
@@ -18,9 +18,14 @@
 // (199ecec, bdcc507, 8f87aa0, 25fb08d, HEAD). Every GPIO below is identical
 // across all of them; the one thing that ever changed is GPIO5, unconnected
 // in the first two and wired to P4_EN_HOLD from the V9 pre-fab close-out
-// (8f87aa0) onward. So this single header covers V9 and V10.
+// (8f87aa0) onward.
 //
-//   signal        board_v8.h    here (V9/V10)
+// That walk stopped short of V10. It said "this single header covers V9 and
+// V10", and that stopped being true with the V10 arm rework: V10 moved the arm
+// to GPIO33 (where this map has EXP_12) and split it across both processors,
+// so a V9 image on a V10 never arms (#1593). Build V10 with TR_BOARD_V10=1.
+//
+//   signal        board_v8.h    here (V9)
 //   PYRO_ARM           5             16
 //   PYRO2_FIRE         9             11
 //   PYRO3_FIRE        11              9
@@ -28,7 +33,7 @@
 // Everything else — all four CONT pins, PYRO1/PYRO4 FIRE, and every sensor,
 // servo, I2S, I2C, indicator and power-gate pin — is the same on both maps.
 //
-// ### Why flashing V9/V10 hardware with TR_BOARD_V8=1 is a silent hazard ###
+// ### Why flashing V9 hardware with TR_BOARD_V8=1 is a silent hazard ###
 //   * ARM never fires. On this board the arming FET is U9 (CSD16323Q3),
 //     gate driven from PYRO_ARM through R21 (100 R), drain on PYRO_GND (the
 //     squib return at J2). With GPIO16 undriven the return never reaches
@@ -42,7 +47,7 @@
 //     arm request holds the FC's own rail up and a disarm releases it.
 //
 // ### SAFETY: first power-up of this revision ###
-// Carried forward from board_v8.h and NOT yet done on V9/V10 hardware: with
+// Carried forward from board_v8.h and NOT yet done on V9 hardware: with
 // NO squibs connected, scope all four FIRE pads and the ARM pad across reset
 // and the whole boot sequence and confirm they stay quiet. All output init
 // goes through safePyroOutputInit() (main.cpp); check each pin's P4 IO-MUX
@@ -74,6 +79,11 @@ struct board_pins
     //                          i.e. a module OUTPUT; an INPUT to the FC.
     //   gnss-px1105r-...-ext-ant  J4.5 -> net RXD2 -> U1.15 RXD2
     //                          i.e. a module INPUT; an OUTPUT from the FC.
+    //   mosaic-go G5 harness   J1.5 <- 1k <- the receiver's PPS (10-pin
+    //                          socket pin 8); J1.1/J1.2 to its COM1 through
+    //                          1k each; J1.3 not used. A module OUTPUT, so an
+    //                          FC input, read only by the mosaic build
+    //                          (-DTR_GNSS_MOSAIC=1) as the 1PPS.
     //
     // This used to read "GNSS_RXD2 on GPIO2 (the receiver's second UART) is
     // unused by firmware", which is only true of the px1105r.  Implementing
@@ -84,18 +94,21 @@ struct board_pins
     // 1 PPS the SAM-M10Q carrier already routes to a P4 GPIO is being thrown
     // away because the header called it a UART line.
     //
-    // Nothing in firmware distinguishes the carriers at runtime — the board
-    // header hard-selects the UBlox driver and TR_GNSSReceiverUBlox_Serial has
-    // no carrier identification.  So GPIO2 stays unused: do not use it without
-    // first establishing which carrier is fitted (NVS, or the UBX MON-VER that
-    // begin() already reads).
+    // Do not use GPIO2 without first establishing which carrier is fitted.
+    // The V9 image does at boot (TR_Sensor_Collector's gnss_detect.h, which
+    // tells the u-blox from the mosaic by what each answers on pins 1-2) and
+    // the mosaic's driver reads the pin only once the mosaic is found; the
+    // u-blox path never touches it, which leaves the PX1105R's RXD2 alone.
+    // The mosaic-only build establishes it by being built (config.h
+    // GNSS_PPS_PIN). Neither ever drives the pin.
     static constexpr uint8_t GNSS_RX = 3;   // FC receives; module TXD drives this
     static constexpr uint8_t GNSS_TX = 4;   // FC drives;   module RXD listens here
+    static constexpr int8_t  GNSS_J1_PIN5 = 2;   // net GNSS_RXD2: carrier-dependent, see above
     static constexpr int8_t GNSS_RESET_N = -1;
     static constexpr int8_t GNSS_SAFEBOOT_N = -1;
 
     // ### Sensor CS / bus pins ###
-    static constexpr int MMC5983MA_CS = -1;    // no MMC5983MA on V9/V10
+    static constexpr int MMC5983MA_CS = -1;    // no MMC5983MA on V9
     static constexpr uint8_t BMP585_CS = 41;   // BMP585_CS
     static constexpr uint8_t ISM6HG256_CS = 49;// ISM6HG256_CS
     static constexpr uint8_t IIS2MDC_SDA = 47; // IIS2MDCTR_SDA (V10: MAG_SDA)
@@ -106,13 +119,29 @@ struct board_pins
     // RocketComputerTypes.h): right-handed, Z out of the top.  V9 fits an ST
     // IIS2MDC (U3, F.Cu, rotation 0): +90, from the #204 bench with the
     // chip's left-handed X negated first (#1589).  V10 fits a QST QMC5883P
-    // instead (U3, F.Cu, rotation 0), on the same two pins at 0x2C, with no
-    // DRDY pin; this image asks for either at boot (TR_MAG_DRIVER_AUTO).
-    // 180 for it is inferred from the Beetle's bench-measured axes and V10's
-    // placement (#1590) — no V10 has been built, so confirm it on the first
-    // article: lying flat at rest, the field must dip ~65 deg DOWN.
+    // instead, on the same two pins at 0x2C, and has its own image
+    // (board_v10.h, #1593). This image still asks for either chip at boot
+    // (TR_MAG_DRIVER_AUTO), so a V9 image flashed onto a V10 over USB still
+    // gets a correctly oriented magnetometer; the QMC5883P value below is
+    // there for that case only. board_v10.h's MAG_ROT_Z_DEG_QMC5883P is the
+    // source of truth and this one must match it (test_mag_frame pins both
+    // to the same matrix).
     static constexpr float MAG_ROT_Z_DEG_IIS2MDC  = 90.0f;
     static constexpr float MAG_ROT_Z_DEG_QMC5883P = 180.0f;
+
+    // --- IMU and MMC5983MA placement (sensor -> board frame) ---
+    // A reading is multiplied by AXIS_SIGN, chip axis by chip axis, as it is
+    // read (SensorCollector::configureAxisSigns), and the converter then turns
+    // it ROT_Z_DEG, CCW about +Z. Every sign is +1 on a board whose parts sit
+    // on the front, so what is logged is what the chip read; only a part on
+    // the back has one (board_m2.h). These were config.h's, one pair for
+    // every board, until the Beetle V2 moved its IMU and magnetometer to the
+    // back.
+    // No MMC5983MA here: its angle is still the one the status query reports.
+    static constexpr float  ISM6HG256_ROT_Z_DEG    = -45.0f;
+    static constexpr int8_t ISM6HG256_AXIS_SIGN[3] = {1, 1, 1};
+    static constexpr float  MMC5983MA_ROT_Z_DEG    = 180.0f;
+    static constexpr int8_t MMC5983MA_AXIS_SIGN[3] = {1, 1, 1};
 
     // ### Part presence ###
     static constexpr bool USE_BMP585 = true;
@@ -129,9 +158,9 @@ struct board_pins
     // ### Sensor interrupt pins ###
     static constexpr uint8_t ISM6HG256_INT = 50;  // ISM6HG256_INT1
     static constexpr uint8_t BMP585_INT = 42;     // BMP585_INT
-    static constexpr int MMC5983MA_INT = -1;      // no MMC5983MA on V9/V10
+    static constexpr int MMC5983MA_INT = -1;      // no MMC5983MA on V9
     // Poll-only: the collector never configures this pin.  On V10 GPIO46 is
-    // EXP_12, and its QMC5883P has no DRDY.
+    // EXP_12, and its QMC5883P has no DRDY (board_v10.h sets -1).
     static constexpr uint8_t IIS2MDC_INT = 46;    // IIS2MDCTR_INT
 
     // ### Camera ###
@@ -192,10 +221,17 @@ struct board_pins
     static constexpr uint8_t PYRO3_CONT_PIN = 12;  // PYRO3_CONT
     static constexpr uint8_t PYRO4_FIRE_PIN = 13;  // PYRO4_FIRE
     static constexpr uint8_t PYRO4_CONT_PIN = 14;  // PYRO4_CONT
+    // One arm for all four channels: no further arm lines (V5's per-channel
+    // arms ride PYRO_ARM_GANG_PINS). Continuity reads with the arm down, and
+    // LOW means a load is present (#264).
+    static constexpr int8_t PYRO_ARM_GANG_PINS[3] = {-1, -1, -1};
+    static constexpr int  PYRO_CONT_CLOSED_LEVEL = 0;
+    static constexpr bool PYRO_CONT_NEEDS_ARM    = false;
 
     // ### Fin servos ###
     // Same four EXP nets as V8, same P4 pins. Full expansion map (net, GPIO,
-    // package pin), read out of the V10 .kicad_pcb:
+    // package pin), read out of the V9 .kicad_pcb (V10 reorders pins 9..14,
+    // see board_v10.h):
     //
     //   net       GPIO   pkg pin      net       GPIO   pkg pin
     //   EXP_01     45      87         EXP_07     29      58
@@ -213,7 +249,7 @@ struct board_pins
     // POSITIVE servo rail (output of U28, a TPS22811 high-side switch gated
     // by SERVO_ACT) and pins 15-16 are GND. On V8 that was the other way
     // around — pins 1-2 a MOSFET-switched return, pins 15-16 VBATT. A V8
-    // servo harness plugged into a V9/V10 board is reverse-polarity.
+    // servo harness plugged into a V9 or V10 board is reverse-polarity.
     static constexpr uint8_t SERVO_PIN_1 = 45;  // EXP_01, connector pin 3
     static constexpr uint8_t SERVO_PIN_2 = 44;  // EXP_02, connector pin 4
     static constexpr uint8_t SERVO_PIN_3 = 43;  // EXP_03, connector pin 5
@@ -222,7 +258,7 @@ struct board_pins
     // ### Indicators ###
     // No piezo: the buzzer was dropped from the design and its firmware
     // removed.  GPIO17 (the V9 PIEZZO net) is deliberately left undriven —
-    // V10, which builds from this header, routes V_SCAP_ADC there (#1409).
+    // V10 routes V_SCAP_ADC there (#1409), and has its own header.
     // IND_1 = RED, IND_2 = BLUE — CONFIRMED on the V9 first article, bench
     // 2026-08-24 (#847).  The mapping below was a guess when this header was
     // written; it turned out correct, so nothing moved.  Recorded rather than
@@ -241,6 +277,11 @@ struct board_pins
     // this mapping was verified against.
     static constexpr uint8_t RED_LED_PIN = 27;    // IND_1
     static constexpr uint8_t BLUE_LED_PIN = 26;   // IND_2
+
+    // No hold-up supercap sense on this board (#1409: the V10 added V_SCAP_ADC
+    // on GPIO17, V9's piezo pad).
+    static constexpr int   SCAP_ADC_PIN       = -1;
+    static constexpr float SCAP_DIVIDER_RATIO = 1.0f;   // unused with no pin
 
     // ### I2C command/config channel to the OutComputer ###
     static constexpr uint8_t ESP_SDA_PIN = 23;  // ESP_SDA (OC GPIO5)

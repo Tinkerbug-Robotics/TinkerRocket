@@ -7,10 +7,9 @@
 #include <CRC.h>
 
 // #846: find the LAST valid frame of a given type in the tail of a flight's
-// logged frame stream — the mini's snapshotTailScan (rocket_computer_mini
-// flight.cpp), lifted into the component so the OC's boot re-seed and the
-// host tests share one implementation. The mini keeps its own copy for now;
-// unifying it is follow-up.
+// logged frame stream — the single-MCU mini's snapshotTailScan (its
+// flight.cpp, since retired), lifted into the component so the OC's boot
+// re-seed and the host tests share one implementation.
 //
 // The stream is the standard wire framing every log consumer already parses:
 //   [AA 55 AA 55][type][len u8][payload][CRC16 hi][CRC16 lo]

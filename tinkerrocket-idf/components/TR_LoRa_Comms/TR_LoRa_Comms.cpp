@@ -421,8 +421,10 @@ bool TR_LoRa_Comms::readPacket(uint8_t* buf, size_t maxLen, size_t& len)
 
     // Clear the flag atomically w.r.t. the DIO1 ISR so we never lose
     // an rx_done_ that fires between the check above and this assignment.
+    // The RxDone stamp is taken in the same window, so it is this packet's.
     portDISABLE_INTERRUPTS();
     rx_done_ = false;
+    const uint32_t rx_done_ms = rx_done_ms_;
     portENABLE_INTERRUPTS();
 
     // Get the length of the received packet
@@ -451,6 +453,7 @@ bool TR_LoRa_Comms::readPacket(uint8_t* buf, size_t maxLen, size_t& len)
     if (st == RADIOLIB_ERR_NONE)
     {
         len = pkt_len;
+        last_rx_done_ms_ = rx_done_ms;
         stats_.rx_count++;
         stats_.last_rssi = radio_->getRSSI();
         stats_.last_snr = radio_->getSNR();
@@ -514,6 +517,9 @@ void TR_LoRa_Comms::pollDio1()
         }
         else if (owner == lora_dio1::Owner::Rx)
         {
+            // The ISR was missed (it returns early above when it was not):
+            // the poll's time is the best stamp left — late, never early.
+            rx_done_ms_ = millis();
             rx_done_ = true;
         }
     }
@@ -1070,6 +1076,10 @@ void IRAM_ATTR TR_LoRa_Comms::onDio1ISR()
         }
         else if (owner == lora_dio1::Owner::Rx)
         {
+            // RxDone time for the base station's slot timing; esp_timer_get_time
+            // is IRAM-safe, the same clock millis() reads. Stamped before the
+            // flag so a reader that sees the flag sees this packet's time.
+            instance_->rx_done_ms_ = (uint32_t)(esp_timer_get_time() / 1000ULL);
             instance_->rx_done_ = true;
         }
     }

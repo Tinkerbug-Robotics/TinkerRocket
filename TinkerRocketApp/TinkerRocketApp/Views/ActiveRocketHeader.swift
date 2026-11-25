@@ -46,6 +46,13 @@ struct ActiveRocketHeader: View {
             if let p = store.activeProfile {
                 Text(keyline(p))
                     .font(.caption).foregroundColor(.secondary)
+                // The keyline is the profile; this is the flight computer's
+                // own word on guidance, when the two disagree or it has not
+                // given one (GuidanceStateCheck).
+                GuidanceStateLine(check: GuidanceStateCheck.evaluate(
+                    profile: p, config: device.rocketConfig,
+                    isConnected: device.isConnected,
+                    isBaseStation: device.isBaseStation))
             } else if !device.isBaseStation {
                 Text("Tap to pick or create a rocket.")
                     .font(.caption).foregroundColor(.secondary)
@@ -73,5 +80,23 @@ struct ActiveRocketHeader: View {
         let pyro = anyPyro ? "Pyro on" : "Pyro off"
         let cal = p.magCal == nil ? "Uncalibrated" : "Cal saved"
         return "\(mode) \u{2022} \(cam) \u{2022} \(pyro) \u{2022} \(cal)"
+    }
+}
+
+/// One line saying whether the flight computer holds the guidance setting the
+/// profile shows: red when it will fly something else, orange when nothing
+/// from it confirms a guidance profile, nothing otherwise.  Shared by this
+/// header and Settings' Control Mode section.
+struct GuidanceStateLine: View {
+    let check: GuidanceStateCheck
+
+    var body: some View {
+        if let line = check.message {
+            Label(line, systemImage: check.isMismatch
+                  ? "exclamationmark.octagon.fill" : "questionmark.circle")
+                .font(.caption)
+                .foregroundColor(check.isMismatch ? .red : .orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

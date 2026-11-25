@@ -2,7 +2,8 @@
 
 > **These notes are the V10 as ordered: tag `tinker-mantis-v10.0.0` (86aa08de), plotted
 > 2026-09-30.** The board in work is V11, and its title block says so. Its changes (the
-> #1554 pyro switches, the stretched outline, the #1568 USB connector) make blocks A and B
+> #1554 pyro switches, the stretched outline, the #1568 USB connector, the out computer's ESP32-S3FH4R2 with its boot flash `U13`
+> and `C26` removed) make blocks A and B
 > wrong in places, including the board size and the `User.Drawings` copy of block A,
 > which still reads V10. Revise both before V11 is ordered.
 

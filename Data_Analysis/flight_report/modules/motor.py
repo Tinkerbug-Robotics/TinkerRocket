@@ -42,7 +42,7 @@ from plot_flight_data_mini import get_array  # noqa: E402
 
 from .. import events as ev
 from ..flight import Flight
-from ..imu import accel_magnitude
+from ..imu import THRUST_HOLD_S, accel_body, sustained_peak
 from ..registry import AnalysisResult
 from ..units import q
 
@@ -174,15 +174,19 @@ def analyze(flight: Flight) -> AnalysisResult:
         result.warnings.append("Too few accelerometer samples during the burn to measure it.")
         return result
 
-    # Saturation is judged over the burn window only: a landing impact railing
-    # the low-G part must not push the *motor* numbers onto the coarser sensor.
-    mag, sensor = accel_magnitude(recs, boost)
-    if mag is None:
+    # The part the flight loop read at each sample: the low-G one wherever it is
+    # clear of its rail, so a millisecond of liftoff shock does not put the
+    # whole burn on the coarser part.
+    acc, _railed, sensor = accel_body(recs, boost)
+    if acc is None:
         result.warnings.append("No 3-axis accelerometer channel found.")
         return result
+    mag = np.sqrt((acc ** 2).sum(axis=0))
 
     burn_s = burnout - launch
-    peak = float(np.max(mag))
+    # The motor's peak is the highest level it held, not the largest sample:
+    # see the summary card's Max thrust acceleration, which this matches.
+    peak = sustained_peak(t[boost], acc[0])[0]
     mean = float(np.mean(mag))
     # Specific force integrated over the burn: impulse per unit mass, in N·s/kg.
     # Numerically identical to m/s, and deliberately NOT called that — the rocket
@@ -191,7 +195,8 @@ def analyze(flight: Flight) -> AnalysisResult:
 
     metrics: dict[str, object] = {
         "Burn time": q(burn_s, "s", 2),
-        "Peak acceleration": q(peak / G, "G", 1, suffix=f" · {sensor}"),
+        "Peak thrust acceleration": q(peak / G, "G", 1, suffix=(
+            f" · held {THRUST_HOLD_S * 1e3:.0f} ms or more, along the rocket · {sensor}")),
         "Average acceleration": q(mean / G, "G", 1),
         # Specific force over gravity IS thrust-to-weight: the mass cancels,
         # because the accelerometer already divided by it.

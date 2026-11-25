@@ -78,6 +78,15 @@ jobs:
         if: '!cancelled()'
         run: python3 tinkerrocket-idf/tools/check_config_retry.py
 
+      # 2026-10-26. A Beetle bench image created its benchmark task in
+      # app_main ahead of the flight task, whose 16 KB stack then found no
+      # block of internal RAM: no flight loop, while the apps said "Flight
+      # computer ready". app_main is out of reach of any host test, but the
+      # order of its task creations is plain to see.
+      - name: Check app_main creates the flight task before any other
+        if: '!cancelled()'
+        run: python3 tinkerrocket-idf/tools/check_flight_task_first.py
+
       # Runs even if a generator check above failed, so one PR surfaces every
       # documentation problem at once instead of one per push.
       - name: Check the prose agrees with the source

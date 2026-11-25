@@ -43,7 +43,7 @@ class BLEFleet: NSObject, ObservableObject {
     /// Registry of every device ever provisioned/seen, keyed by hardware
     /// unitID.  Lives on the fleet (not a view) because BLEDevice feeds it
     /// on every config_identity readback — including for non-active devices.
-    let knownDevices = KnownDeviceStore()
+    let knownDevices: KnownDeviceStore
 
     /// The live BLEDevice for a hardware unitID, if that device is currently
     /// connected AND has completed its identity readback.  Used by the
@@ -69,6 +69,23 @@ class BLEFleet: NSObject, ObservableObject {
     /// be superseded once the real nid is known — harmless, the next
     /// valid fix re-latches under the right key.
     @Published var lastValidRocketFixes: [RocketKey: LastValidRocketFix] = [:]
+
+    /// Rockets seen flying this app session: a live frame said INFLIGHT or
+    /// LANDED, or carried the launch flag (a simulated flight does not count).
+    /// On the fleet, not the BLEDevice or RemoteRocket, because both are
+    /// rebuilt on every reconnect — and a reconnect is exactly what happens
+    /// during a recovery walk. The base-station focus heal leaves a pinned
+    /// rocket in this set alone, so the rocket that flew keeps the screen
+    /// (lost, last fix) when it goes quiet on the ground. In-memory only.
+    @Published private(set) var flownRockets: Set<RocketKey> = []
+
+    /// Latch `key` into `flownRockets` off one telemetry frame.
+    func noteFlightProgress(_ telemetry: TelemetryData, key: RocketKey) {
+        guard telemetry.data_status == .live, !telemetry.sim_active else { return }
+        guard telemetry.state == "INFLIGHT" || telemetry.state == "LANDED"
+                || telemetry.launch_flag else { return }
+        if !flownRockets.contains(key) { flownRockets.insert(key) }
+    }
 
     /// #390: roster rockets the user chose to hide from the dashboard.
     /// Everything discovered displays by default; hiding is a pure view
@@ -98,11 +115,26 @@ class BLEFleet: NSObject, ObservableObject {
     /// instance is returned across reconnects for the same peripheral.
     @MainActor
     func otaSession(for device: BLEDevice) -> OTASession {
-        let id = device.peripheral?.identifier ?? UUID()  // transient if no peripheral yet
+        let id = device.peripheralID ?? UUID()  // transient if no peripheral yet
         if let existing = otaSessions[id] { return existing }
         let session = OTASession(fleet: self, peripheralID: id)
         otaSessions[id] = session
         return session
+    }
+
+    /// The instance the fleet holds NOW for `device`'s peripheral.
+    ///
+    /// A screen keeps the BLEDevice it was opened with, and the fleet replaces
+    /// that object on every disconnect/reconnect. After a reboot (the one an
+    /// out-computer OTA causes, for example) the kept object is a dead copy:
+    /// `isConnected` stays false for good and its identity fields stop at the
+    /// drop. Resolving by peripheral, the key `otaSessions` and `bsFocus`
+    /// already use, follows the link across that swap. Between the drop and
+    /// the reconnect there is no live instance, and the kept one, disconnected,
+    /// is the honest answer.
+    func liveDevice(for device: BLEDevice) -> BLEDevice {
+        guard let id = device.peripheralID else { return device }
+        return devices.first { $0.peripheralID == id } ?? device
     }
 
     /// Convenience: the active device, or nil.
@@ -149,6 +181,42 @@ class BLEFleet: NSObject, ObservableObject {
             guard let key = subject.key else { return true }  // identifying…
             return !hiddenRocketKeys.contains(key)
         }
+    }
+
+    /// The roster the dashboard is about: rockets the foreground base station
+    /// carries, plus anything directly connected (an explicit user action
+    /// always shows), plus identifying links.
+    var scopedRockets: [RocketSubject] {
+        let foreground = foregroundBaseStation
+        return rockets.filter { subject in
+            if subject.direct != nil { return true }
+            guard let fg = foreground else { return false }
+            return subject.relays.contains { $0.baseStation === fg }
+        }
+    }
+
+    /// `scopedRockets` minus the ones the user hid — one section each on the
+    /// dashboard, one pin each on the map.
+    var dashboardRockets: [RocketSubject] {
+        scopedRockets.filter { subject in
+            guard let key = subject.key else { return true }
+            return !hiddenRocketKeys.contains(key)
+        }
+    }
+
+    /// Rocket IDs taken on `networkID` by anything but `unitID`: the
+    /// registry's records plus every rocket the fleet hears right now (a rocket
+    /// only ever seen through a base station has no registry record).
+    func rocketIDsInUse(networkID: UInt8, excludingUnitID unitID: String) -> Set<UInt8> {
+        var taken = knownDevices.rocketIDsInUse(networkID: networkID, excluding: unitID)
+        for subject in rockets {
+            guard let key = subject.key, key.networkID == networkID else { continue }
+            // The board being set up, heard directly (and merged with its own
+            // relay under the same key), is not "someone else".
+            if let direct = subject.direct, direct.unitID == unitID { continue }
+            taken.insert(key.rocketID)
+        }
+        return taken
     }
 
     /// Record a base station's sticky auto-focus (first rocket heard) so it
@@ -307,15 +375,32 @@ class BLEFleet: NSObject, ObservableObject {
     }
 
     /// The connected direct rocket link, if there is one.  Profiles only push
-    /// over a direct link, and it is also the preferred voice source.
+    /// over a direct link.
     var directRocket: BLEDevice? {
         devices.first { $0.isConnected && $0.deviceType == .rocket }
     }
 
-    /// The link that speaks: the direct rocket when one exists (full frame
-    /// rate), else the foreground base station — whose stream is pinned to its
-    /// focused rocket, so callouts never interleave two rockets.
-    var voiceDevice: BLEDevice? { directRocket ?? foregroundBaseStation }
+    /// The link that speaks: the foreground base station, and only ever a
+    /// base station.  It speaks one rocket, `voiceRocketKey`, so callouts
+    /// never interleave two rockets.
+    ///
+    /// A direct rocket link used to win here (full frame rate), with the base
+    /// station as the fallback.  But a direct link always leaves range at
+    /// launch, so on every flight with the rocket paired on the pad voice sat
+    /// on a link that was already gone until the drop was noticed, then moved
+    /// to the base station mid-boost — and moved back whenever the rocket
+    /// briefly reconnected.  Whether the callouts followed the rocket or the
+    /// base station depended on whether the rocket happened to be paired.
+    /// With no base station connected there are no callouts.
+    var voiceDevice: BLEDevice? { foregroundBaseStation }
+
+    /// The rocket the callouts follow: the computer the dashboard is showing,
+    /// usually the followed one (`VoiceRocketPolicy`). The units bar and the
+    /// section headers mark it.
+    var voiceRocketKey: RocketKey? {
+        guard let bs = voiceDevice, let rid = bs.voiceRocketID else { return nil }
+        return RocketKey(networkID: bs.networkID, rocketID: rid)
+    }
 
     /// Re-run every binding the fleet owns.  Idempotent and cheap — safe to
     /// call from any state change, and called from several deliberately
@@ -349,8 +434,8 @@ class BLEFleet: NSObject, ObservableObject {
     ///
     /// The per-device transitions (`isConnected`, `deviceType` resolving after
     /// the identity readback) come in synchronously through `BLEDevice`'s own
-    /// `didSet`s instead, so the disconnect edge — the one that has to move
-    /// voice to the base station mid-flight — is handled without any delay.
+    /// `didSet`s instead, so a base station's disconnect or reconnect edge
+    /// moves voice without any delay.
     private func startBindingRouting() {
         Publishers.Merge(
             $devices.map { _ in () },
@@ -365,7 +450,10 @@ class BLEFleet: NSObject, ObservableObject {
 
     // MARK: - Init
 
-    override init() {
+    /// `knownDevices` is a seam for tests, which must not write the real
+    /// registry (UserDefaults.standard); the app uses the default.
+    init(knownDevices: KnownDeviceStore) {
+        self.knownDevices = knownDevices
         super.init()
         centralManager = CBCentralManager(
             delegate: self,
@@ -373,6 +461,10 @@ class BLEFleet: NSObject, ObservableObject {
             options: [CBCentralManagerOptionRestoreIdentifierKey: "TinkerRocketBLE"]
         )
         startBindingRouting()
+    }
+
+    override convenience init() {
+        self.init(knownDevices: KnownDeviceStore())
     }
 
     // MARK: - Scanning
@@ -432,6 +524,7 @@ class BLEFleet: NSObject, ObservableObject {
             virtualDriver = nil
             device.onDisconnect()
             devices.removeAll { $0 === device }
+            deviceObservers[VirtualRocketDriver.peripheralID] = nil
             return
         }
         if let peripheral = device.peripheral {
@@ -446,6 +539,7 @@ class BLEFleet: NSObject, ObservableObject {
             v.stop()
             v.device.onDisconnect()
             devices.removeAll { $0 === v.device }
+            deviceObservers[VirtualRocketDriver.peripheralID] = nil
             virtualDriver = nil
         }
         // Mark EVERY peripheral before cancelling any: each cancel is matched
@@ -473,6 +567,10 @@ class BLEFleet: NSObject, ObservableObject {
         guard virtualDriver == nil else { return }
         let driver = VirtualRocketDriver()
         virtualDriver = driver
+        // The same wiring a real link gets: without the fleet back-reference
+        // the fix cache never fills (no map pins), focus never reaches
+        // bsFocus, and roster views do not hear the device change.
+        adopt(driver.device, peripheralID: VirtualRocketDriver.peripheralID)
         devices.append(driver.device)
         driver.start()
     }

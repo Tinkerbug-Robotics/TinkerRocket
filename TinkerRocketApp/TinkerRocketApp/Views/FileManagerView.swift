@@ -11,6 +11,8 @@ import UniformTypeIdentifiers
 
 struct FileManagerView: View {
     @ObservedObject var device: BLEDevice
+    /// #1658: the downloaded flight records the rocket profile bound to this unit.
+    @EnvironmentObject private var profileStore: RocketProfileStore
     @State private var fileToDelete: FileInfo?
     @State private var showDeleteConfirm = false
 
@@ -176,6 +178,26 @@ struct FileManagerView: View {
                     .padding(.bottom, 8)
                 }
 
+                // A download kept short of its listing (the board ended it
+                // itself) must say so too: the row turns green, and without
+                // this nothing would tell the operator bytes are missing.
+                if let warning = device.downloadWarning {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(warning)
+                                .font(.caption)
+                            Text("Updating the rocket's firmware makes it send the whole file.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                }
+
                 // File list
                 if displayedFiles.isEmpty {
                     VStack(spacing: 10) {
@@ -211,7 +233,9 @@ struct FileManagerView: View {
                                     onDownload: {
                                         print("Download button tapped for: \(file.name)")
 
-                                        device.downloadAndCacheFlight(file.name) { success in
+                                        let profile = profileStore.profile(boundToUnitID: device.unitID)
+                                        device.downloadAndCacheFlight(file.name,
+                                                                      rocketProfile: profile?.name) { success in
                                             if success {
                                                 print("[DOWNLOAD] Success: \(file.name)")
                                             } else {

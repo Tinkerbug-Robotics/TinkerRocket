@@ -33,8 +33,15 @@
 // After a trip consent stays low for kHoldOffMs, which outlasts the FC's
 // settle + pulse on the shorted channel. The FC then marks that channel Done
 // and never retries it, so re-arming cannot fire into the same short; it can
-// only let a later channel (the main) fire. The trip never re-arms while the
-// pack still reads over the limit.
+// only let a later channel (the main) fire. The trip does not re-arm while
+// the pack still reads over the limit -- for kMaxHoldMs at most (V10 pre-flight
+// review, 2026-11-18). Past the hold-off U9 has been open for longer than any
+// fire loop could carry current through it, so a reading still over the limit
+// is not the fire loop: a bad shunt, its sense traces or the INA230, or a
+// fault consent cannot open. Holding consent low against it protects nothing
+// and vetoes every later deployment, the main's included. So the trip lets go,
+// and the poll stops tripping on such a reading until one under the limit
+// says the measurement is the pack's again (State::implausible).
 //
 // ### The threshold, and what it costs (owner decision, 2026-10-04) ###
 // 30 A, below the INA230's 40.96 A clip at R72 = 2 mOhm, so a hard short
@@ -106,6 +113,8 @@ inline constexpr uint32_t kFcFireMs      = 200;   // PYRO_FIRE_DURATION_MS
 // loop and the OC's.
 inline constexpr uint32_t kHoldOffMs     = kFcArmSettleMs + kFcFireMs + 40;
 static_assert(kHoldOffMs == 250, "the issue's ~250 ms");
+// The longest a reading still over the limit keeps consent low (file header).
+inline constexpr uint32_t kMaxHoldMs     = 2 * kHoldOffMs;
 
 // ---- INA230 configuration -----------------------------------------------------
 
@@ -211,6 +220,8 @@ struct State
     Event    current;           // the trip being held, valid while holding
     Event    last;              // the most recent trip, valid once trips > 0
     uint16_t trips   = 0;       // this boot
+    bool     implausible = false;   // a reading stayed over the limit through kMaxHoldMs:
+                                    // the poll does not trip on it until one is under
 };
 
 // An over-limit was seen at now_ms with consent up for `reason`. Returns true
@@ -224,6 +235,7 @@ inline bool onOverLimit(State& s, uint32_t now_ms, int16_t counts,
         if (counts > s.current.peak_counts) s.current.peak_counts = counts;
         return false;
     }
+    if (s.implausible && src == Source::Poll) return false;
     s.holding             = true;
     s.current.at_ms       = now_ms;
     s.current.peak_counts = counts;
@@ -245,6 +257,13 @@ inline void notePeak(State& s, int16_t counts)
     }
 }
 
+// A reading under the limit: the measurement is the pack's again, so the poll
+// trips on the next one over it.
+inline void noteUnderLimit(State& s)
+{
+    s.implausible = false;
+}
+
 // The latest shunt reading, as the re-arm sees it.
 struct Reading
 {
@@ -254,13 +273,19 @@ struct Reading
 
 // Does the trip still hold consent low at now_ms? Releases once kHoldOffMs has
 // passed AND the latest reading is not over the limit; an unavailable reading
-// does not hold it (see the file header). Releasing clears `holding`, which is
-// also what keeps the deadline wrap-safe.
+// does not hold it (see the file header), and nor does one still over the
+// limit at kMaxHoldMs, which marks the measurement implausible. Releasing
+// clears `holding`, which is also what keeps the deadline wrap-safe.
 inline bool stillHolding(State& s, uint32_t now_ms, Reading latest)
 {
     if (!s.holding) return false;
-    if ((now_ms - s.current.at_ms) < kHoldOffMs) return true;
-    if (latest.valid && overLimit(latest.counts)) return true;
+    const uint32_t held_ms = now_ms - s.current.at_ms;
+    if (held_ms < kHoldOffMs) return true;
+    if (latest.valid && overLimit(latest.counts))
+    {
+        if (held_ms < kMaxHoldMs) return true;
+        s.implausible = true;
+    }
     s.holding = false;
     return false;
 }

@@ -6,9 +6,11 @@ ota_1,    app,  ota_1,   0x310000,0x300000,
 coredump, data, coredump,0x610000,0x10000,
 # #1176: the in-flight recovery token. Its OWN partition, not a namespace in
 # the shared `nvs` above, for two reasons: no other namespace can exhaust the
-# store the restore-attempt bound lives in, and keeping it far below its
-# compaction threshold means the one launch-edge write is a plain append rather
-# than a sector erase (which disables the NVS cache and stalls core 1).
+# store the restore-attempt bound lives in, and the one launch-edge write must
+# be a plain append rather than a sector erase (which stalls both cores).
+# Being far below the compaction threshold does not make it one: every rewrite
+# appends a fresh copy, and the write that fills a page pays for the reclaim
+# (#1659). So W1 makes room for it on the pad (token_page_policy.h).
 # Appended at the end so nothing above it moves: the existing `nvs` keeps its
 # offset and size, so mag cal, LoRa config and identity all survive the
 # partition-table change. Ends at 0x624000, inside the 8 MB V7/V8 flash.

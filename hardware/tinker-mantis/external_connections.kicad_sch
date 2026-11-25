@@ -2520,7 +2520,7 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "Custom:TPS1HC08-Q1"
+		(symbol "Custom:TPS2HC16-Q1"
 			(pin_names
 				(offset 1.016)
 			)
@@ -2539,7 +2539,7 @@
 					)
 				)
 			)
-			(property "Value" "TPS1HC08-Q1"
+			(property "Value" "TPS2HC16-Q1"
 				(at 0 -16.51 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -2560,7 +2560,7 @@
 					)
 				)
 			)
-			(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+			(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -2571,7 +2571,7 @@
 					)
 				)
 			)
-			(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), 4-18 V (28 V abs max), adjustable current limit 10-25 A, hot-short breaker, integrated inductive clamp, AEC-Q100, VQFN-HR-11"
+			(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, 3-28 V, adjustable current limit 5-15 A (one ILIM for both channels), hot-short breaker, AEC-Q100, VQFN-HR-11. Pin superset of the TPS1HC08-Q1: 1 VOUT1, 11 VOUT2, 5 SEL, 7 EN1, 8 EN2"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -2582,7 +2582,7 @@
 					)
 				)
 			)
-			(property "MPN" "TPS1HC08PQVAHRQ1"
+			(property "MPN" "TPS2HC16PQVAHRQ1"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -2615,7 +2615,7 @@
 					)
 				)
 			)
-			(property "ki_keywords" "high side switch efuse current limit protected TPS1HC08"
+			(property "ki_keywords" "high side switch efuse current limit protected dual TPS2HC16"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -2637,7 +2637,7 @@
 					)
 				)
 			)
-			(symbol "TPS1HC08-Q1_0_0"
+			(symbol "TPS2HC16-Q1_0_0"
 				(rectangle
 					(start -7.62 5.08)
 					(end 7.62 -10.16)
@@ -2652,7 +2652,7 @@
 				(pin passive line
 					(at 10.16 0 180)
 					(length 2.54)
-					(name "VOUT"
+					(name "VOUT1"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -2721,11 +2721,10 @@
 						)
 					)
 				)
-				(pin no_connect line
+				(pin input line
 					(at 0 -12.7 90)
 					(length 2.54)
-					(hide yes)
-					(name "NC"
+					(name "SEL"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -2761,7 +2760,7 @@
 				(pin input line
 					(at 2.54 -12.7 90)
 					(length 2.54)
-					(name "EN"
+					(name "EN1"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -2776,11 +2775,10 @@
 						)
 					)
 				)
-				(pin no_connect line
+				(pin input line
 					(at 5.08 -12.7 90)
 					(length 2.54)
-					(hide yes)
-					(name "NC"
+					(name "EN2"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -2834,7 +2832,7 @@
 				(pin passive line
 					(at 10.16 2.54 180)
 					(length 2.54)
-					(name "VOUT"
+					(name "VOUT2"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -2842,6 +2840,296 @@
 						)
 					)
 					(number "11"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
+		(symbol "Custom:TPS259814LRPWR"
+			(pin_names
+				(offset 1.016)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(in_pos_files yes)
+			(duplicate_pin_numbers_are_jumpers no)
+			(property "Reference" "U"
+				(at -12.192 15.748 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "TPS259814LRPWR"
+				(at -4.826 13.716 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" "Footprints:IC_TPS22811LRPWR"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps25981.pdf"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Description" "2.7-16 V, 10 A, 6 mOhm eFuse, circuit breaker, latch-off, adjustable OVLO, current monitor"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "MPN" "TPS259814LRPWR"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Mfr" "Texas Instruments"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Package" "VQFN-HR-10 (RPW) 2.00 x 2.00 mm"
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(symbol "TPS259814LRPWR_0_0"
+				(rectangle
+					(start -12.7 12.7)
+					(end 4.445 -5.715)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type background)
+					)
+				)
+				(pin input line
+					(at -17.78 10.16 0)
+					(length 5.08)
+					(name "EN/UVLO"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin input line
+					(at -17.78 6.35 0)
+					(length 5.08)
+					(name "ENn/OVLO"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin open_collector line
+					(at 9.525 10.16 180)
+					(length 5.08)
+					(name "PG"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at -17.78 2.54 0)
+					(length 5.08)
+					(name "~{FLT}"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "4"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at -17.78 -1.27 0)
+					(length 5.08)
+					(name "IN"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin power_out line
+					(at 9.525 -1.27 180)
+					(length 5.08)
+					(name "OUT"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "6"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 9.525 2.54 180)
+					(length 5.08)
+					(name "DVDT"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "7"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at -3.81 -10.795 90)
+					(length 5.08)
+					(name "GND"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "8"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin output line
+					(at 9.525 6.35 180)
+					(length 5.08)
+					(name "ILM"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "9"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 9.525 -3.81 180)
+					(length 5.08)
+					(name "ITIMER"
+						(effects
+							(font
+								(size 1.016 1.016)
+							)
+						)
+					)
+					(number "10"
 						(effects
 							(font
 								(size 1.016 1.016)
@@ -3902,296 +4190,6 @@
 						(effects
 							(font
 								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-			)
-			(embedded_fonts no)
-		)
-		(symbol "TPS22811LRPWR_1"
-			(pin_names
-				(offset 1.016)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(in_pos_files yes)
-			(duplicate_pin_numbers_are_jumpers no)
-			(property "Reference" "U"
-				(at -12.192 15.748 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Value" "TPS22811LRPWR"
-				(at -4.826 13.716 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Footprint" "Footprints:IC_TPS22811LRPWR"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps22811.pdf"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Description" "2.7-16 V, 10 A, 6 mOhm load switch, adjustable OVLO, current monitor"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "MPN" "TPS22811LRPWR"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Mfr" "Texas Instruments"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Package" "VQFN-HR-10 (RPW) 2.00 x 2.00 mm"
-				(at 0 0 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(symbol "TPS22811LRPWR_1_0_0"
-				(rectangle
-					(start -12.7 12.7)
-					(end 4.445 -5.715)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type background)
-					)
-				)
-				(pin input line
-					(at -17.78 10.16 0)
-					(length 5.08)
-					(name "EN/UVLO"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin input line
-					(at -17.78 6.35 0)
-					(length 5.08)
-					(name "ENn/OVLO"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "2"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin open_collector line
-					(at 9.525 10.16 180)
-					(length 5.08)
-					(name "PG"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "3"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin input line
-					(at -17.78 2.54 0)
-					(length 5.08)
-					(name "PGTH"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "4"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin power_in line
-					(at -17.78 -1.27 0)
-					(length 5.08)
-					(name "IN"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "5"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin power_out line
-					(at 9.525 -1.27 180)
-					(length 5.08)
-					(name "OUT"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "6"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin passive line
-					(at 9.525 2.54 180)
-					(length 5.08)
-					(name "DVDT"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "7"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin power_in line
-					(at -3.81 -10.795 90)
-					(length 5.08)
-					(name "GND"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "8"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin output line
-					(at 9.525 6.35 180)
-					(length 5.08)
-					(name "IMON"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "9"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-				)
-				(pin no_connect line
-					(at 9.525 -3.81 180)
-					(length 5.08)
-					(name "DNC"
-						(effects
-							(font
-								(size 1.016 1.016)
-							)
-						)
-					)
-					(number "10"
-						(effects
-							(font
-								(size 1.016 1.016)
 							)
 						)
 					)
@@ -5601,6 +5599,38 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "fa2fd885-1593-45af-83ce-9f571e69b1fa")
+	)
+	(no_connect
+		(at 73.66 111.76)
+		(uuid "ade23ce4-11c3-4415-bde4-2d84ff8004a6")
+	)
+	(no_connect
+		(at 68.58 111.76)
+		(uuid "5e8db760-d75a-47a1-92ea-5b25ffdebc9c")
+	)
+	(no_connect
+		(at 74.93 173.355)
+		(uuid "2d1695cc-df0e-4eb3-8742-7d925bb38270")
+	)
+	(no_connect
+		(at 69.85 173.355)
+		(uuid "6f60754c-cc13-4b13-aa57-ecd8468265e2")
+	)
+	(no_connect
+		(at 165.735 130.175)
+		(uuid "5419b282-5d06-4140-afb1-5e3bffe3dde6")
+	)
+	(no_connect
+		(at 160.655 130.175)
+		(uuid "c377d109-8888-4a74-8658-e69396a8eb75")
+	)
+	(no_connect
+		(at 81.28 50.165)
+		(uuid "e44c1d32-5713-4759-aa44-8eb6c70163c8")
+	)
+	(no_connect
+		(at 76.2 50.165)
+		(uuid "397125e7-48d6-467c-98c9-f6ab668aabc1")
 	)
 	(no_connect
 		(at 250.825 105.41)
@@ -8880,7 +8910,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:TPS1HC08-Q1")
+		(lib_id "Custom:TPS2HC16-Q1")
 		(at 73.66 99.06 0)
 		(mirror y)
 		(unit 1)
@@ -8901,7 +8931,7 @@
 				)
 			)
 		)
-		(property "Value" "TPS1HC08-Q1"
+		(property "Value" "TPS2HC16-Q1"
 			(at 73.66 92.71 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8923,7 +8953,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 			(at 92.075 93.98 0)
 			(hide yes)
 			(show_name no)
@@ -8935,7 +8965,7 @@
 				)
 			)
 		)
-		(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), adjustable current limit, VQFN-HR-11"
+		(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, adjustable current limit, VQFN-HR-11; used as one channel (EN2/SEL open, internal pull-downs), VOUT1+VOUT2 tied"
 			(at 99.06 97.155 0)
 			(hide yes)
 			(show_name no)
@@ -8946,7 +8976,7 @@
 				)
 			)
 		)
-		(property "MPN" "TPS1HC08PQVAHRQ1"
+		(property "MPN" "TPS2HC16PQVAHRQ1"
 			(at 99.06 97.155 0)
 			(hide yes)
 			(show_name no)
@@ -9011,8 +9041,7 @@
 		)
 	)
 	(symbol
-		(lib_name "TPS22811LRPWR_1")
-		(lib_id "Custom:TPS22811LRPWR")
+		(lib_id "Custom:TPS259814LRPWR")
 		(at 207.01 33.02 0)
 		(unit 1)
 		(body_style 1)
@@ -9032,7 +9061,7 @@
 				)
 			)
 		)
-		(property "Value" "TPS22811LRPWR"
+		(property "Value" "TPS259814LRPWR"
 			(at 201.93 19.05 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9053,7 +9082,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps22811.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps25981.pdf"
 			(at 207.01 33.02 0)
 			(hide yes)
 			(show_name no)
@@ -9064,7 +9093,7 @@
 				)
 			)
 		)
-		(property "Description" "2.7-16 V, 10 A, 6 mOhm load switch, adjustable OVLO, current monitor"
+		(property "Description" "2.7-16 V, 10 A, 6 mOhm eFuse, circuit breaker, latch-off, adjustable OVLO, current monitor"
 			(at 207.01 33.02 0)
 			(hide yes)
 			(show_name no)
@@ -9075,7 +9104,7 @@
 				)
 			)
 		)
-		(property "MPN" "TPS22811LRPWR"
+		(property "MPN" "TPS259814LRPWR"
 			(at 207.01 33.02 0)
 			(hide yes)
 			(show_name no)
@@ -9941,8 +9970,7 @@
 		)
 	)
 	(symbol
-		(lib_name "TPS22811LRPWR_1")
-		(lib_id "Custom:TPS22811LRPWR")
+		(lib_id "Custom:TPS259814LRPWR")
 		(at 241.3 115.57 0)
 		(unit 1)
 		(body_style 1)
@@ -9962,7 +9990,7 @@
 				)
 			)
 		)
-		(property "Value" "TPS22811LRPWR"
+		(property "Value" "TPS259814LRPWR"
 			(at 236.22 101.6 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9983,7 +10011,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps22811.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps25981.pdf"
 			(at 241.3 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -9994,7 +10022,7 @@
 				)
 			)
 		)
-		(property "Description" "2.7-16 V, 10 A, 6 mOhm load switch, adjustable OVLO, current monitor"
+		(property "Description" "2.7-16 V, 10 A, 6 mOhm eFuse, circuit breaker, latch-off, adjustable OVLO, current monitor"
 			(at 241.3 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -10005,7 +10033,7 @@
 				)
 			)
 		)
-		(property "MPN" "TPS22811LRPWR"
+		(property "MPN" "TPS259814LRPWR"
 			(at 241.3 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -11008,7 +11036,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:TPS1HC08-Q1")
+		(lib_id "Custom:TPS2HC16-Q1")
 		(at 74.93 160.655 0)
 		(mirror y)
 		(unit 1)
@@ -11029,7 +11057,7 @@
 				)
 			)
 		)
-		(property "Value" "TPS1HC08-Q1"
+		(property "Value" "TPS2HC16-Q1"
 			(at 74.93 154.305 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11051,7 +11079,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 			(at 93.345 155.575 0)
 			(hide yes)
 			(show_name no)
@@ -11063,7 +11091,7 @@
 				)
 			)
 		)
-		(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), adjustable current limit, VQFN-HR-11"
+		(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, adjustable current limit, VQFN-HR-11; used as one channel (EN2/SEL open, internal pull-downs), VOUT1+VOUT2 tied"
 			(at 100.33 158.75 0)
 			(hide yes)
 			(show_name no)
@@ -11074,7 +11102,7 @@
 				)
 			)
 		)
-		(property "MPN" "TPS1HC08PQVAHRQ1"
+		(property "MPN" "TPS2HC16PQVAHRQ1"
 			(at 100.33 158.75 0)
 			(hide yes)
 			(show_name no)
@@ -11820,7 +11848,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "33.2 k"
+		(property "Value" "24.9 k"
 			(at 81.915 178.435 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11864,7 +11892,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0733K2L"
+		(property "MPN" "RC0402FR-0724K9L"
 			(at 189.23 122.555 0)
 			(hide yes)
 			(show_name no)
@@ -13155,7 +13183,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "33.2 k"
+		(property "Value" "24.9 k"
 			(at 88.265 55.245 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -13199,7 +13227,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0733K2L"
+		(property "MPN" "RC0402FR-0724K9L"
 			(at 189.23 122.555 0)
 			(hide yes)
 			(show_name no)
@@ -14481,7 +14509,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:TPS1HC08-Q1")
+		(lib_id "Custom:TPS2HC16-Q1")
 		(at 165.735 117.475 0)
 		(mirror y)
 		(unit 1)
@@ -14502,7 +14530,7 @@
 				)
 			)
 		)
-		(property "Value" "TPS1HC08-Q1"
+		(property "Value" "TPS2HC16-Q1"
 			(at 165.735 111.125 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -14524,7 +14552,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 			(at 184.15 112.395 0)
 			(hide yes)
 			(show_name no)
@@ -14536,7 +14564,7 @@
 				)
 			)
 		)
-		(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), adjustable current limit, VQFN-HR-11"
+		(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, adjustable current limit, VQFN-HR-11; used as one channel (EN2/SEL open, internal pull-downs), VOUT1+VOUT2 tied"
 			(at 191.135 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -14547,7 +14575,7 @@
 				)
 			)
 		)
-		(property "MPN" "TPS1HC08PQVAHRQ1"
+		(property "MPN" "TPS2HC16PQVAHRQ1"
 			(at 191.135 115.57 0)
 			(hide yes)
 			(show_name no)
@@ -16082,7 +16110,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "33.2 k"
+		(property "Value" "24.9 k"
 			(at 80.645 116.84 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -16126,7 +16154,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0733K2L"
+		(property "MPN" "RC0402FR-0724K9L"
 			(at 187.96 108.585 0)
 			(hide yes)
 			(show_name no)
@@ -16164,7 +16192,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:TPS1HC08-Q1")
+		(lib_id "Custom:TPS2HC16-Q1")
 		(at 81.28 37.465 0)
 		(mirror y)
 		(unit 1)
@@ -16185,7 +16213,7 @@
 				)
 			)
 		)
-		(property "Value" "TPS1HC08-Q1"
+		(property "Value" "TPS2HC16-Q1"
 			(at 81.28 31.115 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -16207,7 +16235,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps1hc08-q1.pdf"
+		(property "Datasheet" "https://www.ti.com/lit/ds/symlink/tps2hc16-q1.pdf"
 			(at 92.075 32.385 0)
 			(hide yes)
 			(show_name no)
@@ -16219,7 +16247,7 @@
 				)
 			)
 		)
-		(property "Description" "Single-channel 8 mOhm smart high-side switch (eFuse), adjustable current limit, VQFN-HR-11"
+		(property "Description" "Dual-channel 18.7 mOhm smart high-side switch, adjustable current limit, VQFN-HR-11; used as one channel (EN2/SEL open, internal pull-downs), VOUT1+VOUT2 tied"
 			(at 99.06 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -16230,7 +16258,7 @@
 				)
 			)
 		)
-		(property "MPN" "TPS1HC08PQVAHRQ1"
+		(property "MPN" "TPS2HC16PQVAHRQ1"
 			(at 99.06 35.56 0)
 			(hide yes)
 			(show_name no)
@@ -16983,7 +17011,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "33.2 k"
+		(property "Value" "24.9 k"
 			(at 172.72 135.255 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -17027,7 +17055,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0733K2L"
+		(property "MPN" "RC0402FR-0724K9L"
 			(at 189.23 122.555 0)
 			(hide yes)
 			(show_name no)

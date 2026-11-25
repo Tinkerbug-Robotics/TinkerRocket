@@ -11,11 +11,13 @@ app_main, where no runtime assertion can reach it. Under-declaring is harmless;
 it just leaves the top of the part unaddressable. Sizing to the TABLE rather
 than to the PART means an image is safe on any board carrying at least that
 much flash, which removed the per-revision fork entirely for flight_computer
-and out_computer — they share one partition table across V7/V8/V9/M1, so the
-16 MB overlays were buying nothing at all.
+and out_computer — they share one partition table across V7/V8/V9/V10 (and
+the retired Beetle V1), so the 16 MB overlays were buying nothing at all. (The
+Tinker-Beetle V2, M2, is the exception that needs a table of its own: its
+parts are 4 MB, smaller than the shared table.)
 
 That fork is what went wrong twice: the original V7 boot loop (ec2a0728), and
-rocket-computer-mini's two processors declaring different sizes for one board.
+the Beetle V1's two processors declaring different sizes for one board.
 
 So this asserts, for every project x board overlay:
   1. the declaration covers its own partition table, and
@@ -44,23 +46,41 @@ TABLE_RE = re.compile(r'^CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="([^"]+)"\s*$', 
 # (label, project, [sdkconfig files applied in order])
 # Mirrors each project's CMakeLists overlay selection; keep in step with it.
 BUILDS = [
-    ("flight_computer V7/V8", "flight_computer", ["sdkconfig.defaults"]),
+    ("flight_computer V5/V7/V8", "flight_computer", ["sdkconfig.defaults"]),
     ("flight_computer V9", "flight_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
-    ("flight_computer M1", "flight_computer", ["sdkconfig.defaults", "sdkconfig.defaults.m1"]),
-    ("out_computer V8", "out_computer", ["sdkconfig.defaults"]),
+    ("flight_computer V10", "flight_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
+    # The Tinker-Beetle V2's flight computer: the same 4 MB in-package flash as
+    # its out computer. The PX1105R image's overlay sets no flash, so it is left
+    # out here; flash4mb comes last in the project CMakeLists as it does here.
+    ("flight_computer M2", "flight_computer",
+     ["sdkconfig.defaults", "sdkconfig.defaults.m2", "sdkconfig.defaults.flash4mb"]),
+    ("out_computer V5/V7/V8", "out_computer", ["sdkconfig.defaults"]),
     ("out_computer V9", "out_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
-    ("out_computer M1", "out_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
+    ("out_computer V10", "out_computer", ["sdkconfig.defaults", "sdkconfig.defaults.v9"]),
+    # The Tinker-Beetle V2: the one out computer whose boot flash is 4 MB (in
+    # the ESP32-S3FH4R2's package), with a partition table cut to fit it.
+    ("out_computer M2", "out_computer",
+     ["sdkconfig.defaults", "sdkconfig.defaults.v9", "sdkconfig.defaults.flash4mb"]),
     ("base_station V1/V2", "base_station", ["sdkconfig.defaults"]),
     ("base_station V3", "base_station", ["sdkconfig.defaults", "sdkconfig.defaults.v3"]),
     ("base_station V4 (Tinker-Base)", "base_station", ["sdkconfig.defaults", "sdkconfig.defaults.v3"]),
     ("radio_board", "radio_board", ["sdkconfig.defaults"]),
-    ("rocket_computer_mini", "legacy/rocket_computer_mini", ["sdkconfig.defaults"]),
 ]
 
-# Physical boards carrying two processors that boot from their own NOR parts.
-# The Tinker-Beetle's BOM line 59 fits TWO W25Q128JVYIQ (U13 and U33), so
-# both are 16 MB and the two declarations must agree.
-BOARD_PAIRS = [("tinker-beetle", "flight_computer M1", "out_computer M1")]
+# Physical boards carrying two processors that boot from their own flash. The
+# Tinker-Mantis fits two NOR parts (U13 for the out computer, U16 for the
+# flight computer; 16 MB on V9 and V10, docs/board-versioning.md). (The
+# retired Tinker-Beetle V1 fitted two W25Q128JVYIQ, U13 and U33.)
+BOARD_PAIRS = [
+    # The Tinker-Beetle V2: two ESP32-S3FH4R2, each booting from the 4 MB in
+    # its package.
+    ("tinker-beetle V2", "flight_computer M2", "out_computer M2"),
+    ("tinker-mantis V9", "flight_computer V9", "out_computer V9"),
+    ("tinker-mantis V10", "flight_computer V10", "out_computer V10"),
+    # V5 fits two W25Q64JV (U17 for the flight computer, U13 for the out
+    # computer): 8 MB each, from the archived netlist.
+    ("TinkerRocket Full V5", "flight_computer V5/V7/V8", "out_computer V5/V7/V8"),
+]
 
 # The sizes esptool/IDF can declare. The policy picks the smallest that fits.
 STANDARD_MB = (1, 2, 4, 8, 16, 32, 64)

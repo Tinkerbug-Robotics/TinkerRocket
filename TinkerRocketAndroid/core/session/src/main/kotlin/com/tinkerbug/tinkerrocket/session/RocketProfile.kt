@@ -1,5 +1,6 @@
 package com.tinkerbug.tinkerrocket.session
 
+import com.tinkerbug.tinkerrocket.protocol.AntennaOffset
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -77,6 +78,10 @@ public data class RocketProfile(
     val pnKpPos: Float = 0.8f,             // config::PN_KP_POS_PER_S2
     val pnKdVel: Float = 1.5f,             // config::PN_KD_VEL_PER_S
     val pnGuidanceLaw: Int = 0,            // config::GUIDANCE_LAW_DEFAULT
+    // Guidance latches off for the rest of the flight past this tilt from
+    // vertical: boost before burnout, coast after (cmd 65's tail).
+    val pnTiltLimitBoostDeg: Float = 15f,  // config::GUIDANCE_TILT_LIMIT_BOOST_DEG
+    val pnTiltLimitCoastDeg: Float = 20f,  // config::GUIDANCE_TILT_LIMIT_COAST_DEG
     val cameraType: Int = 2,               // config::CAMERA_TYPE (RunCam)
     // #1095 item 2: pad auto-detect (IMU_ORIENT_AUTO), in lockstep with the
     // iOS RocketProfile default and config::BOARD_TO_ROCKET_ORIENT on both
@@ -95,6 +100,24 @@ public data class RocketProfile(
     // the six-way lockstep would have chosen, and the decode fallback below
     // turned a missing/off-whitelist stored value into 1920 as well.
     val imuRateHz: Int = 0,
+    // GNSS log, cmd 79: GNSS_LOG_DETAILED (all of a mosaic-G5's data in the
+    // log, the IMU at most 4k, the default) or GNSS_LOG_REDUCED (its position
+    // at 20 Hz and raw measurements once a second, the 8k rates open). The
+    // receiver's own microSD card keeps everything either way; no other
+    // receiver has data this changes.
+    val gnssLogSetting: Int = GNSS_LOG_DETAILED,
+    // GNSS antenna offset, cmd 81 (iOS antennaOffsetKnown / antennaX-Y-ZMm):
+    // from the flight computer's IMU to the GNSS antenna's phase center, mm
+    // along the BOARD's own axes (+X forward, +Y left, +Z up out of the
+    // component side). The flight computer rotates it into the rocket frame
+    // with its own mounting setting. Unknown (the default) is today's
+    // behavior: the filter allows for an antenna up to 30 cm away. Unknown
+    // always stores zeros, as it goes on the wire. Only the mosaic-G5's
+    // navigation filter uses it.
+    val antennaOffsetKnown: Boolean = false,
+    val antennaXMm: Int = 0,
+    val antennaYMm: Int = 0,
+    val antennaZMm: Int = 0,
 
     // Servo (#561: bias defaults 0 — a generic default must not carry trim)
     val servoBias1: Int = 0,
@@ -152,6 +175,16 @@ public data class RocketProfile(
     public val finMinDeg: Float get() = -finTravelDeg / 2.0f
     public val finMaxDeg: Float get() = finTravelDeg / 2.0f
 
+    /** The four antenna fields as one value (unknown reads as zeros). */
+    public val antennaOffset: AntennaOffset
+        get() = AntennaOffset.of(antennaOffsetKnown, antennaXMm, antennaYMm, antennaZMm)
+
+    /** This profile holding [offset]; unknown stores zeros. */
+    public fun withAntennaOffset(offset: AntennaOffset): RocketProfile {
+        val o = AntennaOffset.of(offset.known, offset.xMm, offset.yMm, offset.zMm)
+        return copy(antennaOffsetKnown = o.known, antennaXMm = o.xMm, antennaYMm = o.yMm, antennaZMm = o.zMm)
+    }
+
     public val controlModeLabel: String
         get() = when {
             guidanceEnabled -> "Guidance"
@@ -177,6 +210,10 @@ public data class RocketProfile(
         /** What a rocket flies when it doesn't say (no `irmax`): every board
          *  before the 8k rates topped out here. */
         public const val IMU_RATE_BASELINE_MAX_HZ: Int = 3840
+
+        /** `GNSS_LOG_DETAILED` / `GNSS_LOG_REDUCED` in RocketComputerTypes.h. */
+        public const val GNSS_LOG_DETAILED: Int = 0
+        public const val GNSS_LOG_REDUCED: Int = 1
 
         /** Every logging-rate setting: the two dynamic modes, then the
          *  whitelisted ISM6HG256 ODR steps. */
@@ -277,9 +314,16 @@ public object RocketProfileCodec {
         put("pnKpPos", JsonPrimitive(p.pnKpPos))
         put("pnKdVel", JsonPrimitive(p.pnKdVel))
         put("pnGuidanceLaw", JsonPrimitive(p.pnGuidanceLaw))
+        put("pnTiltLimitBoostDeg", JsonPrimitive(p.pnTiltLimitBoostDeg))
+        put("pnTiltLimitCoastDeg", JsonPrimitive(p.pnTiltLimitCoastDeg))
         put("cameraType", JsonPrimitive(p.cameraType))
         put("imuOrientSetting", JsonPrimitive(p.imuOrientSetting))
         put("imuRateHz", JsonPrimitive(p.imuRateHz))
+        put("gnssLogSetting", JsonPrimitive(p.gnssLogSetting))
+        put("antennaOffsetKnown", JsonPrimitive(p.antennaOffsetKnown))
+        put("antennaXMm", JsonPrimitive(p.antennaXMm))
+        put("antennaYMm", JsonPrimitive(p.antennaYMm))
+        put("antennaZMm", JsonPrimitive(p.antennaZMm))
         put("servoBias1", JsonPrimitive(p.servoBias1))
         put("servoBias2", JsonPrimitive(p.servoBias2))
         put("servoBias3", JsonPrimitive(p.servoBias3))
@@ -380,6 +424,20 @@ public object RocketProfileCodec {
         val finSlots = o.intList("finServoAtSlot") ?: d.finServoAtSlot
         val finRev = o.boolList("finReverse") ?: d.finReverse
         val finRollRev = o.boolList("finRollReverse") ?: d.finRollReverse
+        // The antenna offset reads as one value: a profile from before the
+        // setting, or one holding anything the firmware would refuse (a
+        // component outside ±2000 mm, a wrong type, a missing key), reads as
+        // Unknown — iOS's decoder does the same.
+        val antenna = if (o.bool("antennaOffsetKnown") == true) {
+            AntennaOffset.fromWire(
+                1L,
+                o.int("antennaXMm")?.toLong(),
+                o.int("antennaYMm")?.toLong(),
+                o.int("antennaZMm")?.toLong(),
+            )
+        } else {
+            null
+        } ?: AntennaOffset.UNKNOWN
 
         return RocketProfile(
             id = uuid("id") ?: UUID.randomUUID(),
@@ -409,6 +467,8 @@ public object RocketProfileCodec {
             pnKpPos = o.float("pnKpPos") ?: d.pnKpPos,
             pnKdVel = o.float("pnKdVel") ?: d.pnKdVel,
             pnGuidanceLaw = o.int("pnGuidanceLaw") ?: d.pnGuidanceLaw,
+            pnTiltLimitBoostDeg = o.float("pnTiltLimitBoostDeg") ?: d.pnTiltLimitBoostDeg,
+            pnTiltLimitCoastDeg = o.float("pnTiltLimitCoastDeg") ?: d.pnTiltLimitCoastDeg,
             // Normalize enum-ish ints on load.  Older builds edited these as
             // free-typed numbers, so a stored value can sit outside the range
             // the firmware defines; the pickers that replaced those fields
@@ -429,6 +489,13 @@ public object RocketProfileCodec {
                 },
             imuRateHz = (o.int("imuRateHz") ?: d.imuRateHz)
                 .let { if (it in RocketProfile.IMU_RATES_HZ) it else d.imuRateHz },
+            // Neither setting reads as the default, as the firmware reads its NVS.
+            gnssLogSetting = (o.int("gnssLogSetting") ?: d.gnssLogSetting)
+                .let { if (it == RocketProfile.GNSS_LOG_DETAILED || it == RocketProfile.GNSS_LOG_REDUCED) it else d.gnssLogSetting },
+            antennaOffsetKnown = antenna.known,
+            antennaXMm = antenna.xMm,
+            antennaYMm = antenna.yMm,
+            antennaZMm = antenna.zMm,
             servoBias1 = o.int("servoBias1") ?: d.servoBias1,
             servoBias2 = o.int("servoBias2") ?: d.servoBias2,
             servoBias3 = o.int("servoBias3") ?: d.servoBias3,

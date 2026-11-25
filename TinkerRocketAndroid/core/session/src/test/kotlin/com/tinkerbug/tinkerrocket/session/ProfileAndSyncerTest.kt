@@ -14,6 +14,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import com.tinkerbug.tinkerrocket.protocol.AntennaOffset
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
 import com.tinkerbug.tinkerrocket.protocol.Klobuchar
@@ -69,6 +70,8 @@ class FirmwareDefaultsTest {
         assertEquals(0, p.pnGuidanceLaw)             // config.h:363 GUIDANCE_LAW_DEFAULT
         assertEquals(0.8f, p.pnKpPos)                // config.h:378 PN_KP_POS_PER_S2
         assertEquals(1.5f, p.pnKdVel)                // config.h:379 PN_KD_VEL_PER_S
+        assertEquals(15.0f, p.pnTiltLimitBoostDeg)   // config.h GUIDANCE_TILT_LIMIT_BOOST_DEG
+        assertEquals(20.0f, p.pnTiltLimitCoastDeg)   // config.h GUIDANCE_TILT_LIMIT_COAST_DEG
     }
 
     @Test
@@ -116,6 +119,22 @@ class RocketProfileCodecTest {
         assertEquals(0.12f, decoded.pidKp)
         assertEquals(333, decoded.servoHz)
         assertNull(decoded.magCal)
+    }
+
+    /** A profile saved before the tilt limits were settable gets the firmware's. */
+    @Test
+    fun tiltLimits_defaultOnAnOldRecord_andRoundTrip() {
+        val old = RocketProfileCodec.decode("""{"name":"Old","pnKdVel":1.2}""", nowMs = 0)
+        assertNotNull(old)
+        assertEquals(15f, old.pnTiltLimitBoostDeg)
+        assertEquals(20f, old.pnTiltLimitCoastDeg)
+
+        val edited = RocketProfile.makeDefault("Atlas", nowMs = 0)
+            .copy(pnTiltLimitBoostDeg = 25f, pnTiltLimitCoastDeg = 32.5f)
+        val decoded = RocketProfileCodec.decode(RocketProfileCodec.encode(edited), nowMs = 0)
+        assertNotNull(decoded)
+        assertEquals(25f, decoded.pnTiltLimitBoostDeg)
+        assertEquals(32.5f, decoded.pnTiltLimitCoastDeg)
     }
 
     @Test
@@ -202,6 +221,78 @@ class RocketProfileCodecTest {
         assertEquals(0xFF, decoded.imuOrientSetting)  // pad auto-detect
         assertEquals(3840, decoded.imuRateHz)
         assertEquals(0, decoded.pyro1TriggerMode)
+    }
+
+    @Test
+    fun gnssLogSetting_roundTripsAndDefaultsToDetailed() {
+        // cmd 79: 0 detailed (the default, and what a profile from before the
+        // setting reads as), 1 reduced; anything else is the default, as the
+        // firmware reads its NVS.
+        assertEquals(RocketProfile.GNSS_LOG_DETAILED, RocketProfile.makeDefault("x", 0).gnssLogSetting)
+        val reduced = RocketProfile.makeDefault("Goblin", 0).copy(gnssLogSetting = RocketProfile.GNSS_LOG_REDUCED)
+        val back = RocketProfileCodec.decode(RocketProfileCodec.encode(reduced), nowMs = 0)
+        assertNotNull(back)
+        assertEquals(RocketProfile.GNSS_LOG_REDUCED, back.gnssLogSetting)
+        val legacy = RocketProfileCodec.decode("""{"name":"Old","imuRateHz":0}""", nowMs = 0)
+        assertNotNull(legacy)
+        assertEquals(RocketProfile.GNSS_LOG_DETAILED, legacy.gnssLogSetting)
+        val corrupt = RocketProfileCodec.decode("""{"name":"Odd","gnssLogSetting":9}""", nowMs = 0)
+        assertNotNull(corrupt)
+        assertEquals(RocketProfile.GNSS_LOG_DETAILED, corrupt.gnssLogSetting)
+    }
+
+    @Test
+    fun antennaOffset_roundTripsAndDefaultsToUnknown() {
+        // cmd 81: Unknown (the default, and what a profile from before the
+        // setting reads as) stores zeros; Measured keeps its millimeters,
+        // under the iOS key names.
+        val d = RocketProfile.makeDefault("x", 0)
+        assertFalse(d.antennaOffsetKnown)
+        assertEquals(listOf(0, 0, 0), listOf(d.antennaXMm, d.antennaYMm, d.antennaZMm))
+        assertEquals(AntennaOffset.UNKNOWN, d.antennaOffset)
+
+        val measured = RocketProfile.makeDefault("Goblin", 0)
+            .withAntennaOffset(AntennaOffset(true, 312, -25, 4))
+        val json = RocketProfileCodec.encode(measured)
+        for (key in listOf(
+            "\"antennaOffsetKnown\":true", "\"antennaXMm\":312",
+            "\"antennaYMm\":-25", "\"antennaZMm\":4",
+        )) {
+            assertTrue(key in json, "missing $key in $json")
+        }
+        val back = RocketProfileCodec.decode(json, nowMs = 0)
+        assertNotNull(back)
+        assertEquals(AntennaOffset(true, 312, -25, 4), back.antennaOffset)
+
+        val legacy = RocketProfileCodec.decode("""{"name":"Old","imuRateHz":0}""", nowMs = 0)
+        assertNotNull(legacy)
+        assertEquals(AntennaOffset.UNKNOWN, legacy.antennaOffset)
+    }
+
+    @Test
+    fun antennaOffset_corruptStoredValueReadsAsUnknown_andKeepsTheProfile() {
+        for (text in listOf(
+            """{"name":"Odd","antennaOffsetKnown":true,"antennaXMm":5000,"antennaYMm":0,"antennaZMm":0}""",
+            """{"name":"Odd","antennaOffsetKnown":true,"antennaXMm":1,"antennaYMm":2}""",
+            """{"name":"Odd","antennaOffsetKnown":true,"antennaXMm":1.5,"antennaYMm":2,"antennaZMm":3}""",
+            """{"name":"Odd","antennaOffsetKnown":"yes","antennaXMm":1,"antennaYMm":2,"antennaZMm":3}""",
+            """{"name":"Odd","antennaOffsetKnown":false,"antennaXMm":1,"antennaYMm":2,"antennaZMm":3}""",
+        )) {
+            val p = RocketProfileCodec.decode(text, nowMs = 0)
+            assertNotNull(p, text)
+            assertEquals("Odd", p.name)
+            assertEquals(AntennaOffset.UNKNOWN, p.antennaOffset, text)
+            assertEquals(0, p.antennaXMm, text)
+        }
+    }
+
+    @Test
+    fun withAntennaOffset_unknownStoresZeros() {
+        val p = RocketProfile.makeDefault("Goblin", 0)
+            .withAntennaOffset(AntennaOffset(true, 312, -25, 4))
+            .withAntennaOffset(AntennaOffset(false, 7, 8, 9))
+        assertFalse(p.antennaOffsetKnown)
+        assertEquals(listOf(0, 0, 0), listOf(p.antennaXMm, p.antennaYMm, p.antennaZMm))
     }
 
     @Test
@@ -390,7 +481,7 @@ class ActiveRocketSyncerTest {
 
         val sent = r.sentCommandIds().toSet()
         // The fourteen config frames #915 removed from the connect path.
-        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 11, 34)) {
+        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 79, 81, 11, 34)) {
             assertTrue(cmd !in sent, "cmd $cmd was pushed on connect (sent: $sent)")
         }
         // Cal is still READ (a question, not a write) — the profile has none.
@@ -419,7 +510,7 @@ class ActiveRocketSyncerTest {
 
         assertEquals(mine, r.store.activeId.value, "the board's own profile wins")
         assertNull(r.syncer.createdProfileName.value, "nothing was created")
-        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 11, 34)) {
+        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 79, 81, 11, 34)) {
             assertTrue(cmd !in r.sentCommandIds(), "binding must not push cmd $cmd")
         }
     }
@@ -437,7 +528,7 @@ class ActiveRocketSyncerTest {
         runCurrent()
 
         val sent = r.sentCommandIds().drop(before).toSet()
-        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 34)) {
+        for (cmd in listOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 79, 81, 34)) {
             assertTrue(cmd in sent, "cmd $cmd missing from the explicit push (sent: $sent)")
         }
         assertFalse(11 in sent, "cmd 11 (piezo sounds) is retired and must not be sent")
@@ -468,7 +559,7 @@ class ActiveRocketSyncerTest {
         assertIs<ActiveRocketSyncer.SyncState.Idle>(r.syncer.syncState.value)
         // The session's own connect choreography still runs (cmd 20 etc.) —
         // only PROFILE writes are forbidden on a BS link.
-        val profileCmds = setOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 11, 34, 55, 61, 62, 63)
+        val profileCmds = setOf(12, 13, 14, 22, 31, 26, 65, 66, 33, 64, 67, 79, 81, 11, 34, 55, 61, 62, 63)
         val sentAfter = r.sentCommandIds().drop(before)
         assertTrue(
             sentAfter.none { it in profileCmds },
@@ -604,6 +695,438 @@ class ActiveRocketSyncerTest {
         assertIs<ActiveRocketSyncer.SyncState.Synced>(r.syncer.syncState.value)
     }
 
+    /** cmd 65 carries the profile's tilt limits in its 53-byte form. */
+    @Test
+    fun pushGroup_guidance_sendsTheProfilesTiltLimits() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA", pnTiltLimitBoostDeg = 25f, pnTiltLimitCoastDeg = 32.5f) }
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        val before = r.fw.commandFrames.size
+        r.syncer.pushGroup(ActiveRocketSyncer.ConfigGroup.GUIDANCE)
+        runCurrent()
+        val frame = r.fw.commandFrames.drop(before).single()
+        assertEquals(BleCommandId.GUIDANCE_CONFIG, frame[0].toInt())
+        assertEquals(54, frame.size)
+        val tail = java.nio.ByteBuffer.wrap(frame, 46, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        assertEquals(25f, tail.float)
+        assertEquals(32.5f, tail.float)
+    }
+
+    /**
+     * config_tilt lands between config_guid and config_roll, so the #915
+     * re-adopt takes the tilt limits with the guidance parameters.
+     */
+    @Test
+    fun theExtrasReAdopt_takesTheReportedTiltLimits() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA") }
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        assertEquals(15f, r.store.activeProfile?.pnTiltLimitBoostDeg)
+
+        r.emitConfigReport(servoBias2 = 0, tilt = """{"type":"config_tilt","gtlb":25.0,"gtlc":32.5}""")
+        runCurrent()
+
+        assertEquals(25f, r.store.activeProfile?.pnTiltLimitBoostDeg)
+        assertEquals(32.5f, r.store.activeProfile?.pnTiltLimitCoastDeg)
+        assertTrue(ActiveRocketSyncer.GROUP_GUIDANCE_PARAMS in r.adoptedGroups())
+    }
+
+    /** No config_tilt (older firmware): the report still lands, the limits stay. */
+    @Test
+    fun theExtrasReAdopt_withoutConfigTilt_keepsTheProfilesTiltLimits() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA", pnTiltLimitBoostDeg = 25f, pnTiltLimitCoastDeg = 32.5f) }
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        r.emitConfigReport(servoBias2 = 40)
+        runCurrent()
+
+        val cfg = assertNotNull(r.session.rocketConfig.value)
+        assertFalse(cfg.configReportGroupsMissing)
+        assertNull(cfg.guidanceTilt)
+        assertEquals(40, r.store.activeProfile?.servoBias2, "the extras re-adopt ran")
+        assertEquals(25f, r.store.activeProfile?.pnTiltLimitBoostDeg)
+        assertEquals(32.5f, r.store.activeProfile?.pnTiltLimitCoastDeg)
+    }
+
+    /**
+     * cmd 81 carries the profile's offset, and the cached readback follows at
+     * once (iOS sendAntennaOffsetConfig) — but only on a rocket that reported
+     * the setting, so firmware without it is never painted as having it. The
+     * mirror is what was sent, not the flight computer's report, so it is not
+     * marked as the flight computer's until the next readback says so.
+     */
+    @Test
+    fun pushGroup_antennaOffset_sendsCmd81_andMirrorsTheReadback() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA") }
+        r.fw.configJson = antennaConfigJson(""""antk":0,"antx":0,"anty":0,"antz":0,"antsrc":"fc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        assertEquals(AntennaOffset.UNKNOWN, r.session.rocketConfig.value?.antennaOffset)
+        assertEquals(true, r.session.rocketConfig.value?.antennaOffsetFromFlightComputer)
+
+        val id = assertNotNull(r.store.activeId.value)
+        r.store.update(id) { it.withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        val before = r.fw.commandFrames.size
+        r.syncer.pushGroup(ActiveRocketSyncer.ConfigGroup.ANTENNA_OFFSET)
+        runCurrent()
+
+        val frames = r.fw.commandFrames.drop(before)
+        assertEquals(1, frames.size)
+        assertContentEquals(Commands.antennaOffset(true, 312, -25, 4), frames[0])
+        assertEquals(AntennaOffset(true, 312, -25, 4), r.session.rocketConfig.value?.antennaOffset)
+        assertEquals(false, r.session.rocketConfig.value?.antennaOffsetFromFlightComputer)
+    }
+
+    private fun antennaConfigJson(keys: String): String =
+        FakeFirmware.DEFAULT_CONFIG_JSON.removeSuffix("}") + ",$keys}"
+
+    /**
+     * The out computer's copy of the last cmd 81 it relayed ("antsrc":"oc",
+     * or no key from an out computer that predates it) is not the flight
+     * computer's offset: the profile keeps its own.
+     */
+    @Test
+    fun connect_theOutComputersAntennaOffsetIsNotAdopted() = runTest {
+        for (src in listOf(""","antsrc":"oc"""", "")) {
+            val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+            r.fw.configJson = antennaConfigJson(""""antk":0,"antx":0,"anty":0,"antz":0$src""")
+            r.syncer.attach(r.session, r.store)
+            advanceTimeBy(1100)
+            runCurrent()
+
+            assertEquals(AntennaOffset.UNKNOWN, r.session.rocketConfig.value?.antennaOffset, src)
+            assertEquals(AntennaOffset(true, 312, -25, 4), r.store.activeProfile?.antennaOffset, src)
+            assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups(), src)
+            r.syncer.detach()
+        }
+    }
+
+    @Test
+    fun connect_theFlightComputersAntennaOffsetIsAdopted() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        r.fw.configJson = antennaConfigJson(""""antk":0,"antx":0,"anty":0,"antz":0,"antsrc":"fc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        assertEquals(AntennaOffset.UNKNOWN, r.store.activeProfile?.antennaOffset)
+        assertTrue(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+    }
+
+    /**
+     * Connected with the rail off: only the out computer's copy is on offer,
+     * so the profile keeps its own; when the flight computer's report lands
+     * (the out computer sends the readback again) its offset is adopted, and
+     * said so — the camera's late adopt.
+     */
+    @Test
+    fun railOffAtConnect_theFlightComputersAntennaOffsetIsAdoptedWhenItArrives() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        r.fw.configJson = antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        assertEquals(AntennaOffset(true, 312, -25, 4), r.store.activeProfile?.antennaOffset)
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":100,"anty":0,"antz":-50,"antsrc":"fc""""))
+        runCurrent()
+
+        assertEquals(AntennaOffset(true, 100, 0, -50), r.store.activeProfile?.antennaOffset,
+            "the flight computer's own offset is the rocket's")
+        assertTrue(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+    }
+
+    /** The same, with the flight computer agreeing with the profile: nothing to say. */
+    @Test
+    fun railOffAtConnect_aFlightComputerThatAgreesIsNoAdoption() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        r.fw.configJson = antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val before = r.syncer.syncState.value
+
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":312,"anty":-25,"antz":4,"antsrc":"fc""""))
+        runCurrent()
+
+        assertEquals(true, r.session.rocketConfig.value?.antennaOffsetFromFlightComputer)
+        assertEquals(AntennaOffset(true, 312, -25, 4), r.store.activeProfile?.antennaOffset)
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+        assertEquals(before, r.syncer.syncState.value)
+    }
+
+    /**
+     * Switching profiles disarms it: the profile now active was not the one
+     * reconciled at connect, and was just sent to the rocket as it stands.
+     */
+    @Test
+    fun railOffAtConnect_aProfileSwitchDisarmsTheLateAntennaAdopt() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        val first = assertNotNull(r.store.activeId.value)
+        r.fw.configJson = antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        val second = r.store.add("Backup")
+        r.store.setActive(second.id)
+        runCurrent()
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":100,"anty":0,"antz":-50,"antsrc":"fc""""))
+        runCurrent()
+
+        assertEquals(AntennaOffset.UNKNOWN, r.store.activeProfile?.antennaOffset)
+        assertEquals(AntennaOffset(true, 312, -25, 4),
+            r.store.profiles.value.first { it.id == first }.antennaOffset)
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+    }
+
+    /**
+     * The user sets the offset after it armed: with the rail off the cmd 81
+     * waits in the out computer, and the flight computer's boot report still
+     * carries its old value as its own.  That report is not the rocket
+     * disagreeing with the phone: the user's value stands, nothing is said,
+     * and the one-shot is spent.
+     */
+    @Test
+    fun railOffAtConnect_anOffsetTheUserSetSinceIsNotOverwrittenByTheLateReport() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        r.fw.configJson = antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val before = r.syncer.syncState.value
+
+        val id = assertNotNull(r.store.activeId.value)
+        r.store.update(id) { it.withAntennaOffset(AntennaOffset(true, 50, 60, 70)) }
+        val sent = r.fw.commandFrames.size
+        r.syncer.pushGroup(ActiveRocketSyncer.ConfigGroup.ANTENNA_OFFSET)
+        runCurrent()
+        assertContentEquals(Commands.antennaOffset(true, 50, 60, 70), r.fw.commandFrames.drop(sent).single())
+
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"fc""""))
+        runCurrent()
+
+        assertEquals(AntennaOffset(true, 10, 20, 30), r.session.rocketConfig.value?.antennaOffset)
+        assertEquals(true, r.session.rocketConfig.value?.antennaOffsetFromFlightComputer)
+        assertEquals(AntennaOffset(true, 50, 60, 70), r.store.activeProfile?.antennaOffset,
+            "the user's offset stands")
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+        assertEquals(before, r.syncer.syncState.value)
+
+        // Spent: a later report of the flight computer's is not adopted either.
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":100,"anty":0,"antz":-50,"antsrc":"fc""""))
+        runCurrent()
+        assertEquals(AntennaOffset(true, 50, 60, 70), r.store.activeProfile?.antennaOffset)
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+    }
+
+    /**
+     * Send all with the rail off: the cmd 81 carries the profile's offset
+     * unchanged, so the profile still holds what the one-shot armed with, but
+     * the send is the user's act.  The flight computer's boot report (its old
+     * value, as "fc") is not adopted over it.
+     */
+    @Test
+    fun railOffAtConnect_sendAllDisarmsTheLateAntennaAdopt() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        r.fw.configJson = antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        val sent = r.fw.commandFrames.size
+        r.syncer.pushProfileToRocket()
+        runCurrent()
+        assertContentEquals(
+            Commands.antennaOffset(true, 312, -25, 4),
+            r.fw.commandFrames.drop(sent).single { it[0].toInt() == BleCommandId.ANTENNA_OFFSET },
+        )
+        advanceTimeBy(ActiveRocketSyncer.SYNCED_DELAY_MS)
+        runCurrent()
+
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"fc""""))
+        runCurrent()
+
+        assertEquals(AntennaOffset(true, 10, 20, 30), r.session.rocketConfig.value?.antennaOffset)
+        assertEquals(true, r.session.rocketConfig.value?.antennaOffsetFromFlightComputer)
+        assertEquals(AntennaOffset(true, 312, -25, 4), r.store.activeProfile?.antennaOffset,
+            "the pushed offset stands")
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+    }
+
+    /**
+     * The user changes the offset and sets it back before the flight computer
+     * reports: the profile holds the offset the one-shot armed with again,
+     * but both sends were the user's.  The boot report's old value is not
+     * adopted over them.
+     */
+    @Test
+    fun railOffAtConnect_anOffsetChangedAndSetBackIsNotOverwrittenByTheLateReport() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        r.fw.configJson = antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val before = r.syncer.syncState.value
+
+        val id = assertNotNull(r.store.activeId.value)
+        val sent = r.fw.commandFrames.size
+        for (offset in listOf(AntennaOffset(true, 50, 60, 70), AntennaOffset(true, 312, -25, 4))) {
+            r.store.update(id) { it.withAntennaOffset(offset) }
+            r.syncer.pushGroup(ActiveRocketSyncer.ConfigGroup.ANTENNA_OFFSET)
+            runCurrent()
+        }
+        assertEquals(listOf(81, 81), r.sentCommandIds().drop(sent))
+
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"fc""""))
+        runCurrent()
+
+        assertEquals(true, r.session.rocketConfig.value?.antennaOffsetFromFlightComputer)
+        assertEquals(AntennaOffset(true, 312, -25, 4), r.store.activeProfile?.antennaOffset,
+            "the user's offset stands")
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+        assertEquals(before, r.syncer.syncState.value)
+    }
+
+    /**
+     * The three #915 config-report frames the out computer relays after the
+     * config frame, each one a copy of the current readback plus its group.
+     */
+    private fun Rig.emitConfigReport(servoBias2: Int, tilt: String? = null) {
+        fw.emitTelemetryJson(
+            """{"type":"config_servo","sb2":$servoBias2,"sb3":0,"sb4":0,"fmn":-60.00,"fmx":60.00,""" +
+                """"faz":[0.0,90.0,180.0,270.0],"frv":0,"frrv":0,"snd":true}""",
+        )
+        fw.emitTelemetryJson(
+            """{"type":"config_guid","gng":3.00,"gma":30.0,"gaf":0.50,"gmf":15.0,"gms":30.0,""" +
+                """"gcd":0,"gtm":0,"gte":0.0,"gtn":0.0,"gta":0.0,"gkp":0.00,"gkd":0.00,"glw":0}""",
+        )
+        tilt?.let { fw.emitTelemetryJson(it) }
+        fw.emitTelemetryJson("""{"type":"config_roll","n":0,"wp":[]}""")
+    }
+
+    /**
+     * The same user edit, with the report groups also missing at connect (the
+     * out computer's normal boot state): the extras re-adopt is armed beside
+     * the antenna's.  When the rail comes up the flight computer's boot report
+     * (its old offset, as "fc") lands, then the report groups, which carry it
+     * along; the extras re-adopt takes those groups but never the antenna.
+     * The user's value stands.
+     */
+    @Test
+    fun railOffAtConnect_theExtrasReAdoptDoesNotOverwriteAnOffsetTheUserSetSince() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        r.fw.configJson = antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        assertEquals(true, r.session.rocketConfig.value?.configReportGroupsMissing, "no report groups at connect")
+        assertEquals(0, r.store.activeProfile?.servoBias2)
+
+        val id = assertNotNull(r.store.activeId.value)
+        r.store.update(id) { it.withAntennaOffset(AntennaOffset(true, 50, 60, 70)) }
+        r.syncer.pushGroup(ActiveRocketSyncer.ConfigGroup.ANTENNA_OFFSET)
+        runCurrent()
+
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"fc""""))
+        runCurrent()
+        r.emitConfigReport(servoBias2 = 40)
+        runCurrent()
+
+        val cfg = assertNotNull(r.session.rocketConfig.value)
+        assertFalse(cfg.configReportGroupsMissing)
+        assertEquals(AntennaOffset(true, 10, 20, 30), cfg.antennaOffset)
+        assertEquals(true, cfg.antennaOffsetFromFlightComputer)
+        assertEquals(40, r.store.activeProfile?.servoBias2, "the extras re-adopt ran")
+        assertEquals(AntennaOffset(true, 50, 60, 70), r.store.activeProfile?.antennaOffset,
+            "the user's offset stands")
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+    }
+
+    /**
+     * The extras re-adopt still takes the other groups, and adds what it
+     * changed to what was already said: here the late antenna adopt's
+     * "GNSS antenna offset", which it used to replace.
+     */
+    @Test
+    fun railOffAtConnect_theExtrasReAdoptTakesTheOtherGroups_andAddsToTheAdoptedSet() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        r.fw.configJson = antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"oc"""")
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":100,"anty":0,"antz":-50,"antsrc":"fc""""))
+        runCurrent()
+        val said = r.adoptedGroups()
+        assertTrue(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in said)
+
+        r.emitConfigReport(servoBias2 = 40)
+        runCurrent()
+
+        assertEquals(40, r.store.activeProfile?.servoBias2)
+        assertEquals(AntennaOffset(true, 100, 0, -50), r.store.activeProfile?.antennaOffset)
+        val groups = r.adoptedGroups()
+        assertEquals(said, groups.take(said.size), "what was said stands: $groups")
+        assertTrue(ActiveRocketSyncer.GROUP_SERVO_TRIM_24 in groups, "$groups")
+        assertEquals(groups.distinct(), groups)
+    }
+
+    /**
+     * The extras re-adopt never takes the antenna, even when the late antenna
+     * adopt never armed: here the connect-time readback lacks the setting (a
+     * lost frame), so nothing armed it, and the readback the report groups
+     * carry along holds the flight computer's offset.  The profile keeps its
+     * own; the other groups are adopted.
+     */
+    @Test
+    fun theExtrasReAdoptNeverTakesTheAntenna_evenWhenTheLateAntennaAdoptNeverArmed() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA").withAntennaOffset(AntennaOffset(true, 312, -25, 4)) }
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        val atConnect = assertNotNull(r.session.rocketConfig.value)
+        assertNull(atConnect.antennaOffset, "no antenna at connect: the late antenna adopt is not armed")
+        assertTrue(atConnect.configReportGroupsMissing, "no report groups at connect")
+
+        r.fw.emitTelemetryJson(antennaConfigJson(""""antk":1,"antx":10,"anty":20,"antz":30,"antsrc":"fc""""))
+        runCurrent()
+        r.emitConfigReport(servoBias2 = 40)
+        runCurrent()
+
+        val cfg = assertNotNull(r.session.rocketConfig.value)
+        assertFalse(cfg.configReportGroupsMissing)
+        assertEquals(AntennaOffset(true, 10, 20, 30), cfg.antennaOffset)
+        assertEquals(true, cfg.antennaOffsetFromFlightComputer)
+        assertEquals(40, r.store.activeProfile?.servoBias2, "the extras re-adopt ran")
+        assertEquals(AntennaOffset(true, 312, -25, 4), r.store.activeProfile?.antennaOffset)
+        assertFalse(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET in r.adoptedGroups())
+    }
+
+    @Test
+    fun pushGroup_antennaOffset_doesNotInventTheSettingOnOlderFirmware() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA") }
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        assertNotNull(r.session.rocketConfig.value)
+
+        val id = assertNotNull(r.store.activeId.value)
+        r.store.update(id) { it.withAntennaOffset(AntennaOffset(true, 10, 20, 30)) }
+        r.syncer.pushGroup(ActiveRocketSyncer.ConfigGroup.ANTENNA_OFFSET)
+        runCurrent()
+
+        assertTrue(81 in r.sentCommandIds(), "an out computer without cmd 81 ignores it")
+        assertNull(r.session.rocketConfig.value?.antennaOffset)
+    }
+
     /**
      * #915 replaced the "connected but no profile" dead end: a rocket that
      * reports an identity always ends up with a profile, seeded from its own
@@ -653,9 +1176,10 @@ class ActiveRocketSyncerTest {
         val adv = assertIs<ActiveRocketSyncer.CalAdvisory.BoardMismatch>(r.syncer.magCalAdvisory.value)
         assertEquals("OTHERBOARD", adv.savedOn)
         assertEquals("boardA", adv.current)
-        // Mismatch → no cmd 55 apply, and no cmd 61 read either.
+        // Mismatch → no cmd 55 apply, and no cmd 61 read of the syncer's own:
+        // the one 61 is the session's connect-time calibration read (#1629).
         assertTrue(55 !in r.sentCommandIds())
-        assertTrue(61 !in r.sentCommandIds())
+        assertEquals(1, r.sentCommandIds().count { it == 61 })
     }
 
     @Test
@@ -758,6 +1282,34 @@ class ActiveRocketSyncerTest {
         assertEquals("boardA", cal.calibratedOnUnitID)
         assertEquals(7, cal.calibratedAtMs)
         assertIs<ActiveRocketSyncer.CalAdvisory.None>(r.syncer.sensorCalAdvisory.value)
+    }
+
+    /**
+     * #1629: a confirmed high-g save on the six-face screen hands its bias to
+     * the active profile's sensor cal when that cal is this board's — else the
+     * connect-time push would put the older bias back under the new alignment
+     * — and to nothing else.
+     */
+    @Test
+    fun aHighGSave_givesThisBoardsSensorCalTheNewBias_andNoOtherBoards() = runTest {
+        val cal = SensorCalData(
+            gyroX = 3, gyroY = -2, gyroZ = 1, hgX = -0.65f, hgY = -0.57f, hgZ = 0.91f,
+            calibratedOnUnitID = "boardA", calibratedAtMs = 5,
+        )
+        val r = rig(mutate = { it.copy(lastUsedUnitID = "boardA", sensorCal = cal) })
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+        r.syncer.adoptHighGBias("boardA", listOf(-0.6512f, 1.48f, -0.3127f))
+        runCurrent()
+        val got = assertNotNull(r.store.activeProfile?.sensorCal)
+        assertEquals(listOf(-0.6512f, 1.48f, -0.3127f), listOf(got.hgX, got.hgY, got.hgZ))
+        assertEquals(cal.copy(hgX = got.hgX, hgY = got.hgY, hgZ = got.hgZ), got, "the gyro and the tag stay")
+
+        // Another board's save leaves this board's cal alone.
+        r.syncer.adoptHighGBias("boardB", listOf(0f, 0f, 0f))
+        runCurrent()
+        assertEquals(got, r.store.activeProfile?.sensorCal)
     }
 
     @Test
@@ -1112,6 +1664,24 @@ class ActiveRocketSyncerTest {
         assertEquals(0.12f, r.profile.pidKp)
     }
 
+    /** takeAntenna = false: the extras re-adopt's call, every time. */
+    @Test
+    fun withoutTheAntenna_theProfileKeepsItsOffset_andItIsNotNamed() {
+        val p = RocketProfile.makeDefault("Goblin", 0).withAntennaOffset(AntennaOffset(true, 50, 60, 70))
+        val cfg = matchingConfig().copy(
+            antennaOffset = AntennaOffset(true, 10, 20, 30),
+            antennaOffsetFromFlightComputer = true,
+        )
+
+        val taken = ActiveRocketSyncer.adopt(p, cfg)
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET), taken.changed)
+        assertEquals(AntennaOffset(true, 10, 20, 30), taken.profile.antennaOffset)
+
+        val kept = ActiveRocketSyncer.adopt(p, cfg, takeAntenna = false)
+        assertEquals(emptyList(), kept.changed)
+        assertEquals(AntennaOffset(true, 50, 60, 70), kept.profile.antennaOffset)
+    }
+
     /**
      * The whole point of #915: the rocket the phone connected to must come
      * away flying what it already had, and the profile must say so.
@@ -1144,6 +1714,62 @@ class ActiveRocketSyncerTest {
         assertEquals(emptyList(), r.changed)
         assertEquals(120f, r.profile.rateCapDps)
         assertEquals(5f, r.profile.kpAngle)
+    }
+
+    @Test
+    fun theRocketsGnssLogSetting_isAdopted() {
+        val p = RocketProfile.makeDefault("x", 0)
+        val r = ActiveRocketSyncer.adopt(
+            p, matchingConfig().copy(gnssLogSetting = RocketProfile.GNSS_LOG_REDUCED),
+        )
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_GNSS_LOG), r.changed)
+        assertEquals(RocketProfile.GNSS_LOG_REDUCED, r.profile.gnssLogSetting)
+        // Firmware without the setting leaves the profile's value alone.
+        val kept = ActiveRocketSyncer.adopt(r.profile, matchingConfig().copy(gnssLogSetting = null))
+        assertEquals(emptyList(), kept.changed)
+        assertEquals(RocketProfile.GNSS_LOG_REDUCED, kept.profile.gnssLogSetting)
+    }
+
+    /** A readback carrying [offset] as the flight computer's own report. */
+    private fun fcAntenna(offset: AntennaOffset?) =
+        matchingConfig().copy(antennaOffset = offset, antennaOffsetFromFlightComputer = offset != null)
+
+    @Test
+    fun theRocketsAntennaOffset_isAdopted() {
+        val p = RocketProfile.makeDefault("x", 0)
+        val r = ActiveRocketSyncer.adopt(p, fcAntenna(AntennaOffset(true, 312, -25, 4)))
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET), r.changed)
+        assertEquals(AntennaOffset(true, 312, -25, 4), r.profile.antennaOffset)
+        // The same value again is not a change.
+        val same = ActiveRocketSyncer.adopt(r.profile, fcAntenna(AntennaOffset(true, 312, -25, 4)))
+        assertEquals(emptyList(), same.changed)
+        // Firmware without the setting leaves the profile's value alone.
+        val kept = ActiveRocketSyncer.adopt(r.profile, fcAntenna(null))
+        assertEquals(emptyList(), kept.changed)
+        assertEquals(AntennaOffset(true, 312, -25, 4), kept.profile.antennaOffset)
+        // The rocket's Unknown is adopted too, and stores zeros.
+        val unknown = ActiveRocketSyncer.adopt(r.profile, fcAntenna(AntennaOffset.UNKNOWN))
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_ANTENNA_OFFSET), unknown.changed)
+        assertFalse(unknown.profile.antennaOffsetKnown)
+        assertEquals(0, unknown.profile.antennaXMm)
+    }
+
+    /**
+     * Only the flight computer's own report ("antsrc":"fc"). The out
+     * computer's copy of the last cmd 81 it relayed — the rail off, or a
+     * flight computer too old to report it — is not adopted, whatever it
+     * holds.
+     */
+    @Test
+    fun theOutComputersAntennaOffset_isNotAdopted() {
+        val p = RocketProfile.makeDefault("x", 0).withAntennaOffset(AntennaOffset(true, 312, -25, 4))
+        for (copy in listOf(AntennaOffset.UNKNOWN, AntennaOffset(true, 10, 20, 30))) {
+            val r = ActiveRocketSyncer.adopt(
+                p, matchingConfig().copy(antennaOffset = copy, antennaOffsetFromFlightComputer = false),
+            )
+            assertEquals(emptyList(), r.changed, "$copy")
+            assertEquals(AntennaOffset(true, 312, -25, 4), r.profile.antennaOffset, "$copy")
+        }
     }
 
     /** Firmware too old to report a field leaves the profile's value alone. */
@@ -1292,6 +1918,45 @@ class ActiveRocketSyncerTest {
         assertEquals(listOf(ActiveRocketSyncer.GROUP_GUIDANCE_PARAMS), r.changed)
         assertEquals(5.0f, r.profile.pnNavGain)
         assertEquals(0, r.profile.pnGuidanceLaw)
+    }
+
+    @Test
+    fun guidanceTiltLimits_areAdoptedWhenReported() {
+        val p = RocketProfile.makeDefault("x", 0)
+        val tilt = com.tinkerbug.tinkerrocket.protocol.GuidanceTilt(boostDeg = 25f, coastDeg = 32.5f)
+        val r = ActiveRocketSyncer.adopt(p, fullyReportingConfig().copy(guidanceTilt = tilt))
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_GUIDANCE_PARAMS), r.changed)
+        assertEquals(25f, r.profile.pnTiltLimitBoostDeg)
+        assertEquals(32.5f, r.profile.pnTiltLimitCoastDeg)
+
+        // With the other guidance parameters also differing, one group.
+        val both = ActiveRocketSyncer.adopt(
+            p.copy(pnNavGain = 9f), fullyReportingConfig().copy(guidanceTilt = tilt),
+        )
+        assertEquals(listOf(ActiveRocketSyncer.GROUP_GUIDANCE_PARAMS), both.changed)
+        assertEquals(5.0f, both.profile.pnNavGain)
+        assertEquals(25f, both.profile.pnTiltLimitBoostDeg)
+
+        // Agreeing to the readback's one decimal is no change.
+        val same = com.tinkerbug.tinkerrocket.protocol.GuidanceTilt(15.0f, 20.0f)
+        assertEquals(
+            emptyList(),
+            ActiveRocketSyncer.adopt(
+                p.copy(pnTiltLimitBoostDeg = 15.04f), fullyReportingConfig().copy(guidanceTilt = same),
+            ).changed,
+        )
+    }
+
+    /** Older firmware sends no config_tilt: the profile keeps its own limits. */
+    @Test
+    fun guidanceTiltLimits_areLeftAloneWhenNotReported() {
+        val p = RocketProfile.makeDefault("x", 0)
+            .copy(pnTiltLimitBoostDeg = 25f, pnTiltLimitCoastDeg = 32.5f)
+        val r = ActiveRocketSyncer.adopt(p, fullyReportingConfig())
+        assertEquals(emptyList(), r.changed)
+        assertEquals(25f, r.profile.pnTiltLimitBoostDeg)
+        assertEquals(32.5f, r.profile.pnTiltLimitCoastDeg)
+        assertEquals(emptyList(), fullyReportingConfig().unreportedGroups)
     }
 
     /**

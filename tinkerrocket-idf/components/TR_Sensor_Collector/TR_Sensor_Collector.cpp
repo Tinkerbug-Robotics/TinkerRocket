@@ -10,6 +10,7 @@
 #include <freertos/task.h>
 #include <esp_heap_caps.h>
 #include "ism6_whoami.h"
+#include "axis_sign.h"
 
 static const char* SC_TAG = "SENSORS";
 
@@ -55,16 +56,39 @@ static void logMagBootState(TR_QMC5883P& mag)
     mag.getHardIronOffset(&ox, &oy, &oz);
     ESP_LOGI(SC_TAG, "QMC5883P hard-iron offset (driver): (%d,%d,%d)",
              (int)ox, (int)oy, (int)oz);
-    // #1590: read back what configure() wrote.  A Beetle bench log read
-    // |B| = 13 uT at the +/-8 G scale (3750 LSB/G), close to 52 uT at the
-    // +/-30 G one (1000 LSB/G): CTRL2 RNG (bits 3:2) should read 10.
+    // #1590: read back what configure() wrote, again, after it checked.
+    // Before softReset() released SOFT_RST this read CTRL1=0xC9 CTRL2=0x00
+    // (RNG=0, +/-30 G) AXIS_SIGN=0x00 on the Beetle: the range never took,
+    // and |B| read 3.75x low.  Now CTRL2 should read 0x08 (RNG=2, +/-8 G).
     uint8_t ctrl1 = 0, ctrl2 = 0, sign = 0;
     (void)mag.readRegister(qmc5883p::REG_CTRL1, &ctrl1);
     (void)mag.readRegister(qmc5883p::REG_CTRL2, &ctrl2);
     (void)mag.readRegister(qmc5883p::REG_AXIS_SIGN, &sign);
-    ESP_LOGI(SC_TAG, "QMC5883P CTRL1=0x%02X CTRL2=0x%02X (RNG=%u) AXIS_SIGN=0x%02X",
-             (unsigned)ctrl1, (unsigned)ctrl2, (unsigned)((ctrl2 >> 2) & 0x3u),
-             (unsigned)sign);
+    const qmc5883p::Range rng = qmc5883p::rangeOfCtrl2(ctrl2);
+    if (mag.configVerified())
+    {
+        ESP_LOGI(SC_TAG, "QMC5883P CTRL1=0x%02X CTRL2=0x%02X (RNG=%u, +/-%u G) "
+                         "AXIS_SIGN=0x%02X: as written (pass %u)",
+                 (unsigned)ctrl1, (unsigned)ctrl2, (unsigned)rng,
+                 (unsigned)qmc5883p::fullScaleGauss(rng), (unsigned)sign,
+                 (unsigned)mag.configAttempts());
+    }
+    else
+    {
+        // Still flies: readRawXYZ() converts the counts from the range the
+        // part reports, so |B| keeps its scale.  The sign word is what
+        // cannot be fixed up afterwards -- a wrong one turns the pad heading.
+        ESP_LOGE(SC_TAG, "QMC5883P configuration did NOT take in %u passes: "
+                         "CTRL1=0x%02X CTRL2=0x%02X (RNG=%u, +/-%u G) AXIS_SIGN=0x%02X "
+                         "(wanted CTRL2 RNG=2 and AXIS_SIGN=0x%02X). Counts are converted "
+                         "from +/-%u G to the 3750 LSB/G log scale; do not trust a "
+                         "heading until the sign word reads 0x%02X",
+                 (unsigned)mag.configAttempts(), (unsigned)ctrl1, (unsigned)ctrl2,
+                 (unsigned)rng, (unsigned)qmc5883p::fullScaleGauss(rng), (unsigned)sign,
+                 (unsigned)qmc5883p::AXIS_SIGN_VALUE,
+                 (unsigned)qmc5883p::fullScaleGauss(mag.range()),
+                 (unsigned)qmc5883p::AXIS_SIGN_VALUE);
+    }
 }
 #endif
 
@@ -129,6 +153,10 @@ static inline int16_t satSubI16(int16_t a, int16_t b)
     if (d < INT16_MIN) return INT16_MIN;
     return (int16_t)d;
 }
+// configureAxisSigns: a chip axis reversed, for a part on the back of the
+// board (axis_sign.h, host-tested)
+static inline int16_t signI16(int16_t v, int8_t s) { return axis_sign::i16(v, s); }
+static inline uint32_t signMmc18(uint32_t raw18, int8_t s) { return axis_sign::mmc18(raw18, s); }
 
 static inline void     delay_ms(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
 
@@ -291,6 +319,18 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         while (1) delay_ms(1000);
     }
     ism6_queue_drops = 0;
+
+    // The IMU's die temperature handoff (non-fatal: without it, no
+    // IMU_TEMP_MSG records)
+    ism6TempSemaphore = xSemaphoreCreateBinary();
+    if (ism6TempSemaphore != NULL)
+    {
+        xSemaphoreGive(ism6TempSemaphore);
+    }
+    else
+    {
+        ESP_LOGW(SC_TAG, "No IMU temperature handoff: IMU_TEMP_MSG off");
+    }
 
     bmp585DataSemaphore = xSemaphoreCreateBinary();
     if (bmp585DataSemaphore == NULL)
@@ -539,7 +579,7 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             }
             // Tear down the bus so the pins are released (on V7 this frees
             // shared pin 13 for SPI CS use). Never tear down a shared,
-            // app-owned bus — other devices (mini: INA230) live on it.
+            // app-owned bus — other devices live on it.
             if (!iis2mdc_bus_external)
             {
                 (void)i2c_del_master_bus(iis2mdc_bus);
@@ -610,10 +650,24 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         }
 
         mmc5983ma_instance = this;
-        gpio_set_direction((gpio_num_t)(MMC5983MA_INT), GPIO_MODE_INPUT);
-        gpio_set_intr_type((gpio_num_t)(MMC5983MA_INT), GPIO_INTR_POSEDGE);
-        gpio_isr_handler_add((gpio_num_t)(MMC5983MA_INT), &onMMC5983MAIntTrampoline, nullptr);
-        gpio_intr_enable((gpio_num_t)(MMC5983MA_INT));
+        // The INT pad reaches a GPIO on every board but the Tinker-Beetle V2,
+        // whose -1 arrives here as 255: no interrupt to attach, so the poll
+        // task asks the status register instead (twice a sample period).
+        mmc_int_wired_ = (MMC5983MA_INT < GPIO_NUM_MAX);
+        if (mmc_int_wired_)
+        {
+            gpio_set_direction((gpio_num_t)(MMC5983MA_INT), GPIO_MODE_INPUT);
+            gpio_set_intr_type((gpio_num_t)(MMC5983MA_INT), GPIO_INTR_POSEDGE);
+            gpio_isr_handler_add((gpio_num_t)(MMC5983MA_INT), &onMMC5983MAIntTrampoline, nullptr);
+            gpio_intr_enable((gpio_num_t)(MMC5983MA_INT));
+        }
+        else
+        {
+            mmc_poll_period_us_ = 500000UL / (uint32_t)mmc_freq;
+            mmc_next_poll_us_ = time_us();
+            ESP_LOGI(SC_TAG, "MMC5983MA INT not wired: polling its status every %u us",
+                     (unsigned)mmc_poll_period_us_);
+        }
     }
 
     ESP_LOGI(SC_TAG, "Initializing ISM6HG256...");
@@ -712,6 +766,12 @@ void SensorCollector::begin(uint8_t imu_execution_core)
     ESP_LOGI(SC_TAG, "Initializing GNSS (RX=%d TX=%d)...", GNSS_RX, GNSS_TX);
     if (use_gnss)
     {
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
+        // a reboot in flight: look for it, but leave the rest to the poll task
+        gnss_receiver.setBeginWait(!gnss_defer_);
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+        gnss_receiver.setBeginWait(!gnss_defer_);
+#endif
         if (!gnss_receiver.begin((uint8_t)GNSS_UPDATE_RATE,
                                  GNSS_RX,
                                  GNSS_TX,
@@ -731,6 +791,20 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         }
         else
         {
+#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+            // The poll task runs at twice the navigation rate of the receiver
+            // found: 18 Hz for the u-blox, 20 for the mosaic-G5.
+            GNSS_UPDATE_RATE = gnss_receiver.updateRateHz();
+#endif
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
+            if (gnss_defer_)
+                ESP_LOGW(SC_TAG, "GNSS bring-up left to the poll task: the receiver comes up when it answers");
+            else
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+            if (gnss_defer_)
+                ESP_LOGW(SC_TAG, "GNSS bring-up left to the poll task: the receiver comes up when it answers");
+            else
+#endif
             ESP_LOGI(SC_TAG, "GNSS found and initialized");
             // Per-satellite reports (UBX-NAV-SAT) are enabled inside the
             // u-blox driver's begin() now — they feed the GNSS_SAT_MSG flight
@@ -738,6 +812,8 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             // longer has an enable step of its own.
         }
     }
+
+    gnss_begun_ = true;
 
     // TODO Calibrate low and high g accel
     
@@ -755,10 +831,27 @@ void SensorCollector::startPollingTask(uint8_t imu_execution_core)
         &pollIMUTaskHandle,  // Task handle
         imu_execution_core); // Core to run on
 
+#if defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    // The PX1105R's: the frame parser, the 0xE5 adapted into a raw epoch and
+    // its Doppler pairs, the clock line, console lines with floats -- the
+    // mosaic's depth.
+    constexpr uint32_t kGnssPollStack = 8192;
+#elif (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) \
+    || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+    // The mosaic-G5's path from here (the SBF parser, the PPS clock fit, a
+    // console line with floats) runs deeper than the NMEA drivers'; 8 kB keeps
+    // a wide margin, and the P4 has internal RAM to spare. The V9 image may
+    // find a mosaic, so it takes the same, and so does the gnss-sdr-dev
+    // board's raw-nav image (the MSM7 decode, the clock line, two console
+    // lines with floats).
+    constexpr uint32_t kGnssPollStack = 8192;
+#else
+    constexpr uint32_t kGnssPollStack = 4096;
+#endif
     xTaskCreatePinnedToCore(
         pollGNSSdata,        // Task function
         "Poll GNSS Data",    // Task name
-        4096,                // Stack size (GNSS serial parsing only)
+        kGnssPollStack,      // Stack size (GNSS serial parsing only)
         this,                // Task parameter
         3,                   // Priority (above I2C sender at 2, below IMU at 4)
         &pollGNSSTaskHandle, // Task handle
@@ -906,6 +999,27 @@ void SensorCollector::pollIMUdata(void* parameter)
             }
         }
 
+        // === ISM6HG256 die temperature, once a second (IMU_TEMP_MSG) ===
+        // One 2-byte read of OUT_TEMP between drains, on this task: the only
+        // one that touches SPI2 once it runs (#475). An output register, so
+        // the FIFO, its decoder and the sample clock are not disturbed; about
+        // 20 us a second. A failed read is skipped until the next second.
+        if (self->use_ism6hg256 && (int32_t)(time_us() - self->ism6_temp_next_us) >= 0)
+        {
+            const uint32_t t_temp = time_us();
+            self->ism6_temp_next_us = t_temp + 1000000U;
+            int16_t raw = 0;
+            if (self->ism6hg256.ReadTemperatureRaw(&raw) == TR_ISM6HG256_OK &&
+                self->ism6TempSemaphore != nullptr &&
+                xSemaphoreTake(self->ism6TempSemaphore, 0) == pdTRUE)
+            {
+                self->ism6_temp_data.time_us = t_temp;
+                self->ism6_temp_data.temp_raw = raw;
+                self->ism6_temp_ready = true;
+                xSemaphoreGive(self->ism6TempSemaphore);
+            }
+        }
+
         // === BMP585 — only process when interrupt pending ===
         if (self->use_bmp585)
         {
@@ -978,6 +1092,21 @@ void SensorCollector::pollIMUdata(void* parameter)
             if (mmc_pending > 0) self->mmc5983ma_irq_pending_count = 0;
             portENABLE_INTERRUPTS();
 
+            // No INT line (the Tinker-Beetle V2's U3): ask the part. Twice a
+            // sample period, so a sample waits at most half a period, and only
+            // a finished measurement is read -- the datasheet's order, status
+            // then data then clear, as the interrupt path keeps it.
+            if (mmc_pending == 0 && !self->mmc_int_wired_)
+            {
+                const uint32_t poll_now_us = time_us();
+                if ((int32_t)(poll_now_us - self->mmc_next_poll_us_) >= 0)
+                {
+                    self->mmc_next_poll_us_ = poll_now_us + self->mmc_poll_period_us_;
+                    self->mmc5983ma_status_polls_++;
+                    if (self->mmc5983ma.isMeasurementDone()) mmc_pending = 1;
+                }
+            }
+
             self->mmc5983ma_loop_checks++;
 
             if (mmc_pending > 0)
@@ -997,9 +1126,10 @@ void SensorCollector::pollIMUdata(void* parameter)
                     if (xSemaphoreTake(self->mmc5983maDataSemaphore, 0) == pdTRUE)
                     {
                         self->mmc5983ma_data.time_us = time_us();
-                        self->mmc5983ma_data.mag_x = mx;
-                        self->mmc5983ma_data.mag_y = my;
-                        self->mmc5983ma_data.mag_z = mz;
+                        // a part on the back (configureAxisSigns)
+                        self->mmc5983ma_data.mag_x = signMmc18(mx, self->mmc_sign_[0]);
+                        self->mmc5983ma_data.mag_y = signMmc18(my, self->mmc_sign_[1]);
+                        self->mmc5983ma_data.mag_z = signMmc18(mz, self->mmc_sign_[2]);
                         self->mmc5983ma_data_ready = true;
                         xSemaphoreGive(self->mmc5983maDataSemaphore);
                     }
@@ -1077,7 +1207,7 @@ void SensorCollector::pollIMUdata(void* parameter)
         // out (CFG/OFFSET regs back at power-on defaults = idle mode) does
         // not return "answering" but parked.
         // #1485: the magnetometer is polled by pollMagData(), not here. Its I2C
-        // read took this task ~1.6 ms on the mini (QMC5883P: status, burst,
+        // read took this task ~1.6 ms on the Beetle V1 (QMC5883P: status, burst,
         // status, sometimes a re-read), long enough to lose IMU samples.
 
         // Track total iteration time (excluding the notification wait)
@@ -1092,7 +1222,7 @@ void SensorCollector::pollIMUdata(void* parameter)
 }
 
 // #1485: the magnetometer's own poll task. Its I2C read is slow next to the
-// IMU's sample period (~1.6 ms for the mini's QMC5883P when it was three
+// IMU's sample period (~1.6 ms for the Beetle V1's QMC5883P when it was three
 // transactions, against 260 us at 3,840 Hz), so it runs below the IMU task,
 // which preempts it; the mag bus is private, so nothing else waits on it.
 // It sleeps until the gate's next read is due; the gate paces to the ODR.
@@ -1105,7 +1235,7 @@ void SensorCollector::pollMagData(void* parameter)
         // #1485: sleep until the gate's next attempt is due — at least a tick,
         // at most 100 ms so a sensor that comes up later is still noticed —
         // rather than waking every millisecond to ask. Those 1,000 wakes a
-        // second cost ~4 % of core 0 on the mini (bench A/B), for reads that
+        // second cost ~4 % of core 0 on the Beetle V1 (bench A/B), for reads that
         // only happen every 10 ms. Waking up to a tick early just loops once.
         uint32_t wait_us = self->iis2mdc_active ? self->iis2mdc_gate.usUntilDue(time_us())
                                                 : 100000u;
@@ -1205,7 +1335,7 @@ void SensorCollector::pollGNSSdata(void* parameter)
         const bool have_new = self->gnss_receiver.pollNewPVT(gnss_sample);
 
         // Per-satellite report for the same epoch (GNSS_SAT_MSG): every epoch
-        // from the u-blox, about once a second from the LC86G.  Inside
+        // from the u-blox, at their own rate from the others.  Inside
         // the timing accounting on purpose: this is flight data now, so its
         // parse cost belongs in the GNSS budget the >1 ms counters watch.
         // Static, not a local: this task has a 4 KB stack and the record is
@@ -1218,7 +1348,8 @@ void SensorCollector::pollGNSSdata(void* parameter)
         const uint32_t gnss_elapsed = time_us() - gnss_t0;
         self->pt_gnss_calls++;
 
-#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG && !(defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86)
+#if defined(TR_GNSS_COCOM_DIAG) && TR_GNSS_COCOM_DIAG \
+    && !(defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) && !(defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
         // ~1 Hz, and after the poll so the NAV-PVT cache is fresh. Deliberately
         // outside the timing accounting above: this is diagnostic load and
         // should not be charged to the GNSS parse budget it would distort.
@@ -1272,6 +1403,19 @@ bool SensorCollector::getISM6HG256Data(ISM6HG256Data& ism6hg256_out)
     // sample (up to ISM6_QUEUE_DEPTH of backlog) rather than only the latest.
     return ism6Queue != nullptr &&
            xQueueReceive(ism6Queue, &ism6hg256_out, 0) == pdTRUE;
+}
+
+bool SensorCollector::getIsm6Temperature(Ism6TempData& out)
+{
+    if (ism6_temp_ready && ism6TempSemaphore != nullptr &&
+        xSemaphoreTake(ism6TempSemaphore, 0) == pdTRUE)
+    {
+        out = ism6_temp_data;
+        ism6_temp_ready = false;
+        xSemaphoreGive(ism6TempSemaphore);
+        return true;
+    }
+    return false;
 }
 
 bool SensorCollector::getBMP585Data(BMP585Data& bmp585_out)
@@ -1380,19 +1524,94 @@ bool SensorCollector::getGNSSSatData(GNSSSatData& sat_out)
 bool SensorCollector::getGNSSRtcmFrame(uint8_t* out, size_t cap, size_t& len,
                                        uint32_t& time_us)
 {
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    // No semaphore: the driver's ring is safe between the poll task and us.
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) \
+    || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+    // SBF blocks, through the driver's ring (none while the V9 image flies a
+    // u-blox); the gnss-sdr-dev board's RTCM3.
     if (!use_gnss || !gnss_online_) return false;
-    return gnss_receiver.pollRtcmFrame(out, cap, len, time_us);
+    return gnss_receiver.pollRawFrame(out, cap, len, time_us);
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    // Whole SkyTraq frames (A0 A1 .. 0D 0A), the same way
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.pollRawFrame(out, cap, len, time_us);
 #else
     (void)out; (void)cap; (void)len; (void)time_us;
     return false;
 #endif
 }
 
+void SensorCollector::setGNSSPpsPin(int8_t pin)
+{
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+    gnss_receiver.setPpsPin(pin);
+#else
+    (void)pin;
+#endif
+}
+
+void SensorCollector::setGNSSMosaicRate(uint8_t rate_hz)
+{
+#if defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+    // The mosaic build passes its rate as GNSS_UPDATE_RATE; the V9 image's
+    // GNSS_UPDATE_RATE is the u-blox's.
+    gnss_receiver.setMosaicRateHz(rate_hz);
+#else
+    (void)rate_hz;
+#endif
+}
+
+void SensorCollector::requestGNSSNavResend()
+{
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
+    // An atomic flag: the GNSS poll task sends the command.
+    if (use_gnss && gnss_online_) gnss_receiver.requestNavResend();
+#endif
+}
+
+uint8_t SensorCollector::gnssType() const
+{
+    if (!gnss_begun_ || !isGnssOnline()) return GNSS_TYPE_NONE;
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    return GNSS_TYPE_MOSAIC;
+#elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    return GNSS_TYPE_SDR;
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    return GNSS_TYPE_PX1105R;
+#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+    return gnss_receiver.type();
+#else
+    return GNSS_TYPE_UBLOX;
+#endif
+}
+
+uint8_t SensorCollector::gnssLastBootType()
+{
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    return GNSS_TYPE_MOSAIC;
+#elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    return GNSS_TYPE_SDR;
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    return GNSS_TYPE_PX1105R;
+#elif defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO
+    return gnss_receiver.rememberedType();
+#else
+    return GNSS_TYPE_UBLOX;
+#endif
+}
+
 bool SensorCollector::enableGNSSRawOutputs()
 {
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // The mosaic-only image's: its MeasEpoch, navigation blocks and GPSIon
+    return gnss_receiver.enableRawOutputs();
+#elif defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+    // The SDR raw-nav image's: the board's epochs and ephemerides
+    return gnss_receiver.enableRawOutputs();
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    // The PX1105R image's: its 0xE5, the ephemerides from its subframes, its fixes
+    return gnss_receiver.enableRawOutputs();
+#elif defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // All three raw receivers' before begin(): whichever it finds hands its over
     return gnss_receiver.enableRawOutputs();
 #else
     return false;
@@ -1401,8 +1620,11 @@ bool SensorCollector::enableGNSSRawOutputs()
 
 bool SensorCollector::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
 {
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
-    // No semaphore: the driver's queue is safe between the poll task and us.
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+    // The same: the driver's queue, the epochs on the fused grid
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeRawEpoch(out);
+#elif (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeRawEpoch(out);
 #else
@@ -1413,7 +1635,14 @@ bool SensorCollector::getGNSSRawEpoch(gnss_raw::TimedRawEpoch& out)
 
 bool SensorCollector::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
 {
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+    // A whole SBF navigation block; one longer than cap is dropped and
+    // counted by the driver (cap is mosaic::kSbfNavMaxLen)
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeEphemeris(out, cap, len);
+#elif (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
+    // The board's 1019/1046/1042 as RTCM3 payloads (the mosaic's blocks too
+    // on TR_GNSS_AUTO_RAW)
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.takeEphemeris(out, cap, len);
 #else
@@ -1422,9 +1651,253 @@ bool SensorCollector::getGNSSEphemeris(uint8_t* out, size_t cap, size_t& len)
 #endif
 }
 
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+bool SensorCollector::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
+{
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.broadcastIono(raw, gps_day);
+}
+
+void SensorCollector::setGNSSRawEpochPeriodMs(uint32_t period_ms)
+{
+    gnss_receiver.setRawEpochPeriodMs(period_ms);
+}
+
+bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverMosaicSerial::RawStats& out) const
+{
+    gnss_receiver.rawStats(out);
+    return out.enabled;
+}
+
+bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverSdrSerial::RawStats& out) const
+{
+    gnss_receiver.rawStats(out);
+    return out.enabled;
+}
+
+bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverPX1105RSerial::RawStats& out) const
+{
+    gnss_receiver.rawStats(out);
+    return out.enabled;
+}
+
+bool SensorCollector::setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c)
+{
+    return gnss_receiver.setRawDopplerPairing(c);
+}
+
+bool SensorCollector::getGNSSRawPairStats(TR_GNSSReceiverMosaicSerial::RawPairStats& out) const
+{
+    return gnss_receiver.rawPairStats(out);
+}
+
+bool SensorCollector::getGNSSRawPairStats(TR_GNSSReceiverPX1105RSerial::RawPairStats& out) const
+{
+    return gnss_receiver.rawPairStats(out);
+}
+
+uint32_t SensorCollector::gnssPollStackFree() const
+{
+    return pollGNSSTaskHandle != nullptr ? static_cast<uint32_t>(uxTaskGetStackHighWaterMark(pollGNSSTaskHandle)) : 0U;
+}
+
+bool SensorCollector::setGNSSRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k)
+{
+    return gnss_receiver.setRawMultiband(c, windup_k);
+}
+
+void SensorCollector::noteGNSSRollRate(float p_rps)
+{
+    gnss_receiver.noteRollRate(p_rps);
+}
+
+bool SensorCollector::getGNSSRawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const
+{
+    return gnss_receiver.rawMbStats(out);
+}
+
+bool SensorCollector::getGNSSEphemerisDecoded(gps_eph_t& out)
+{
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeEphemeris(out);
+}
+
+void SensorCollector::setGNSSRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean)
+{
+    gnss_receiver.setRawEpochConfig(period_ms, mean);
+}
+
+bool SensorCollector::gnssBoardHeard() const
+{
+    return use_gnss && gnss_online_ && gnss_receiver.heardBoard();
+}
+
+bool SensorCollector::gnssRawReceiver() const
+{
+    return gnss_begun_ && use_gnss && gnss_online_ && gnss_receiver.rawReceiver();
+}
+#endif
+
+#if defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
+bool SensorCollector::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
+{
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.broadcastIono(raw, gps_day);
+}
+
+void SensorCollector::setGNSSRawEpochPeriodMs(uint32_t period_ms)
+{
+    gnss_receiver.setRawEpochPeriodMs(period_ms);
+}
+
+bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverMosaicSerial::RawStats& out) const
+{
+    gnss_receiver.rawStats(out);
+    return out.enabled;
+}
+
+bool SensorCollector::setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c)
+{
+    return gnss_receiver.setRawDopplerPairing(c);
+}
+
+bool SensorCollector::getGNSSRawPairStats(TR_GNSSReceiverMosaicSerial::RawPairStats& out) const
+{
+    return gnss_receiver.rawPairStats(out);
+}
+
+bool SensorCollector::setGNSSRawMultiband(const mosaic::MosaicMultibandConfig& c, float windup_k)
+{
+    return gnss_receiver.setRawMultiband(c, windup_k);
+}
+
+void SensorCollector::noteGNSSRollRate(float p_rps)
+{
+    gnss_receiver.noteRollRate(p_rps);
+}
+
+bool SensorCollector::getGNSSRawMbStats(TR_GNSSReceiverMosaicSerial::RawMbStats& out) const
+{
+    return gnss_receiver.rawMbStats(out);
+}
+
+uint32_t SensorCollector::gnssPollStackFree() const
+{
+    return pollGNSSTaskHandle != nullptr ? static_cast<uint32_t>(uxTaskGetStackHighWaterMark(pollGNSSTaskHandle)) : 0U;
+}
+#endif
+
+#if defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR
+void SensorCollector::setGNSSRawEpochConfig(uint32_t period_ms, const sdr_rtcm::SdrDopplerMeanConfig& mean)
+{
+    gnss_receiver.setRawEpochConfig(period_ms, mean);
+}
+
+bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverSdrSerial::RawStats& out) const
+{
+    gnss_receiver.rawStats(out);
+    return out.enabled;
+}
+
+bool SensorCollector::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
+{
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.broadcastIono(raw, gps_day);
+}
+
+bool SensorCollector::gnssBoardHeard() const
+{
+    return use_gnss && gnss_online_ && gnss_receiver.heardBoard();
+}
+
+uint32_t SensorCollector::gnssPollStackFree() const
+{
+    return pollGNSSTaskHandle != nullptr ? static_cast<uint32_t>(uxTaskGetStackHighWaterMark(pollGNSSTaskHandle)) : 0U;
+}
+#endif
+
+#if defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+bool SensorCollector::getGNSSBroadcastIono(int8_t raw[8], uint16_t& gps_day) const
+{
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.broadcastIono(raw, gps_day);
+}
+
+void SensorCollector::setGNSSRawEpochPeriodMs(uint32_t period_ms)
+{
+    gnss_receiver.setRawEpochPeriodMs(period_ms);
+}
+
+bool SensorCollector::getGNSSRawStats(TR_GNSSReceiverPX1105RSerial::RawStats& out) const
+{
+    gnss_receiver.rawStats(out);
+    return out.enabled;
+}
+
+bool SensorCollector::setGNSSRawDopplerPairing(const mosaic::MosaicDopplerPairConfig& c)
+{
+    return gnss_receiver.setRawDopplerPairing(c);
+}
+
+bool SensorCollector::getGNSSRawPairStats(TR_GNSSReceiverPX1105RSerial::RawPairStats& out) const
+{
+    return gnss_receiver.rawPairStats(out);
+}
+
+uint32_t SensorCollector::gnssPollStackFree() const
+{
+    return pollGNSSTaskHandle != nullptr ? static_cast<uint32_t>(uxTaskGetStackHighWaterMark(pollGNSSTaskHandle)) : 0U;
+}
+
+bool SensorCollector::getGNSSEphemerisDecoded(gps_eph_t& out)
+{
+    // the driver's queue: no semaphore
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeEphemeris(out);
+}
+#endif
+
+bool SensorCollector::getGNSSFix(gnss_raw::TimedFix& out)
+{
+#if (defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
+    // its 0xDF fixes, timed on the arrival line
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeFix(out);
+#else
+    (void)out;
+    return false;
+#endif
+}
+
+bool SensorCollector::getGNSSClockLine(GnssClockData& out)
+{
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) \
+    || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeClockLine(out);   // the mosaic's PPS line (GCL_PPS), or the gnss-sdr-dev board's
+#elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.takeClockLine(out);   // its 0xE5 arrival line
+#else
+    (void)out;
+    return false;
+#endif
+}
+
+bool SensorCollector::sendGNSSAidFrame(const uint8_t* frame, size_t len)
+{
+#if (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)
+    if (!use_gnss || !gnss_online_) return false;
+    return gnss_receiver.sendAidFrame(frame, len);   // the gnss-sdr-dev board's driver, or false
+#else
+    (void)frame; (void)len;
+    return false;
+#endif
+}
+
 bool SensorCollector::getGNSSGeoidSeparation(float& sep_m) const
 {
-#if defined(TR_GNSS_DRIVER_LC86) && TR_GNSS_DRIVER_LC86
+#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO)
     if (!use_gnss || !gnss_online_) return false;
     return gnss_receiver.geoidSeparationM(sep_m);
 #else
@@ -1518,7 +1991,7 @@ void SensorCollector::resetPollTimingSnapshot()
 //  • Gravity magnitude from low-g: a plausibility gate on the whole result.
 // The rocket must be stationary for the whole window (e.g. on the launch
 // pad); the caller cancels the moment it stops being so.
-bool SensorCollector::startCalibration(float rotation_z_deg)
+bool SensorCollector::startCalibration(float rotation_z_deg, const float* hg_alignment)
 {
     if (!use_ism6hg256)
     {
@@ -1542,6 +2015,8 @@ bool SensorCollector::startCalibration(float rotation_z_deg)
     // costing pollCalibration() an extra pass.
     (void)xSemaphoreTake(cal_done_sem_, 0);
     cal_rotation_z_deg_ = rotation_z_deg;
+    cal_hg_m_on_        = (hg_alignment != nullptr);
+    for (int i = 0; i < 9; i++) cal_hg_m_[i] = cal_hg_m_on_ ? hg_alignment[i] : 0.0f;
     cal_started_ms_     = time_ms();
     cal_request_seq_    = seq;   // the request, in one store
 
@@ -1590,7 +2065,8 @@ SensorCalPoll SensorCollector::pollCalibration()
     SensorCalResult r;
     cal_gravity_mag = 0.0f;   // this window's, once it has one
     if (!sensor_cal::compute(cal_sums_, cal_rotation_z_deg_,
-                             ism6_low_g_fs_g_, ism6_high_g_fs_g_, r))
+                             ism6_low_g_fs_g_, ism6_high_g_fs_g_, r,
+                             cal_hg_m_on_ ? cal_hg_m_ : nullptr))
     {
         ESP_LOGW(SC_TAG, "No IMU samples in the calibration window — previous calibration kept");
         return SensorCalPoll::Rejected;
@@ -1622,6 +2098,11 @@ SensorCalPoll SensorCollector::pollCalibration()
              (double)r.lg_body[0], (double)r.lg_body[1], (double)r.lg_body[2]);
     ESP_LOGI(SC_TAG, "High-g avg (body): %.3f, %.3f, %.3f m/s²",
              (double)r.hg_body[0], (double)r.hg_body[1], (double)r.hg_body[2]);
+    if (cal_hg_m_on_)
+    {
+        ESP_LOGI(SC_TAG, "High-g aligned:    %.3f, %.3f, %.3f m/s² (the six-face alignment, kept)",
+                 (double)r.hg_aligned[0], (double)r.hg_aligned[1], (double)r.hg_aligned[2]);
+    }
     ESP_LOGI(SC_TAG, "HG bias:           %.3f, %.3f, %.3f m/s²",
              (double)hg_bias_x, (double)hg_bias_y, (double)hg_bias_z);
     ESP_LOGI(SC_TAG, "Gravity magnitude: %.3f m/s²", (double)cal_gravity_mag);
@@ -1705,11 +2186,47 @@ void IRAM_ATTR SensorCollector::onMMC5983MAInt()
 // FIFO, #1485): gyro offset, gap tracking, the pad-calibration sums, and the
 // drop-oldest enqueue. t_us is the sample's time; read_ok gates the
 // calibration sums to reads the driver accepted.
-void SensorCollector::publishIsm6Sample(const TR_ISM6HG256_AxesRaw_t &g_raw,
-                                        const TR_ISM6HG256_AxesRaw_t &lg_raw,
-                                        const TR_ISM6HG256_AxesRaw_t &hg_raw,
+void SensorCollector::configureAxisSigns(const int8_t ism6_sign[3], const int8_t mmc_sign[3])
+{
+    for (int i = 0; i < 3; i++)
+    {
+        ism6_sign_[i] = ism6_sign[i] < 0 ? -1 : 1;
+        mmc_sign_[i]  = mmc_sign[i] < 0 ? -1 : 1;
+    }
+    ism6_signed_ = ism6_sign_[0] < 0 || ism6_sign_[1] < 0 || ism6_sign_[2] < 0;
+    mmc_signed_  = mmc_sign_[0] < 0 || mmc_sign_[1] < 0 || mmc_sign_[2] < 0;
+    if (ism6_signed_ || mmc_signed_)
+    {
+        ESP_LOGI(SC_TAG, "Axis signs (a part on the back): ISM6 %+d %+d %+d, MMC5983MA %+d %+d %+d",
+                 ism6_sign_[0], ism6_sign_[1], ism6_sign_[2], mmc_sign_[0], mmc_sign_[1], mmc_sign_[2]);
+    }
+}
+
+void SensorCollector::publishIsm6Sample(const TR_ISM6HG256_AxesRaw_t &g_chip,
+                                        const TR_ISM6HG256_AxesRaw_t &lg_chip,
+                                        const TR_ISM6HG256_AxesRaw_t &hg_chip,
                                         uint32_t t_us, bool read_ok)
     {
+        // A part on the back (configureAxisSigns): from here on the sample
+        // is the one a front-mounted part would read -- the calibration sums,
+        // the gyro offset and the queue all take it so. A board with no sign
+        // reads the chip's own sample, as it always has.
+        TR_ISM6HG256_AxesRaw_t signed_s[3];
+        const TR_ISM6HG256_AxesRaw_t *g_p = &g_chip, *lg_p = &lg_chip, *hg_p = &hg_chip;
+        if (ism6_signed_)
+        {
+            const TR_ISM6HG256_AxesRaw_t *chip[3] = {&g_chip, &lg_chip, &hg_chip};
+            for (int k = 0; k < 3; k++)
+            {
+                signed_s[k].x = signI16(chip[k]->x, ism6_sign_[0]);
+                signed_s[k].y = signI16(chip[k]->y, ism6_sign_[1]);
+                signed_s[k].z = signI16(chip[k]->z, ism6_sign_[2]);
+            }
+            g_p = &signed_s[0];
+            lg_p = &signed_s[1];
+            hg_p = &signed_s[2];
+        }
+        const TR_ISM6HG256_AxesRaw_t &g_raw = *g_p, &lg_raw = *lg_p, &hg_raw = *hg_p;
         start_time = t_us;
         ism6hg256_data.time_us = start_time;
 

@@ -1,5 +1,5 @@
 // Rtcm3Msm.cpp — see Rtcm3Msm.h. NO ESP-IDF includes in this file: it must
-// compile on the host for tests_cpp/test_lc86_parser.cpp.
+// compile on the host for tests_cpp/test_gnss_wire_rtcm.cpp.
 #include "Rtcm3Msm.h"
 
 #include <cmath>

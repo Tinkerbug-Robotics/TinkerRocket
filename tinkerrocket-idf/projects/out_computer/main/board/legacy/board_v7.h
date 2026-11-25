@@ -21,6 +21,8 @@ struct board_pins
     // both processors. -1 = not present, same sentinel as GPS_PWR_PIN.
     static constexpr int ARM_CONSENT_PIN = -1;
     static constexpr int INA_ALERT_PIN = -1;     // #1553: none
+    static constexpr int PG_RAIL_PIN = -1;       // #1593: V10 only
+    static constexpr int VBUCK_OK_PIN = -1;      // #1593: V10 only
 
     // --- Power monitoring (INA230 @ 0x40, always-on I2C bus) ---
     static constexpr int PWR_SDA = 7;
@@ -73,6 +75,7 @@ struct board_pins
     // V_SCAP_ADC goes to the flight computer; V7/V8/V9 have no hold-up).
     static constexpr int   SCAP_ADC_PIN       = -1;
     static constexpr float SCAP_DIVIDER_RATIO = 1.0f;    // unused with no pin
+    static constexpr bool  SCAP_FROM_FC       = false;   // no hold-up on this board (#1409)
     static constexpr int   CAM_IMON_GPIO      = -1;
     static constexpr int   SERVO_IMON_GPIO    = -1;
     static constexpr float IMON_GAIN_A_PER_A  = 0.0f;

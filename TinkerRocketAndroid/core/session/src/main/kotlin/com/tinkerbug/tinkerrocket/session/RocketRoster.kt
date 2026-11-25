@@ -116,9 +116,28 @@ public sealed interface RocketFreshness {
     public data class Stale(val ageMs: Long) : RocketFreshness
     public data class Lost(val lastSeenMs: Long?) : RocketFreshness
 
+    /**
+     * How much to fade a card stack fed by this stream (iOS `cardOpacity`).
+     * Stale matches the focused dashboard's own 0.5 so a rocket does not
+     * change appearance when it gains or loses focus (#1650).
+     */
+    public val cardOpacity: Float
+        get() = when (this) {
+            Live -> 1f
+            is Stale -> 0.5f
+            is Lost -> 0.35f
+        }
+
     public companion object {
         public const val STALE_AFTER_MS: Long = 3_000
         public const val LOST_AFTER_MS: Long = 60_000
+
+        /** iOS `RocketFreshness.ageText`: "47 s" under a minute, else "3 min". */
+        public fun ageText(ageMs: Long): String {
+            if (ageMs < 0) return "unknown"
+            val sec = ageMs / 1000
+            return if (sec < 60) "$sec s" else "${sec / 60} min"
+        }
 
         public fun from(lastSeenMs: Long?, nowMs: Long): RocketFreshness {
             if (lastSeenMs == null) return Lost(null)

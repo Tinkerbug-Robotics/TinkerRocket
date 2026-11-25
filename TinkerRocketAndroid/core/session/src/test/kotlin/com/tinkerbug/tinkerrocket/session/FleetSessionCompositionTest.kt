@@ -101,6 +101,10 @@ class FleetSessionCompositionTest {
     @Test
     fun reconnect_sendsExactlyOneCmd45_inIosOrder() = runTest {
         val c = composed()
+        // A base station's own readback: FakeFirmware's default is a rocket,
+        // which since #1629 reads its calibration once its role is known.
+        c.transports.pendingIdentityJson =
+            """{"type":"config_identity","uid":"bs01","un":"Ground","nid":1,"dt":"B"}"""
         connectBs(c)
         advanceTimeBy(1000)   // let the first choreography settle
         runCurrent()

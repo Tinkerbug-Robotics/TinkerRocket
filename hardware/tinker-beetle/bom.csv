@@ -11,7 +11,7 @@
 "10";"C44";"C_0402_1005Metric";"1";"390 pF";"CL05C391JB5NNNC";"Samsung";"Fit"
 "11";"C130";"Supercap_Radial_D10.0mm_L20.0mm_P5.00mm_Horizontal";"1";"HV1020-2R7505-R";"HV1020-2R7505-R";"Eaton";"Fit"
 "12";"CR3";"TVS-SP05_LTF";"1";"SP0503BAHTG";"SP0503BAHTG";"Littelfuse";"Fit"
-"13";"D1, D2, D3, D4";"SOD-523_0P9X1P3_ONS";"4";"BAT54XV2T1G";"BAT54XV2T1G";"onsemi";"Fit"
+"13";"D1, D2, D3, D4, D13, D14";"SOD-523_0P9X1P3_ONS";"6";"BAT54XV2T1G";"BAT54XV2T1G";"onsemi";"Fit"
 "14";"D6, D8";"LED_0402_1005Metric";"2";"Green";"XL-1005UGC";"Xinglight";"Fit"
 "15";"D7, D11";"LED_0402_1005Metric";"2";"Blue";"APHHS1005QBC/D";"Kingbright";"Fit"
 "16";"D9";"SOT-883";"1";"BAV170M";"BAV170M,315";"Nexperia";"Fit"

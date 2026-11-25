@@ -73,15 +73,35 @@ public data class RecoveryProfile(
     val mainMps: Double,
     /** AGL altitude the main is configured to fire at, metres. */
     val mainDeployAglM: Double,
+    /**
+     * Where the flight computer's own main channel fires, metres AGL: the
+     * highest enabled pyro channel set to "altitude on descent". Null when no
+     * channel fires on altitude (motor ejection, or one charge at apogee).
+     * Unlike [mainDeployAglM], which always holds a value, this says whether
+     * there is a main to come at all ([TouchdownPredictor]).
+     */
+    val pyroMainAglM: Double? = null,
 ) {
     public companion object {
         /** The profile stores recovery figures in feet and fps; this is SI. */
         private const val M_PER_FT: Double = 0.3048
 
+        /** `RocketProfile.pyroNTriggerMode` value for "altitude on descent"
+         *  (the value is then metres AGL). */
+        public const val ALTITUDE_ON_DESCENT_MODE: Int = 1
+
         public fun from(p: RocketProfile): RecoveryProfile = RecoveryProfile(
             drogueMps = p.drogueRateFps * M_PER_FT,
             mainMps = p.mainRateFps * M_PER_FT,
             mainDeployAglM = p.mainDeployAltAglFt * M_PER_FT,
+            pyroMainAglM = listOf(
+                Triple(p.pyro1Enabled, p.pyro1TriggerMode, p.pyro1TriggerValue),
+                Triple(p.pyro2Enabled, p.pyro2TriggerMode, p.pyro2TriggerValue),
+                Triple(p.pyro3Enabled, p.pyro3TriggerMode, p.pyro3TriggerValue),
+                Triple(p.pyro4Enabled, p.pyro4TriggerMode, p.pyro4TriggerValue),
+            ).filter { (enabled, mode, value) ->
+                enabled && mode == ALTITUDE_ON_DESCENT_MODE && value > 0f
+            }.maxOfOrNull { it.third.toDouble() },
         )
     }
 }

@@ -148,4 +148,22 @@ class FlightFilesTest {
         assertFalse(FlightFiles.isFlightCacheHit(false, true, 1234L, 1234L))
         assertFalse(FlightFiles.isFlightCacheHit(true, false, 1234L, 1234L))
     }
+
+    /**
+     * A short download the board itself confirmed (older out-computer
+     * firmware left out stored bytes outside whole log frames) counts as this
+     * listing's file — but only for the exact listing and the exact size it
+     * sent. Mirrors iOS `FileCache.cachedSizeSatisfiesListing`.
+     */
+    @Test
+    fun `a board-confirmed short download is a hit for its own listing only`() {
+        val v5 = FlightFiles.ShortDownload(listedSizeBytes = 6_901_811L, receivedSizeBytes = 6_901_781L)
+        assertTrue(FlightFiles.isFlightCacheHit(true, true, 6_901_781L, 6_901_811L, v5))
+        assertFalse(FlightFiles.isFlightCacheHit(true, true, 6_901_781L, 6_901_811L, null))
+        // A different cached size, or a new listing under the same name: no hit.
+        assertFalse(FlightFiles.isFlightCacheHit(true, true, 6_901_780L, 6_901_811L, v5))
+        assertFalse(FlightFiles.isFlightCacheHit(true, true, 6_901_781L, 7_000_000L, v5))
+        // The full-size file is still a hit with a stale record lying around.
+        assertTrue(FlightFiles.isFlightCacheHit(true, true, 6_901_811L, 6_901_811L, v5))
+    }
 }

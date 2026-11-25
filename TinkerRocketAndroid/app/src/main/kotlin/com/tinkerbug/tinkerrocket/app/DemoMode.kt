@@ -50,6 +50,7 @@ fun buildDemoFleet(context: android.content.Context, scope: CoroutineScope): Fle
                 onIdentity = { msg, pusher -> fleet.onIdentityReadback(deviceId, msg, pusher) },
                 onRocketFix = fleet::recordRocketFix,
                 fixLookup = fleet::lastValidRocketFix,
+                hiddenRockets = { fleet.hiddenRocketKeys.value },
             )
             seedFocusRocket?.let { session.seedFocusRocket(it) }
             session.start()

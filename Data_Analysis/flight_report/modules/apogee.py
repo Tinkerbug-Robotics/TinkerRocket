@@ -32,6 +32,8 @@ from .kinematic_checks import (
     _DET_STYLE,
     _IMPORT_ERROR,
     _IMPORT_OK,
+    MAX_BARO_RATE_MS,
+    MIN_BARO_SPIKE_STEP_M,
     _replay,
 )
 
@@ -179,9 +181,9 @@ def _altitude_chart(res, marks: dict[str, float]) -> Optional[dict[str, Any]]:
         traces.append(trace([t], [v_sim[i]], f"{_DET_LABEL[det_key]} Fired",
                             _TAB.get(color, color), mode="markers", size=13))
 
-    # Where the firmware discarded a barometer sample as untrustworthy. Drawn
-    # along the floor of the pane so the run of rejections reads as a period
-    # rather than as altitude data.
+    # Where the apogee detector's spike check discarded a barometer sample
+    # (see _reject_note). Drawn along the floor of the pane so the run of
+    # rejections reads as a period rather than as altitude data.
     rejects = [t for t in (res.get("baro_reject_t") or []) if lo is None or lo <= t <= hi]
     if rejects:
         floor = min(sv) - 0.06 * (max(sv) - min(sv) or 1.0)
@@ -210,11 +212,36 @@ def _altitude_chart(res, marks: dict[str, float]) -> Optional[dict[str, Any]]:
     if spec:
         note = ("Each marker is one detector calling apogee; the master flag, which fires "
                 "the charge, latches from their votes.")
-        if res.get("baro_reject_t"):
-            note += (f" Baro was rejected {len(rejects)} times in this window, by "
-                     "design, while the vehicle was too fast for pressure to be reliable.")
+        if rejects:
+            note += _reject_note(rejects, t_raw, lo, hi)
         spec["note"] = note
     return spec
+
+
+def _reject_note(rejects: list[float], t_raw: list[float],
+                 lo: Optional[float], hi: Optional[float]) -> str:
+    """Which check dropped the barometer samples, and what it trips on.
+
+    The marks are the apogee detector's own spike check (TR_KinematicChecks,
+    #166) as the replay runs it today: a sample is dropped when it steps more
+    than MIN_BARO_SPIKE_STEP_M from the last sample kept, faster than
+    MAX_BARO_RATE_MS. It is neither the navigation filter's barometer gate nor
+    the transonic lockout, and it is not about the vehicle's speed (this note
+    once said it was). Before the step floor the rate alone, over a ~2 ms
+    sample spacing, tripped on a 0.6 m step: a vented bay's static-port noise
+    at speed, 30 to 50% of the coast on the 65 mm roll-control flight of
+    2026-10-24. A log flown on that firmware dropped those too, which this
+    replay no longer shows.
+    """
+    in_window = [t for t in t_raw if lo is None or lo <= t <= hi]
+    share = (f" of {len(in_window)} ({100.0 * len(rejects) / len(in_window):.0f}%)"
+             if in_window else "")
+    return (f" The apogee detector's spike check dropped {len(rejects)}{share} barometer "
+            f"samples in this window, each more than {MIN_BARO_SPIKE_STEP_M:.0f} m from the "
+            f"last sample it kept and faster than {MAX_BARO_RATE_MS:.0f} m/s: an ejection "
+            "charge, an impact or a glitch. It is not the navigation filter's barometer gate. "
+            "Firmware from before October 2026 also dropped smaller fast steps, which "
+            "static-port noise at speed makes, so a log flown on it may have dropped more.")
 
 
 def _recovery_chart(res, marks: dict[str, float]) -> Optional[dict[str, Any]]:

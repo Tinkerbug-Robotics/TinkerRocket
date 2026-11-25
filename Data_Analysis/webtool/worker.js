@@ -4,6 +4,7 @@
  *   {type:"status", stage, detail}          startup stages
  *   {type:"ready"}                          engine ready for runs
  *   {type:"progress", kind, index, total, detail}   per-run progress
+ *       kind "facts": detail is the flight log's facts as JSON (log_entry.py)
  *   {type:"done", html}                     finished report HTML
  *   {type:"error", message}                 startup or run failure
  * (main -> worker):
@@ -59,6 +60,16 @@ def run_flight(bin_path, level, metadata_json, progress):
             "seconds": round(time.time() - t0, 1),
         }))
         results.append(result)
+
+    # The flight log's facts, read from the log the analysis just parsed. Never
+    # allowed to cost the report: a log this cannot read still gets one, and
+    # the form simply has less filled in.
+    try:
+        from flight_report.log_entry import log_facts
+        facts = log_facts(flight)
+    except Exception as e:
+        facts = {"error": f"{type(e).__name__}: {e}"}
+    progress("facts", 0, 0, json.dumps(facts))
 
     progress("render_start", 0, 0, "")
     return render_report(flight, results, level=level)

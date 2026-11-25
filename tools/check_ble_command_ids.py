@@ -52,13 +52,12 @@ HEADER = REPO / "tinkerrocket-idf/components/TR_RocketComputerTypes/RocketComput
 # Every firmware BLE dispatch. A device missing here is invisible to BOTH
 # guards: its own numbers are never checked for duplicates, and its handlers
 # do not count toward "some firmware handles this app command", so an app
-# number only the missing device serves reads as unhandled. The mini was that
-# blind third device (#835 item 10) — 51 branches, none of them checked.
+# number only the missing device serves reads as unhandled. The single-MCU
+# mini (since retired) was once that blind third device (#835 item 10) — 51
+# branches, none of them checked.
 DISPATCHES = [
     ("Out Computer", REPO / "tinkerrocket-idf/projects/out_computer/main/main.cpp"),
     ("Base Station", REPO / "tinkerrocket-idf/projects/base_station/main/main.cpp"),
-    ("Rocket Computer Mini",
-     REPO / "tinkerrocket-idf/projects/legacy/rocket_computer_mini/main/comms.cpp"),
 ]
 SWIFT_APP_DIR = REPO / "TinkerRocketApp/TinkerRocketApp"
 KOTLIN = (
@@ -83,7 +82,9 @@ BLE_TO_APP_CMDS = {70, 71, 72}
 # is always an error).  Every entry needs a trailing comment naming the
 # feature; entries that stop being divergent are flagged stale and must be
 # removed, so the list mechanically trends to empty.
-ALLOWED_DIVERGENCE: set[int] = set()
+ALLOWED_DIVERGENCE: set[int] = {
+    82,  # BS transmit slots on/off (BLE_BS_CMD_SET_TX_SLOTS), three rockets on one base station -- Android in #1650
+}
 
 # Guard-the-guard: SWIFT_RE only sees integer literals at call sites.  If a
 # refactor moved the Swift app to named constants, the extracted set would

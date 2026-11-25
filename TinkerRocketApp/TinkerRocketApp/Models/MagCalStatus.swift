@@ -404,3 +404,28 @@ enum MagCalConstants {
     static let verifyMinSamples: UInt16  = 100
 }
 
+/// The verify screen's Save button: "Save", in the next-step blue, once the
+/// rotation has its points (coverage and samples met); "Save anyway", in
+/// orange, before. It sends VERIFY_DONE when every row is green and
+/// FORCE_APPLY otherwise: the FC re-checks the gates on VERIFY_DONE and
+/// would send a red |B| row back to REVIEW.
+nonisolated struct MagCalVerifySave: Equatable {
+    /// Coverage and samples are met.
+    let enoughPoints: Bool
+    /// Every row is green, the |B| rows too.
+    let allGood: Bool
+
+    var label: String { enoughPoints ? "Save" : "Save anyway" }
+
+    /// The line under the buttons.
+    var footer: String {
+        if allGood {
+            return "All checks green — tap Save to commit the cal to flight-computer memory."
+        }
+        if enoughPoints {
+            return "Enough points, but a |B| row is not green. Red means the field left Earth's band or swung widely: something magnetic nearby, or a fit to redo. Save keeps this cal anyway; Retry verification starts the readings over."
+        }
+        return "Keep rotating until coverage and samples are green. Save anyway saves now, without the checks."
+    }
+}
+

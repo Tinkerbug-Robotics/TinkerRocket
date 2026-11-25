@@ -50,6 +50,7 @@ enum TRColor {
     static let guidancePoint = dynamic(0x0088FF, 0x0091FF)  // blue
     static let driftCastBoost = dynamic(0x0088FF, 0x0091FF)  // blue
     static let driftCastDescent = dynamic(0xCB30E0, 0xDB34F2)  // purple
+    static let nextStep = dynamic(0x0D47A1, 0x1565C0)  // navy
 
     static let background = dynamic(0xFFFFFF, 0x000000)
     static let card = dynamic(0xF2F2F7, 0x1C1C1E)

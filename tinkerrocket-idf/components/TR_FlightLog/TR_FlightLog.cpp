@@ -627,10 +627,10 @@ Status TR_FlightLog::prepareFlightLocked(uint32_t& flight_id_out) {
     }
 
     uint32_t start = 0;
-    if (!bitmap_.findContiguousFree(cfg_.prealloc_blocks,
-                                    cfg_.flight_region_start,
-                                    cfg_.flight_region_end,
-                                    start)) {
+    if (!bitmap_.findRoomiestFree(cfg_.prealloc_blocks,
+                                  cfg_.flight_region_start,
+                                  cfg_.flight_region_end,
+                                  start)) {
         return Status::NoSpace;
     }
 
@@ -666,11 +666,21 @@ bool TR_FlightLog::extendActiveRange() {
     if (ext_end > cfg_.flight_region_end) return false;
 
     // Require contiguous FREE blocks — keeps the flight as a single range
-    // so FlightIndexEntry's start_block + n_blocks model stays valid.
+    // so FlightIndexEntry's start_block + n_blocks model stays valid.  A BAD
+    // block in the window is part of the range and stepped over, as the
+    // writer, the reader and recovery already step over a block that goes bad
+    // mid-flight (V10 pre-flight review, 2026-11-18: one factory-bad block in
+    // the way used to end the log for the rest of the flight).
+    uint32_t usable = 0;
     for (uint32_t b = ext_start; b < ext_end; ++b) {
-        if (bitmap_.get(b) != BLOCK_FREE) return false;
+        const BlockState st = bitmap_.get(b);
+        if (st == BLOCK_BAD) continue;
+        if (st != BLOCK_FREE) return false;
+        ++usable;
     }
+    if (usable == 0) return false;
     for (uint32_t b = ext_start; b < ext_end; ++b) {
+        if (bitmap_.get(b) == BLOCK_BAD) continue;
         if (!nand_->eraseBlock(b)) {
             bitmap_.set(b, BLOCK_BAD);
             nand_->markBlockBad(b);
@@ -678,7 +688,7 @@ bool TR_FlightLog::extendActiveRange() {
             return false;
         }
     }
-    bitmap_.markAllocatedRange(ext_start, cfg_.extend_blocks);
+    bitmap_.markAllocatedRange(ext_start, cfg_.extend_blocks);   // skips BAD
     persistBitmap();
     active_n_blocks_ += cfg_.extend_blocks;
     ++extension_count_;
@@ -742,6 +752,13 @@ Status TR_FlightLog::writePageLocked(const uint8_t* page) {
         const uint32_t abs_block  = active_start_block_ + rel_block;
         const uint32_t page_in_blk = active_next_page_ % g_ppb_;
 
+        // A BAD block inside the range (an extension stepped over it): skip it
+        // whole, as the reader does. The cursor only ever reaches it at page 0.
+        if (bitmap_.get(abs_block) == BLOCK_BAD) {
+            active_next_page_ = (rel_block + 1) * g_ppb_;
+            continue;
+        }
+
         if (nand_->programPage(abs_block, page_in_blk, page)) {
             ++active_next_page_;
             return Status::Ok;
@@ -792,6 +809,11 @@ bool TR_FlightLog::retireBlockAndSalvage(uint32_t bad_block, uint32_t rel_block,
         }
         const uint32_t dst_block = active_start_block_ + rel;
         const uint32_t dst_page  = active_next_page_ % g_ppb_;
+        if (bitmap_.get(dst_block) == BLOCK_BAD) {   // stepped over by an extension
+            active_next_page_ = (rel + 1) * g_ppb_;
+            if (++restarts > max_restarts) return false;
+            continue;
+        }
 
         if (!nand_->readPage(bad_block, i, buf)) {
             // A committed page that will not read back — genuinely

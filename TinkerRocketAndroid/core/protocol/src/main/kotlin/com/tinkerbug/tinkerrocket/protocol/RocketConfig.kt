@@ -52,10 +52,81 @@ public data class RocketGuidanceExtras(
     val kpPos: Float,
     val kdVel: Float,
     val guidanceLaw: Int,
+    /**
+     * The flight computer's own guidance on/off (`"gen"`), sent only while its
+     * rail is up.  null = not vouched for by the flight computer: rail off, or
+     * an out computer that predates the key.  Unlike [RocketConfig.guidanceEnabled]
+     * (the `config` frame's `"ge"`, the out computer's own copy) this is what
+     * the rocket will fly — GTV Blue, 2026-11-01, flew with guidance off while
+     * the app showed it on.
+     */
+    val enabled: Boolean? = null,
 )
+
+/**
+ * The guidance tilt limits the flight computer holds (the tail of cmd 65):
+ * guidance latches off for the rest of the flight above [boostDeg] off
+ * vertical before burnout, [coastDeg] after.  Its own `config_tilt` frame —
+ * config_guid has no room left under the notify limit.
+ */
+public data class GuidanceTilt(val boostDeg: Float, val coastDeg: Float)
 
 /** One reported roll-profile waypoint (#915). */
 public data class ReportedRollWaypoint(val timeS: Float, val angleDeg: Float)
+
+/**
+ * GNSS antenna offset (cmd 81) — port of iOS `AntennaOffset`: from the flight
+ * computer's IMU to the GNSS antenna's phase center, mm along the board's own
+ * axes, or unknown.  One value for the profile, the
+ * `"antk"/"antx"/"anty"/"antz"` readback and the cmd-81 frame.  Unknown
+ * always carries zeros, as it goes on the wire — build it through [of] or
+ * use [UNKNOWN].
+ */
+public data class AntennaOffset(
+    val known: Boolean,
+    val xMm: Int,
+    val yMm: Int,
+    val zMm: Int,
+) {
+    /** True when every component is one the firmware takes. */
+    public val isSendable: Boolean
+        get() = xMm in RANGE_MM && yMm in RANGE_MM && zMm in RANGE_MM
+
+    /** How the settings screen says it, e.g. "X 312, Y -25, Z 4 mm". */
+    public val label: String
+        get() = if (known) "X $xMm, Y $yMm, Z $zMm mm" else "Unknown"
+
+    public companion object {
+        public val UNKNOWN: AntennaOffset = AntennaOffset(false, 0, 0, 0)
+
+        /** The firmware refuses a component outside ±2000 mm. */
+        public const val LIMIT_MM: Int = 2000
+        public val RANGE_MM: IntRange = -LIMIT_MM..LIMIT_MM
+
+        /** Unknown keeps zeros whatever is passed. */
+        public fun of(known: Boolean, xMm: Int, yMm: Int, zMm: Int): AntennaOffset =
+            if (known) AntennaOffset(true, xMm, yMm, zMm) else UNKNOWN
+
+        /**
+         * From the readback's integers: null unless all four are present,
+         * `known` is 0 or 1 and every component is within ±2000 mm.
+         */
+        public fun fromWire(known: Long?, xMm: Long?, yMm: Long?, zMm: Long?): AntennaOffset? {
+            if (known == null || xMm == null || yMm == null || zMm == null) return null
+            if (known != 0L && known != 1L) return null
+            val r = -LIMIT_MM.toLong()..LIMIT_MM.toLong()
+            if (xMm !in r || yMm !in r || zMm !in r) return null
+            return of(known == 1L, xMm.toInt(), yMm.toInt(), zMm.toInt())
+        }
+
+        /**
+         * One typed component: a whole number of millimeters within ±2000,
+         * or null (empty, not a whole number, or out of range).
+         */
+        public fun parseMm(text: String): Int? =
+            text.trim().toIntOrNull()?.takeIf { it in RANGE_MM }
+    }
+}
 
 public data class RocketConfig(
     val servoBias1: Int = 0,                    // i16, "sb1" (#561: match RocketProfile/config.h)
@@ -94,6 +165,11 @@ public data class RocketConfig(
      * must not mistake them for a report.  Not a wire field.
      */
     val rollGainsReported: Boolean = false,
+    /**
+     * The `config` frame's `"ge"`: the out computer's copy — its NVS from the
+     * last cmd 32 until the flight computer's frames flow.  Not the flight
+     * computer's word; see [guidanceEnabledOnFlightComputer].
+     */
     val guidanceEnabled: Boolean = false,       // "ge"
     val cameraType: Int = 2,                    // u8, "camt"
     /**
@@ -111,6 +187,20 @@ public data class RocketConfig(
     /** #1485: the fastest IMU rate this rocket flies (null = firmware from
      *  before the 8k rates, which tops out at 3840 Hz). */
     val imuRateMaxHz: Int? = null,              // u16?, "irmax"
+    /** The GNSS log setting, cmd 79: 0 detailed, 1 reduced (null = firmware
+     *  that has no such setting). */
+    val gnssLogSetting: Int? = null,            // u8?, "glog"
+    /** The GNSS antenna offset, cmd 81, in the board's own axes (null =
+     *  firmware that has no such setting, or a report missing a key or
+     *  holding a value the firmware would refuse). */
+    val antennaOffset: AntennaOffset? = null,   // "antk"/"antx"/"anty"/"antz"
+    /** True when [antennaOffset] is the flight computer's own report
+     *  ("antsrc":"fc"). False for the out computer's copy of the last cmd 81
+     *  it relayed ("oc": the rail off, or a flight computer too old to report
+     *  it), which the flight computer may not hold; an out computer that
+     *  predates the key reads the same. Only the flight computer's is adopted
+     *  into the profile. */
+    val antennaOffsetFromFlightComputer: Boolean = false,   // "antsrc"
     val loraFreqMHz: Float? = null,             // "lf"
     val loraSF: Int? = null,                    // u8?, "lsf"
     val loraBwKHz: Float? = null,               // "lbw"
@@ -150,6 +240,13 @@ public data class RocketConfig(
     val servoExtras: RocketServoExtras? = null,
     val guidanceExtras: RocketGuidanceExtras? = null,
     /**
+     * `config_tilt`.  null = not reported: the frame comes only from a flight
+     * computer whose report carries the limits, so an older one never sends
+     * it and flies its compiled limits.  Not one of the groups
+     * [configReportGroupsMissing] waits on, for that reason.
+     */
+    val guidanceTilt: GuidanceTilt? = null,
+    /**
      * null = not reported.  EMPTY = reported, and the rocket is flying
      * rate-only.  The two must not be conflated: one means "we don't know",
      * the other means "we know, and there are none".
@@ -176,6 +273,14 @@ public data class RocketConfig(
      */
     public val cameraIsFlightComputerSourced: Boolean
         get() = cameraSource == CameraTypeSource.FLIGHT_COMPUTER
+
+    /**
+     * Guidance on/off as the flight computer holds it — the only value the
+     * profile may adopt or a screen may present as the rocket's.  null = not
+     * vouched for (see [RocketGuidanceExtras.enabled]).
+     */
+    public val guidanceEnabledOnFlightComputer: Boolean?
+        get() = guidanceExtras?.enabled
 
     /**
      * True while any of the three #915 config-report groups is still missing.
@@ -289,6 +394,12 @@ public data class ConfigMessage(
     val camt: Long? = null,
     val irate: Long? = null,
     val irmax: Long? = null,
+    val glog: Long? = null,
+    val antk: Long? = null,
+    val antx: Long? = null,
+    val anty: Long? = null,
+    val antz: Long? = null,
+    val antsrc: String? = null,
     val lf: Float? = null,
     val lsf: Long? = null,
     val lbw: Float? = null,
@@ -316,6 +427,9 @@ public data class ConfigMessage(
      */
     public fun applyTo(previous: RocketConfig?): RocketConfig {
         val d = RocketConfig()
+        // All four or none; a value the firmware would refuse reads as not
+        // reported (iOS).
+        val antenna = AntennaOffset.fromWire(antk, antx, anty, antz)
         return RocketConfig(
             servoBias1 = (sb1 ?: d.servoBias1.toLong()).coerceIn(-32768, 32767).toInt(),
             servoHz = (shz ?: d.servoHz.toLong()).coerceIn(-32768, 32767).toInt(),
@@ -351,6 +465,11 @@ public data class ConfigMessage(
             imuOrientSetting = d.imuOrientSetting,   // config never carries it (iOS: fresh nil)
             imuRateHz = irate?.takeIf { it in 0..0xFFFF }?.toInt(),
             imuRateMaxHz = irmax?.takeIf { it in 0..0xFFFF }?.toInt(),
+            // Only the two settings land: anything else reads as not reported (iOS).
+            gnssLogSetting = glog?.takeIf { it in 0..1 }?.toInt(),
+            antennaOffset = antenna,
+            // Anything but "fc", absence included, is the out computer's copy.
+            antennaOffsetFromFlightComputer = antenna != null && antsrc == "fc",
             loraFreqMHz = lf,
             loraSF = lsf?.coerceIn(0, 0xFF)?.toInt(),
             loraBwKHz = lbw,
@@ -379,6 +498,7 @@ public data class ConfigMessage(
             // "this rocket reports nothing" every readback.
             servoExtras = previous?.servoExtras,
             guidanceExtras = previous?.guidanceExtras,
+            guidanceTilt = previous?.guidanceTilt,
             rollWaypoints = previous?.rollWaypoints,
         )
     }
@@ -411,6 +531,12 @@ public data class ConfigMessage(
             camt = JsonBridging.nsInt(json, "camt"),
             irate = JsonBridging.nsInt(json, "irate"),
             irmax = JsonBridging.nsInt(json, "irmax"),
+            glog = JsonBridging.nsInt(json, "glog"),
+            antk = JsonBridging.nsInt(json, "antk"),
+            antx = JsonBridging.nsInt(json, "antx"),
+            anty = JsonBridging.nsInt(json, "anty"),
+            antz = JsonBridging.nsInt(json, "antz"),
+            antsrc = JsonBridging.nsString(json, "antsrc"),
             lf = JsonBridging.parseFloatIos(json, "lf"),
             lsf = JsonBridging.nsInt(json, "lsf"),
             lbw = JsonBridging.parseFloatIos(json, "lbw"),
@@ -562,7 +688,20 @@ public object ConfigGuidMessage {
             targetMode = tm.coerceIn(0, 0xFF).toInt(),
             targetE = te, targetN = tn, targetAltM = ta,
             kpPos = kp, kdVel = kd, guidanceLaw = law.coerceIn(0, 0xFF).toInt(),
+            enabled = JsonBridging.nsBool(json, "gen"),
         )
+    }
+}
+
+/**
+ * Parsed `"type":"config_tilt"` readback — the guidance tilt limits
+ * (`"gtlb"` boost, `"gtlc"` coast).  Both keys are required.
+ */
+public object ConfigTiltMessage {
+    public fun parse(json: JsonObject): GuidanceTilt? {
+        val boost = JsonBridging.parseFloatIos(json, "gtlb") ?: return null
+        val coast = JsonBridging.parseFloatIos(json, "gtlc") ?: return null
+        return GuidanceTilt(boostDeg = boost, coastDeg = coast)
     }
 }
 

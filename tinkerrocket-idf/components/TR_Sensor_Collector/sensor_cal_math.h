@@ -24,9 +24,10 @@ struct SensorCalSums
 struct SensorCalResult
 {
     int16_t gyro_offset[3] = {0, 0, 0};       // zero-rate offset, raw LSB (subtracted by the poll task)
-    float   hg_bias[3]     = {0.0f, 0.0f, 0.0f};  // high-g minus low-g, m/s², body frame
+    float   hg_bias[3]     = {0.0f, 0.0f, 0.0f};  // high-g (after the alignment) minus low-g, m/s², body frame
     float   lg_body[3]     = {0.0f, 0.0f, 0.0f};  // low-g average, m/s², body frame (for the log)
     float   hg_body[3]     = {0.0f, 0.0f, 0.0f};  // high-g average, m/s², body frame (for the log)
+    float   hg_aligned[3]  = {0.0f, 0.0f, 0.0f};  // M * hg_body: hg_body itself without an alignment
     float   gravity_mag    = 0.0f;                // |low-g average|, m/s²
 };
 
@@ -54,11 +55,17 @@ namespace sensor_cal
     //   rotation_z_deg     sensor-to-body rotation about Z (config::ISM6HG256_ROT_Z_DEG)
     //   low_g_fs_g /       the CONFIGURED full scales (#572): the per-LSB scale is
     //   high_g_fs_g        FS * 1000 / 32768 mg, mirroring SensorConverter.
+    //   hg_matrix          the high-g's six-face alignment to the low-g, M
+    //                      (row-major; RocketComputerTypes.h, HG_CAL_*), or
+    //                      nullptr for none: the bias is then mean(M * h) -
+    //                      mean(l), the b of high = M * h - b - o, so a pad
+    //                      calibration re-measures the offset and keeps M.
+    //                      Without one the arithmetic is the original's.
     // Returns false when there is nothing to average (count == 0); the caller
     // decides separately whether the gravity magnitude is plausible.
     inline bool compute(const SensorCalSums& s, float rotation_z_deg,
                         uint16_t low_g_fs_g, uint16_t high_g_fs_g,
-                        SensorCalResult& out)
+                        SensorCalResult& out, const float* hg_matrix = nullptr)
     {
         if (s.count == 0) return false;
         const int64_t n = (int64_t)s.count;
@@ -97,7 +104,20 @@ namespace sensor_cal
 
         for (int i = 0; i < 3; i++)
         {
-            out.hg_bias[i] = out.hg_body[i] - out.lg_body[i];
+            out.hg_aligned[i] = out.hg_body[i];
+        }
+        if (hg_matrix != nullptr)
+        {
+            for (int i = 0; i < 3; i++)
+            {
+                out.hg_aligned[i] = hg_matrix[3 * i + 0] * out.hg_body[0] +
+                                    hg_matrix[3 * i + 1] * out.hg_body[1] +
+                                    hg_matrix[3 * i + 2] * out.hg_body[2];
+            }
+        }
+        for (int i = 0; i < 3; i++)
+        {
+            out.hg_bias[i] = out.hg_aligned[i] - out.lg_body[i];
         }
 
         // Gravity magnitude is rotation-invariant, so the sensor frame is fine.

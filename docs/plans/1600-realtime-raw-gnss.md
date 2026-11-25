@@ -180,6 +180,180 @@ change; the out computer relays it to the app as file_ops 0xD0. It carries:
 
 The gyro/accel result itself still comes as the 0xCB frame when the window closes.
 
+## Physics checks on the GNSS (#1508)
+
+The receiver's own fix can be wrong while it claims to be fine. #1508 caught the LC86G at it:
+- frozen near the pad while the vehicle fell from 79 km;
+- climbing 4 m/s through a 3 g boost;
+- 312 m below sea level on the bench (above).
+
+Checking the fix against another position estimate needs that estimate to be right. Checking it
+against the IMU needs only physics. Two checks run in the shadow, both looking for motion that cannot
+have happened.
+
+**Each receiver fix (`FixCheck`, report-only).**
+- The LC86G driver hands each `$PQTMPVT` to the shadow with its GPS instant on the MCU clock.
+- Once the IMU has passed that instant, the IMU's own motion predicts the fix's position and velocity:
+  the velocity change since the last fix that passed, and the displacement it adds, both from the
+  filter's history ring (`RawGnssEKF::imuMotion`).
+- A fix outside the tolerance is flagged, and the next ones are judged from the same good fix until
+  one agrees. The tolerance covers:
+  - the fixes' own noise;
+  - their timing: a lateness common to all fixes cancels, except for the velocity and acceleration
+    that changed in between, plus one fix's jitter against another's;
+  - the IMU's error growing with the span: 0.5 m/s^2 plus 2 degrees' share of the specific force.
+- Once the good fix is older than the history reaches (4 s), a fix cannot be judged and becomes the
+  next one's reference.
+- It sees a jump, a frozen fix on a moving vehicle, and a velocity the specific force does not allow.
+  A fix wrong by a constant moves as the vehicle does, and passes.
+- It is logged as `GNSS_CHECK_MSG` (0x9A, 24 B per fix) and shown on the console and in the pad status
+  (`PCS_FIX_SUSPECT`).
+- The flight filter still takes every fix. Keeping flagged fixes out of it, the GNSS main-deploy
+  backstop and the recovery gate is the owner's call once flights show the check is right.
+
+**Each satellite (`SatJumpCheck`, acting within the shadow).**
+- At each raw epoch, every satellite's pseudorange change since the last epoch is set against its
+  range change from the filter's IMU-propagated prior.
+- The receiver clock's change is their median.
+- More than 20 m off is a jump (a relock, a reflection taking over). The satellite is taken as
+  relocked: the builder's relock sigma, decaying over 10 s.
+- Being a time difference, the check is blind to an error that stays the same from epoch to epoch (the
+  innovation gate's business) and sharp on a jump, however the filter's position has been led.
+
+## The rig replay (hardware in the loop)
+
+The COCOM rig plays a flight's GNSS signals to the receiver in a Faraday cage. On its own that tests
+the receiver: the raw filter, the physics checks and the flight filter need the IMU, the barometer and
+the magnetometer to fly the same flight, or every check fails by design (a sim's IMU against the
+bench's sky is why the shadow stops for a sim). The rig replay supplies them.
+
+- `tools/sim_replay_blob.py` writes a flight's sensors from the sensors CSV a `sim_flight_3d.py` run
+  writes beside its scenario: 500 Hz pairs (the mean over each 2 ms keeps the integral), the rocket
+  frame FLU, the attitude, the barometer with its static-port error, the scenario's GPS time and pad.
+- A `TR_SIM_REPLAY` build (`idf.py -DTR_SIM_REPLAY_BLOB=FILE`, bench-only) carries the file (1.3 MB
+  for the 107 s of rp5_0829 from t = -30 s) and plays it from boot through the sensor sim's path
+  (`SimReplay.h`). It replaces each real IMU, barometer and magnetometer sample's values at that
+  sample's own instant; the magnetometer reads the flight's attitude against the field the flight
+  computer models (TR_GeoMag at the pad and date).
+- The clock: each receiver fix carries its GPS time and that instant on the MCU clock (GnssTimeSync).
+  The replay follows the fixes while on the pad and freezes 5 s before ignition; from there the
+  samples run on the MCU crystal, as a real IMU's do. Before the first fix it loops the pad's first
+  10 s. A first fix after that instant never starts the flight.
+- The receiver's output passes through: its fixes, raw epochs, ephemerides and satellites are the
+  rig's flight. The shadow runs on it, and the pad average takes its fixes. The receiver
+  cold-starts at boot ($PAIR006), as on a pad power-up.
+- It runs as a sim: the dry-fire gate holds and the log says sim. After landing it loops the last 5 s
+  on the ground until a Stop or a reboot (one run per boot).
+- The console prints the replay's time, phase and clock state and the flight filter's ENU state once a
+  second (`[REPLAY]`), to set beside the flight's truth.
+
+### What the first rig replay showed (rp5_0829, 2026-10-13)
+
+The flight computer flew the flight on schedule: launch at +0.36 s, burnout at +2.72 s (truth 2.755 s),
+apogee at about 11.9 s (truth about 11.7 s), LANDED at 68.7 s (touchdown 66.7 s). Against the flight's
+truth, from the OC's log:
+
+| Phase | Shadow (raw GNSS) | Flight filter | Receiver's own fixes |
+|---|---|---|---|
+| Pad | 0.4 m H, 0.8 m V | 0.1 m, 0.1 m | 0.5 m, 0.0 m |
+| Boost | 6.0 m, 2.2 m, 3.2 m/s | 5.1 m, 4.2 m, 2.4 m/s | velocity 41 m/s off |
+| Coast | 8.2 m, 8.2 m, 3.2 m/s | 32.5 m, 21.9 m, 7.5 m/s | velocity 71 m/s off, 23 m V |
+| Drogue | 19.3 m, 14.5 m, 8.8 m/s | 6.4 m, 4.5 m | 1.2 m, 3.9 m |
+| Main | 2.7 m, 3.3 m, 0.5 m/s | 17.0 m, 14.1 m, 7.3 m/s | 13.2 m, 28.5 m, 7.3 m/s |
+
+- **The flight filter** went wherever the receiver's bad fixes took it: lagging through boost, 120-150 m
+  off at reacquisition, and 28 m off vertically under the main. The physics checks flagged those runs
+  (142 of 1,937 fixes; none on the pad).
+- **The shadow** held under the main, where the receiver's own fixes did not.
+- **Both filters' attitude turned at the drogue opening:** 31 degrees for the flight filter, 19 for the
+  shadow.
+  - The cause is the levelling after apogee (`use_ahrs_acc`). For 5 s the drag pulled 10-45 degrees off
+    vertical while the rocket still moved 10-12 m/s sideways.
+  - The flight filter's 10 Hz fixes hid the error in its position. The shadow's raw epochs come once a
+    second, so it turned into 4 m/s of velocity a second.
+  - So the shadow now levels in flight only once its velocity has held steady from epoch to epoch and
+    the specific force is g's size (`LevelGate.h`). The flight filter's own levelling is the owner's
+    call.
+- **Launch latched on the accelerometer-only fallback**, with the #1102 "blocked static port" warning.
+  The modeled port error (-k q) reads the first second of boost below the pad.
+- **Receiver at touchdown:** it lost every satellite (the 3-D antenna pattern, lying on the ground), so
+  the flight filter landed 11 m off.
+
+## The Beetle's navigation filter
+
+The rig showed the receiver's own fix 300-400 m off where the raw filter held 10 m. So on the Beetle the raw filter is
+now the navigation filter, and GpsInsEKF does not run (`TR_RAW_GNSS_PRIMARY`, on wherever the raw filter runs). The
+V9 keeps GpsInsEKF on the SAM-M10Q's fix.
+
+**What the raw filter gained to stand alone**
+- **The barometer:** the samples the flight filter's gate passes, as a height.
+  - The offset to the filter's own (ellipsoidal) height is learned on the pad and frozen at launch, however short
+    the pad (a sim's is 5 s).
+  - The variance is #1579's q-scaled one.
+  - It moves only the vertical position and velocity and the receiver clock. Through the propagation's
+    cross-covariance it otherwise tilted the attitude, or pulled the body's accelerometer bias off the levelling's
+    tie, and with no satellites gravity on a wrong tilt is kilometres of drift.
+  - In r2's outage under the main, the shadow without a barometer drifted 70 m in 20 s.
+- **Zero velocity once landed** (#1418).
+- **The magnetometer as a heading on the ground** (#1578's measurement).
+- **Levelling:**
+  - On the ground only at g's size. Between ignition and the launch verdict the vehicle is still "on the pad" with
+    its motor burning.
+  - In flight once the raw epochs say steady (#1621), or with no epoch for 2 s once the force has been g's size for
+    5 s. Under a chute without satellites a gyro bias would otherwise tilt it unchecked.
+- **Its own start:** it keeps its own attitude on the pad and is never resynced; a new start generation starts it over.
+  It can start in flight from a restored snapshot.
+- **Holes and sims:** it steps over an IMU hole up to 5 s, and it flies a sensor sim (the sim drops the receiver's raw
+  output).
+
+**The firmware sim on the Beetle, four times** (no satellites in a sim, so no horizontal aiding):
+- Launch, burnout, apogee (the velocity and GNSS votes, within 0.25 s of the sim's) and landing ran on the raw filter.
+- The vertical held through the flight once the barometer was fused in flight.
+- The horizontal drift went 430 m, 1.4 km, 1.6 km, then 495 m, as levelling on the motor, the barometer's coupling and
+  the unlevelled descent were fixed in turn.
+- The last left a constant 13 m/s east from a gyro bias the sim carries: its synthetic counts less the board's stored
+  gyro calibration. The same flight on the host (`TheNavigationFilterFliesTheFirmwaresSim`) is 0.6 m horizontal, and
+  39 m with a 0.4 dps gyro bias.
+
+**How main.cpp reads it**
+- `ekf` on the Beetle is `RawNavAdapter` (`raw_nav_adapter.h`), GpsInsEKF's methods answered from the raw filter's
+  state.
+- The raw filter publishes that state every step (`ShadowLink::nav`).
+- The apogee and landing voters, the ascent gate, the transonic lockout, NonSensorData, the sensor health and the
+  snapshot all read it unchanged.
+- The calls that configured GpsInsEKF now carry the raw filter's start in the seed: position, the accelerometer's
+  tilt, the gyro's mean, the declination and the field's size.
+- Heights turn from the ellipsoid to the receiver's geoid with its separation. The snapshot keeps the raw filter's
+  own (ellipsoidal) height, since a receiver cold-started by a reboot has no separation to give for a while.
+
+**Rates**
+- The raw filter steps at 100 Hz on core 0 (it was 25 as a shadow). Its raw epochs come once a second.
+- The flight loop on core 1 no longer runs a filter (GpsInsEKF cost about 1 ms a tick at 290 ticks a second).
+  - **The state the filter publishes lags the IMU.** The oldest the loop read in a 5 s window on the rig was 22-25 ms
+    with no epoch, from the task's period, the 100 Hz steps, the IMU's bursts and preemption. It was 32-48 ms with an
+    epoch, worked a slice a step (r10, r11, r13).
+  - **So the loop reads that state brought forward** to its latest IMU tick (#1626 K2): `RawNavAdapter` steps it
+    through the ticks since, as the filter steps its own.
+  - **On the rig (r15)** the oldest state the loop read was 12-15 ms old in every phase. That remainder is the IMU's own
+    delivery, which GpsInsEKF in the loop had too. The logged navigation state matched the filter's own accuracy.
+  - **A state 0.2 s old is not healthy**, even if the filter's task republishes it every pass (#1626 N4).
+- **Each epoch is built in a GNSS task of its own** (#1626): `RawGnssMeasStage`, on core 0 at priority 0, so it runs
+  only while the filter's task sleeps.
+  - The build is about two-thirds of an epoch's cost (~2 ms a satellite). It needs only a rough receiver position,
+    which the task takes from the filter's published state.
+  - The filter takes each epoch built (two can wait, in PSRAM) and fuses it a slice a step: the satellite checks, the
+    pad survey, the clock, each satellite, the close.
+  - The satellites the checks find jumped go back to the task's builder. The ephemerides it decodes come on to the
+    filter's task for the pad context.
+  - On the golden epochs the split fuses what the filter did alone, bit for bit at once. Sliced, it needs 9 slices
+    for two epochs against 16.
+  - On the rig (r14) it changed neither the state's age nor how soon an epoch is fused, at the LC86G's 1 Hz: the build
+    had been sliced already, and at priority 0 it takes 65-190 ms of wall time. It is the pipeline a 10-20 Hz
+    receiver needs, with the filter's per-epoch work a third of what it was.
+
+**Logging:** the receiver's 10 Hz fix is still logged (GNSS_MSG), as are the raw filter's 10 Hz record (0x96) and the
+checks (0x9A).
+
 ## Phase 3: the port against the prototype
 
 `TR_RawGnssEKF` (the filter; float on the flight computer) and `TR_GNSSRaw`'s `RawMeasBuilder`, fed

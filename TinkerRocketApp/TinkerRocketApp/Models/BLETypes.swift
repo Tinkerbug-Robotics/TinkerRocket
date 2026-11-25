@@ -169,6 +169,22 @@ nonisolated struct RocketGuidanceExtras: Equatable {
     var kpPos: Float
     var kdVel: Float
     var guidanceLaw: UInt8
+    /// The flight computer's own guidance on/off (`"gen"`), sent only while
+    /// its rail is up.  nil = not vouched for by the flight computer: rail
+    /// off, or an out computer that predates the key.  Unlike `RocketConfig.
+    /// guidanceEnabled` (the `config` frame's `"ge"`, the out computer's own
+    /// copy) this is what the rocket will fly — GTV Blue, 2026-11-01, flew
+    /// with guidance off while the app showed it on.
+    var enabled: Bool? = nil
+}
+
+/// The guidance tilt limits (cmd 65's tail) from the rocket's `config_tilt`
+/// readback: the off-vertical angle above which the flight computer latches
+/// guidance off, before (`boostDeg`) and after (`coastDeg`) burnout.  A frame
+/// of its own because config_guid is already near the BLE notify limit.
+nonisolated struct RocketGuidanceTilt: Equatable {
+    var boostDeg: Float
+    var coastDeg: Float
 }
 
 /// Source of a `config_pyro` readback (#1231).  Raw values are the wire
@@ -244,6 +260,9 @@ struct RocketConfig {
     /// Until then the three fields above hold the APP's defaults, not the
     /// rocket's values — #915 adoption must not mistake them for a report.
     var rollGainsReported: Bool = false
+    /// The `config` frame's `"ge"`: the out computer's copy — its NVS from the
+    /// last cmd 32 until the flight computer's frames flow.  Not the flight
+    /// computer's word; see `guidanceEnabledOnFlightComputer`.
     var guidanceEnabled: Bool = false
     var cameraType: UInt8 = 2
     /// Where `cameraType` came from (#1472).  nil = this rocket reports no
@@ -255,6 +274,20 @@ struct RocketConfig {
     /// #1485: the fastest IMU rate this rocket flies ("irmax"). nil = firmware
     /// from before the 8k rates, which tops out at 3840 Hz.
     var imuRateMaxHz: UInt16? = nil
+    /// The GNSS log setting ("glog", cmd 79): `RocketProfile.gnssLogDetailed`
+    /// or `.gnssLogReduced`. nil = firmware that has no such setting.
+    var gnssLogSetting: UInt8? = nil
+    /// The GNSS antenna offset ("antk"/"antx"/"anty"/"antz", cmd 81), in the
+    /// board's own axes. nil = firmware that has no such setting, or a report
+    /// missing a key or holding a value the firmware would refuse.
+    var antennaOffset: AntennaOffset? = nil
+    /// True when `antennaOffset` is the flight computer's own report
+    /// ("antsrc":"fc"). False for the out computer's copy of the last cmd 81
+    /// it relayed ("oc": the rail off, or a flight computer too old to report
+    /// it), which the flight computer may not hold; an out computer that
+    /// predates the key reads the same. Only the flight computer's is adopted
+    /// into the profile.
+    var antennaOffsetFromFlightComputer: Bool = false
     var loraFreqMHz: Float? = nil
     var loraSF: UInt8? = nil
     var loraBwKHz: Float? = nil
@@ -270,6 +303,10 @@ struct RocketConfig {
     /// firmware predates the setting, which is NOT the same as "transmitting":
     /// only `false` positively means the radio is on the air.
     var loraTxDisabled: Bool? = nil
+    /// Transmit slots, base station only ("lts"): true = the base station
+    /// places each rocket's frames in its own slot. nil = the firmware
+    /// predates the setting, and must not be sent the command.
+    var loraTxSlots: Bool? = nil
     var pyro1Enabled: Bool = false
     var pyro1TriggerMode: UInt8 = 0
     var pyro1TriggerValue: Float = 1.0
@@ -290,6 +327,10 @@ struct RocketConfig {
 
     var servoExtras: RocketServoExtras?
     var guidanceExtras: RocketGuidanceExtras?
+    /// nil = not reported: firmware from before the tilt limits were
+    /// settable, which flies its compiled ones.  Not one of the three groups
+    /// `configReportGroupsMissing` waits on — such firmware never sends it.
+    var guidanceTilt: RocketGuidanceTilt?
     /// nil = not reported.  EMPTY = reported, and the rocket is flying
     /// rate-only.  The two must not be conflated: one means "we don't know",
     /// the other means "we know, and there are none".
@@ -310,6 +351,11 @@ struct RocketConfig {
     /// True when `cameraType` is the mode the flight computer will drive
     /// (#1472) — the only camera type the profile may adopt.
     var cameraIsFlightComputerSourced: Bool { cameraSource == .flightComputer }
+
+    /// Guidance on/off as the flight computer holds it — the only value the
+    /// profile may adopt or a screen may present as the rocket's.  nil = not
+    /// vouched for (see `RocketGuidanceExtras.enabled`).
+    var guidanceEnabledOnFlightComputer: Bool? { guidanceExtras?.enabled }
 
     /// True while any of the three #915 config-report groups is still
     /// missing.  The connect-time re-adopt waits on exactly this, NOT on

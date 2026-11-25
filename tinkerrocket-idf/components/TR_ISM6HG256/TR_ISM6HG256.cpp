@@ -213,6 +213,12 @@ TR_ISM6HG256Status TR_ISM6HG256::ReadOdrTrim(int8_t *freq_fine)
     return (ism6hg256x_odr_cal_reg_get(&reg_ctx, freq_fine) == 0) ? TR_ISM6HG256_OK : TR_ISM6HG256_ERROR;
 }
 
+TR_ISM6HG256Status TR_ISM6HG256::ReadTemperatureRaw(int16_t *raw)
+{
+    if (raw == nullptr) return TR_ISM6HG256_ERROR;
+    return (ism6hg256x_temperature_raw_get(&reg_ctx, raw) == 0) ? TR_ISM6HG256_OK : TR_ISM6HG256_ERROR;
+}
+
 TR_ISM6HG256Status TR_ISM6HG256::ReadFifoWords(uint8_t *buf, uint16_t n_words)
 {
     if (buf == nullptr) return TR_ISM6HG256_ERROR;

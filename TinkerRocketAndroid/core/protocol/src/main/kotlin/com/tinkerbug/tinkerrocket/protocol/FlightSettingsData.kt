@@ -119,18 +119,8 @@ public data class FlightSettingsData(
      * reports the wrong revision confidently and forever.  Read it as "the
      * image believed this", not as "the board is this".
      */
-    public val boardRevName: String? get() {
-        val code = boardRevCode ?: return null
-        val letter = when (code and 0x70) {
-            0x10 -> "V"
-            0x20 -> "M"
-            0x30 -> "B"
-            else -> return "unknown"
-        }
-        val number = code and 0x0F
-        if (number == 0) return "unknown"
-        return letter + number + if (code and 0x80 != 0) " (asserted)" else ""
-    }
+    public val boardRevName: String? get() =
+        boardRevCode?.let { com.tinkerbug.tinkerrocket.protocol.boardRevName(it) }
 
     public val useAngleControl: Boolean get() = flags and (1 shl F_USE_ANGLE_CONTROL) != 0
     public val gainScheduleEnabled: Boolean get() = flags and (1 shl F_GAIN_SCHEDULE) != 0
@@ -336,4 +326,21 @@ public data class FlightSettingsData(
             )
         }
     }
+}
+
+/**
+ * `board_identity::revCodeToString` for the log's board byte: "V9", "M1
+ * (asserted)", or "unknown". Shared by [FlightSettingsData] (the FC's board)
+ * and [OcIdentityData] (the OC's, #1658); same as iOS `BoardRev.name`.
+ */
+public fun boardRevName(code: Int): String {
+    val letter = when (code and 0x70) {
+        0x10 -> "V"
+        0x20 -> "M"
+        0x30 -> "B"
+        else -> return "unknown"
+    }
+    val number = code and 0x0F
+    if (number == 0) return "unknown"
+    return letter + number + if (code and 0x80 != 0) " (asserted)" else ""
 }

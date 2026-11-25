@@ -27,9 +27,9 @@
 //
 // So the durable evidence is "a flight was in progress and never cleanly
 // ended", written to NVS where it survives a power cut, and the reset reason
-// is NOT an input to tier 2 at all. The mini already works this way
-// (rocket_computer_mini/main/main.cpp), and it is the one place in the tree
-// that recovers correctly after a full power loss.
+// is NOT an input to tier 2 at all. The single-MCU mini (since retired)
+// already worked this way, and it was the one place in the tree that
+// recovered correctly after a full power loss.
 //
 // TIER 2, NOT A REPLACEMENT FOR TIER 1. RailRestorePolicy stays first and
 // untouched: it wins the ~0.8 s R84/C105 decay race on fault resets, which is

@@ -58,7 +58,7 @@ public:
         // claimed a measured zero on hardware that has no monitor at all.
         float cam_current   = NAN;  // Camera rail current A  (NaN = not measured)
         float servo_current = NAN;  // Servo rail current A   (NaN = not measured)
-        // #1166: the hold-up supercap (rocket-computer-mini: V_SCAP_ADC lands
+        // #1166: the hold-up supercap (the Tinker-Beetle: V_SCAP_ADC lands
         // on the out computer).  Cap voltage in volts, NaN where the board has
         // no sense line (V7/V8/V9) so the key is simply absent; and the OC's
         // verdict on it — one of the HoldupState values below, 0 = not
@@ -66,6 +66,12 @@ public:
         // one that is, which is why the verdict travels at all.
         float   scap_voltage = NAN;
         uint8_t holdup_state = 0;
+        // Whether the gnss-sdr-dev board's own IMU aids its tracking loops, as
+        // the flight computer reports it (FC_STATUS_MSG, FCS_GNSS_IMU_*): a
+        // SensorHealthState, 0 = no board on J1 or no recent report (not
+        // emitted), 1 fully aiding, 2 not fully aiding (the vertical only
+        // until it knows its heading, or off), 3 refused or dropped. Advisory.
+        uint8_t gnss_imu = 0;
         // #1553: the pyro fault-current trip. Trips this boot ("pft"; 0 = none,
         // not emitted), the last trip's peak pack current in amps ("pfa"; NaN
         // = no trip; 40.9 = the INA230 clipped), and the most channels the
@@ -196,6 +202,10 @@ public:
         // Source rocket identity (base station only — for multi-rocket demux)
         uint8_t source_rocket_id;       // 0 = not set (direct connection)
         const char* source_unit_name;   // nullptr = not set
+        // Base station only: more than one rocket transmits as this rid (names
+        // alternating, or two seq streams interleaved) — "dup":1 right after
+        // "rid", omitted when false. Zero-initialised (`= {}`) everywhere else.
+        bool source_dup_rid;
 
         // Telemetry freshness status (#95).  LIVE = packet just decoded
         // (default).  STALE = BS re-pushing cached data older than
@@ -349,6 +359,19 @@ public:
     //   [0][0xD0 marker] [1..40][PadCalStatusData LE bytes]
     // The next discriminator after 0xCF; an app that does not know it drops it.
     void sendPadCalStatus(const uint8_t* status_bytes, size_t len);
+
+    // Send the low-g accelerometer hand calibration's status (#1629) on the
+    // file-ops characteristic.  Format:
+    //   [0][0xD1 marker] [1..40][AccelCalStatusData LE bytes]
+    //   [41..114][AccelCalHighGStatus LE bytes] from an FC that sends the high-g
+    // The next discriminator after 0xD0.
+    void sendAccelCalStatus(const uint8_t* status_bytes, size_t len);
+
+    // Send the gnss-sdr-dev board's IMU mounting, as the FC relays the
+    // board's report, on the file-ops characteristic.  Format:
+    //   [0][0xD2 marker] [1..111][SdrAlignStatusData LE bytes]
+    // The next discriminator after 0xD1.
+    void sendSdrAlignStatus(const uint8_t* status_bytes, size_t len);
 
     // Send a flash-space stats frame for the storage bar on the file-ops
     // characteristic.  Format: [0]=marker (0xCC rocket / 0xCD base station)

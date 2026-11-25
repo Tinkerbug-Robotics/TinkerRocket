@@ -83,6 +83,14 @@ public:
     bool startReceive();
     bool readPacket(uint8_t* buf, size_t maxLen, size_t& len);
 
+    // millis() at which the radio finished receiving the packet the last
+    // successful readPacket() returned: stamped in the DIO1 ISR on RxDone, so
+    // it does not include however long the main loop took to get to it. (When
+    // the ISR was missed and pollDio1() latched the packet, it is the poll's
+    // time — later, never earlier.) The base station subtracts the packet's
+    // time on air to time each rocket's transmissions (three-rocket slots).
+    uint32_t lastRxDoneMs() const { return last_rx_done_ms_; }
+
     // Poll DIO1 pin directly (fallback if hardware interrupt doesn't fire)
     void pollDio1();
 
@@ -183,6 +191,8 @@ private:
     bool debug_ = false;
     volatile bool tx_done_ = false;
     volatile bool rx_done_ = false;
+    volatile uint32_t rx_done_ms_ = 0;   // millis() when rx_done_ was latched
+    uint32_t last_rx_done_ms_ = 0;       // rx_done_ms_ of the last packet read
     bool tx_ongoing_ = false;
     bool rx_mode_ = false;
     volatile uint32_t isr_count_ = 0;

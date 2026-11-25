@@ -18,6 +18,7 @@ typedef enum {
     GNSS_SYS_GAL = 1,
     GNSS_SYS_BDS = 2,
     GNSS_SYS_QZS = 3,
+    GNSS_SYS_GLO = 4,   /* GLONASS L1OF (FDMA): TinkerRocket's, not the gnss repo's (no receiver of its tracks it) */
     GNSS_SYS_COUNT
 } gnss_sys_t;
 

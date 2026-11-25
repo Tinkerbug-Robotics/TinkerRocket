@@ -8,17 +8,27 @@ else()
     set(_guidance_req "TR_GuidancePN_Stub")
 endif()
 
+set(_ldfrags "")
+# #1600: on the Beetle the raw-GNSS filter is the navigation filter
+# (main/config.h): its EKF and measurement builder run from internal RAM
+# (raw_gnss_iram.lf), the placement measured on the Beetle V1's S3 and kept
+# for the Tinker-Beetle V2 (M2), the same S3 flying the filter on its PX100.
+# Where the filter is built out, nothing references them. The mosaic-only
+# image keeps them in flash until a bench measures the P4
+# (-DTR_RAW_GNSS_IRAM=1, the project CMakeLists.txt).
+if(TR_BOARD_M2 OR TR_RAW_GNSS_IRAM)
+    list(APPEND _ldfrags "raw_gnss_iram.lf")
+endif()
 # Bench only (-DTR_BENCH_IRAM): the EKF into internal RAM (bench_iram.lf).
 # Never for flight.
-set(_bench_ldfrag "")
 if(TR_BENCH_IRAM)
-    set(_bench_ldfrag "bench_iram.lf")
+    list(APPEND _ldfrags "bench_iram.lf")
 endif()
 
 idf_component_register(
     SRCS "main.cpp"
     INCLUDE_DIRS "."
-    LDFRAGMENTS ${_bench_ldfrag}
+    LDFRAGMENTS ${_ldfrags}
     REQUIRES
         esp_driver_gpio esp_driver_spi esp_driver_uart TR_NVS
         TR_RocketComputerTypes
@@ -43,6 +53,7 @@ idf_component_register(
         esp_app_format
         driver
         esp_timer
+        esp_adc          # #1409: the V10's hold-up cap sense (adc_oneshot + adc_cali)
         nvs_flash
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format)
@@ -73,22 +84,27 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 
 # Board revision selection (#411). Exactly one flag, and it is MANDATORY:
 #
+#   idf.py -B build_v5 -DTR_BOARD_V5=1 build   # legacy V5 board (TinkerRocket Full V5, archived)
 #   idf.py -B build_v7 -DTR_BOARD_V7=1 build   # legacy V7 board
 #   idf.py -B build_v8 -DTR_BOARD_V8=1 build   # V8 bench boards
-#   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # Tinker-Mantis V9/V10 (hardware/tinker-mantis)
-#   idf.py -B build_m1 -DTR_BOARD_M1=1 build   # Tinker-Beetle rev1 (hardware/tinker-beetle, ESP32-S3 FC)
+#   idf.py -B build_v9 -DTR_BOARD_V9=1 build   # Tinker-Mantis V9 (tag rocket-computer-v9.0.0)
+#   idf.py -B build_v10 -DTR_BOARD_V10=1 build # Tinker-Mantis V10 (tag tinker-mantis-v10.0.0)
+#   idf.py -B build_m2 -DTR_BOARD_M2=1 build   # Tinker-Beetle V2 (in work; ESP32-S3FH4R2 FC, 4 MB flash)
 #
 # Unlike the other projects there is no default here, because the failure is
 # silent and pyrotechnic: V8 and V9 disagree on PYRO_ARM (5 vs 16) and swap
 # PYRO2/PYRO3 FIRE, while all four continuity pins stay put. A mis-flashed
 # board therefore boots clean, reports the right channel armed and continuous,
 # and then fires the wrong connector (or, with ARM undriven, none at all).
+# V9 and V10 share every FIRE and CONT pin but not the arm (16 vs 33, and V10's
+# needs the out computer's consent too), so between those two it is the
+# "none at all" case (#1593).
 # Better to fail here than to find out on the pad.
 #
 # The build-dir name is cosmetic — the board comes ONLY from the flag. Use a
 # separate -B dir per variant anyway, since CMake caches it.
 set(_tr_board_flags_set "")
-foreach(_tr_flag TR_BOARD_V7 TR_BOARD_V8 TR_BOARD_V9 TR_BOARD_M1)
+foreach(_tr_flag TR_BOARD_V5 TR_BOARD_V7 TR_BOARD_V8 TR_BOARD_V9 TR_BOARD_V10 TR_BOARD_M2)
     if(${_tr_flag})
         list(APPEND _tr_board_flags_set ${_tr_flag})
     endif()
@@ -97,12 +113,14 @@ list(LENGTH _tr_board_flags_set _tr_board_flag_count)
 if(_tr_board_flag_count EQUAL 0)
     message(FATAL_ERROR
         "flight_computer: no board revision selected. Pass exactly one of "
-        "-DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 / -DTR_BOARD_M1=1 "
-        "(V9 is the Tinker-Mantis V9/V10 board, hardware/tinker-mantis; M1 is "
-        "the Tinker-Beetle rev1, hardware/tinker-beetle, whose flight computer is an "
-        "ESP32-S3 rather than a P4). There is no default: the pyro maps all "
-        "differ and a wrong map fires the wrong channel with no runtime "
-        "symptom.")
+        "-DTR_BOARD_V5=1 / -DTR_BOARD_V7=1 / -DTR_BOARD_V8=1 / -DTR_BOARD_V9=1 / "
+        "-DTR_BOARD_V10=1 / -DTR_BOARD_M2=1 (V9 is the Tinker-Mantis as fabbed at tag "
+        "rocket-computer-v9.0.0, V10 the Tinker-Mantis as ordered at tag "
+        "tinker-mantis-v10.0.0; M2 is the Tinker-Beetle V2, "
+        "hardware/tinker-beetle, whose flight computer is an ESP32-S3 rather "
+        "than a P4; V5 is the archived TinkerRocket Full V5). There is no "
+        "default: the pyro maps all differ and a wrong map fires the wrong "
+        "channel, or none, with no runtime symptom.")
 elseif(NOT _tr_board_flag_count EQUAL 1)
     message(FATAL_ERROR
         "flight_computer: more than one board revision selected "
@@ -110,28 +128,87 @@ elseif(NOT _tr_board_flag_count EQUAL 1)
         "dir per variant — a stale CMake cache is the usual cause.")
 endif()
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ${_tr_board_flags_set}=1)
-# The board flag and the silicon must agree. M1's flight computer is an
+# The board flag and the silicon must agree. M2's flight computer is an
 # ESP32-S3; every other revision is an ESP32-P4. Getting this wrong builds and
 # links cleanly — the pin map is just integers — and produces an image for the
 # wrong architecture, so check it rather than trusting the overlay.
-if(TR_BOARD_M1 AND NOT "${CONFIG_IDF_TARGET}" STREQUAL "esp32s3")
+if(TR_BOARD_M2 AND NOT "${CONFIG_IDF_TARGET}" STREQUAL "esp32s3")
     message(FATAL_ERROR
-        "flight_computer: -DTR_BOARD_M1=1 needs an esp32s3 target, but this build dir "
+        "flight_computer: -D${_tr_board_flags_set}=1 needs an esp32s3 target, but this build dir "
         "is configured for '${CONFIG_IDF_TARGET}'. the Tinker-Beetle's flight "
         "computer is an ESP32-S3, not a P4. Use a FRESH build dir, or run "
         "`idf.py -B <dir> set-target esp32s3` first — idf.py fixes the target before "
-        "sdkconfig.defaults.m1 is applied, so a reused P4 build dir silently keeps "
+        "sdkconfig.defaults.m2 is applied, so a reused P4 build dir silently keeps "
         "esp32p4 and you get a RISC-V image carrying the S3 pin map.")
 endif()
-if(NOT TR_BOARD_M1 AND CONFIG_IDF_TARGET AND NOT "${CONFIG_IDF_TARGET}" STREQUAL "esp32p4")
+if(NOT TR_BOARD_M2 AND CONFIG_IDF_TARGET AND NOT "${CONFIG_IDF_TARGET}" STREQUAL "esp32p4")
     message(FATAL_ERROR
-        "flight_computer: V7/V8/V9 boards are ESP32-P4, but this build dir is "
+        "flight_computer: V7/V8/V9/V10 boards are ESP32-P4, but this build dir is "
         "configured for '${CONFIG_IDF_TARGET}'. Use a fresh build dir per board.")
 endif()
-if(TR_BOARD_M1)
-    message(STATUS "flight_computer: board pin map M1 (main/board/board_m1.h, Tinker-Beetle rev1, ESP32-S3)")
+# PSRAM on a P4 board is the image's choice, so check what the build dir
+# resolved to rather than trusting the overlays. Only the mosaic-only image
+# and the PX1105R image, each with the raw-GNSS filter, take
+# sdkconfig.defaults.rawnav (the project CMakeLists.txt); every other P4 image
+# keeps PSRAM off (sdkconfig.defaults, #851). The overlay alone does not decide it: kconfgen keeps a value a
+# defaults file once wrote to a build dir's sdkconfig, so a dir that built the
+# mosaic image still has CONFIG_SPIRAM=y when it is reconfigured as the auto
+# image or with -DTR_RAW_GNSS_SHADOW=0, which is the #851 timing risk on an
+# image that never asked for it. The rule is stated again here, not read from
+# the project file, so a change that moves the overlay to another image fails
+# here too. M2's own overlay turns its PSRAM on, and the target check above
+# guards its build dir; it is checked below.
+if(NOT TR_BOARD_M2)
+    if((TR_GNSS_MOSAIC AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW)) OR TR_GNSS_SDR OR TR_GNSS_AUTO_RAW)
+        if(NOT CONFIG_SPIRAM)
+            message(FATAL_ERROR
+                "flight_computer: the mosaic-only image, the V10's gnss-sdr-dev image and the image that flies "
+                "the raw-GNSS filter on every receiver (TR_GNSS_AUTO_RAW) run that filter from PSRAM "
+                "(sdkconfig.defaults.rawnav), but ${CMAKE_BINARY_DIR}/sdkconfig has CONFIG_SPIRAM off. Use a "
+                "fresh build dir, or delete that sdkconfig.")
+        endif()
+    elseif(TR_GNSS_PX1105R AND (NOT DEFINED TR_RAW_GNSS_SHADOW OR TR_RAW_GNSS_SHADOW))
+        if(NOT CONFIG_SPIRAM)
+            message(FATAL_ERROR
+                "flight_computer: the PX1105R image runs the raw-GNSS filter from PSRAM "
+                "(sdkconfig.defaults.rawnav), but ${CMAKE_BINARY_DIR}/sdkconfig has CONFIG_SPIRAM "
+                "off. Use a fresh build dir, or delete that sdkconfig.")
+        endif()
+    elseif(CONFIG_SPIRAM)
+        message(FATAL_ERROR
+            "flight_computer: this image keeps PSRAM off (#851; only the mosaic-only and PX1105R "
+            "images with the raw-GNSS filter turn it on), but ${CMAKE_BINARY_DIR}/sdkconfig has "
+            "CONFIG_SPIRAM=y, kept from an image built there before. Use a fresh build dir, or "
+            "delete that sdkconfig.")
+    endif()
+endif()
+# The PX1105R runs its UART at 921600 baud, which needs the UART interrupt in
+# IRAM (sdkconfig.defaults.mosaic, the project CMakeLists.txt) to run through
+# flash writes. Checked on the resolved sdkconfig, as PSRAM is above, rather
+# than trusting the overlay (the auto image checks the same at compile time,
+# gnss_auto_driver.cpp): a value a build dir's sdkconfig keeps, or one set by
+# hand there, is caught here.
+if((TR_GNSS_PX1105R OR TR_BOARD_M2) AND NOT CONFIG_UART_ISR_IN_IRAM)
+    message(FATAL_ERROR
+        "flight_computer: the PX1105R image needs CONFIG_UART_ISR_IN_IRAM (sdkconfig.defaults.mosaic: "
+        "921600 baud through flash writes), but ${CMAKE_BINARY_DIR}/sdkconfig has it off. Use a fresh "
+        "build dir, or delete that sdkconfig.")
+endif()
+# The Tinker-Beetle V2 runs its PX100's raw-GNSS filter from the quad PSRAM
+# its ESP32-S3 overlay turns on (sdkconfig.defaults.m2, not the P4's rawnav),
+# and boots from 4 MB (sdkconfig.defaults.flash4mb; main.cpp refuses a build
+# that declares more, with the remedy).
+if(TR_BOARD_M2 AND NOT CONFIG_SPIRAM)
+    message(FATAL_ERROR
+        "flight_computer: -DTR_BOARD_M2=1 runs with its quad PSRAM on (sdkconfig.defaults.m2), but "
+        "${CMAKE_BINARY_DIR}/sdkconfig has CONFIG_SPIRAM off. Use a fresh build dir, or delete that sdkconfig.")
+endif()
+if(TR_BOARD_M2)
+    message(STATUS "flight_computer: board pin map M2 (main/board/board_m2.h, Tinker-Beetle V2, ESP32-S3, IMU and magnetometer on the back)")
+elseif(TR_BOARD_V10)
+    message(STATUS "flight_computer: board pin map V10 (main/board/board_v10.h, arm on GPIO33 + OC consent)")
 elseif(TR_BOARD_V9)
-    message(STATUS "flight_computer: board pin map V9/V10 (main/board/board_v9.h)")
+    message(STATUS "flight_computer: board pin map V9 (main/board/board_v9.h)")
 elseif(TR_BOARD_V8)
     message(STATUS "flight_computer: board pin map V8 (main/board/legacy/board_v8.h)")
 else()

@@ -219,14 +219,29 @@ bool TR_OTA_Receiver::checkImageIdentity()
     {
         return false;
     }
-    // The version is "<sha><board suffix>[<bench suffix>]+<date>"; the board
-    // suffixes in use (-v7 -v8 -v9 -m1) are not substrings of one another, so a
-    // plain search is unambiguous and survives the optional bench suffix.
-    if (exp_suffix_[0] && std::strstr(version, exp_suffix_) == nullptr)
+    // The version is "<sha><board suffix>[<bench suffix>]+<date>". A plain
+    // search was unambiguous while every suffix was one digit (-v7 -v8 -v9
+    // -m1), but "-v1" is a substring of "-v10" (#1593), so the match must also
+    // END at a suffix boundary: '+' (the date), '-' (a bench or test suffix),
+    // or the end of the string, where a 32-character version is clipped. The
+    // apps parse the suffix with the same rule.
+    if (exp_suffix_[0] && !hasBoardSuffix(version, exp_suffix_))
     {
         return false;
     }
     return true;
+}
+
+bool TR_OTA_Receiver::hasBoardSuffix(const char* version, const char* suffix)
+{
+    const size_t n = std::strlen(suffix);
+    if (n == 0) return false;
+    for (const char* p = std::strstr(version, suffix); p != nullptr; p = std::strstr(p + 1, suffix))
+    {
+        const char next = p[n];
+        if (next == '\0' || next == '+' || next == '-') return true;
+    }
+    return false;
 }
 
 TR_OTA_Receiver::Error TR_OTA_Receiver::writeChunk(uint32_t offset, const uint8_t* data, size_t len)

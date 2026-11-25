@@ -66,7 +66,20 @@ public enum class FcBootStep(public val raw: Int) {
                    // on this step IS the dead-GNSS stall
     GNSS(3),       // GNSS receiver bring-up
     SERVOS(4),     // servo init + neutral settle
-    COMPLETE(5);   // setup_fc done; the state machine takes over
+    COMPLETE(5),   // setup_fc done; the state machine takes over
+    // FCB_RESCUE: not a step but where a boot that cannot finish ends up. The
+    // FC's last boots stalled in setup or kept resetting, so it brought up only
+    // the out-computer link and serves firmware updates and nothing else, until
+    // an update lands or the rocket is power-cycled (flight_computer
+    // fc_rescue_policy.h). Outside the progress range on the wire.
+    RESCUE(64),
+    // FCB_NO_FLIGHT_LOOP: setup finished, but the flight task could not be
+    // created (too little internal RAM for its stack), so no flight loop runs:
+    // no data, no commands, no flight. It used to stop at COMPLETE and read
+    // "Flight computer ready" while the dashboard sat on "Syncing…" (Beetle
+    // bench image, 2026-10-26). Only another image fixes it, flashed over USB:
+    // the app's update needs the flight loop.
+    NO_FLIGHT_LOOP(65);
 
     public val label: String
         get() = when (this) {
@@ -76,10 +89,15 @@ public enum class FcBootStep(public val raw: Int) {
             GNSS -> "Starting GNSS"
             SERVOS -> "Starting servos"
             COMPLETE -> "Flight computer ready"
+            RESCUE -> "Rescue mode \u2014 ready for a firmware update"
+            NO_FLIGHT_LOOP -> "Flight computer not running \u2014 no flight loop"
         }
 
     public companion object {
-        /** FCB_STEP_COUNT — the count, not a step (progress denominator). */
+        /**
+         * FCB_STEP_COUNT — the count of PROGRESS steps (LINKS..COMPLETE), the
+         * progress denominator.  RESCUE and NO_FLIGHT_LOOP are not among them.
+         */
         public const val STEP_COUNT: Int = 6
 
         public fun fromRaw(raw: Int): FcBootStep? = entries.firstOrNull { it.raw == raw }
@@ -290,10 +308,25 @@ public data class TelemetryData(
     // #303 sensor health scorecard ("h"): 2 bits/item, shifts mirror
     // RocketComputerTypes.h SH_*_SHIFT.  0 = nothing reported → card hidden.
     val sensorHealth: Int = 0,
+    // The GNSS board's own IMU ("gi"): a plain integer with the SensorHealth
+    // values (0 not applicable, 1 OK, 2 degraded, 3 bad), NOT part of "h".  The
+    // out computer sends it while the flight computer reports it, and a base
+    // station relays it from the LoRa slow frame, so on a base-station link it
+    // updates every 3 s.  It is absent from older firmware and from a v5 rocket
+    // or base station, so null means "not applicable", never "fine".  Advisory
+    // only, like Mag.  iOS `gnss_imu_state`.
+    val gnssImuState: Int? = null,            // "gi"
 
     // Source rocket identity (base station relay only, null for direct BLE)
     val sourceRocketId: Int? = null,          // "rid"
     val sourceUnitName: String? = null,       // "run"
+    /**
+     * Base station: two rockets appear to share this rocket ID ("dup", 1 =
+     * suspected; omitted when clear). Any nonzero value counts — it gates
+     * pyro commands, so an unexpected value fails toward blocking. iOS
+     * `duplicate_id` (#1650).
+     */
+    val duplicateId: Int? = null,             // "dup"
 
     // Telemetry freshness (#95): missing "ds" → LIVE (older firmware).
     val dataStatus: DataStatus = DataStatus.LIVE,
@@ -511,6 +544,10 @@ public data class TelemetryData(
     // baro+IMU path (dead/deaf module): no absolute position, guidance off.
     public val gnssAbsentMode: Boolean get() = shState(22) == SensorHealth.BAD
 
+    /** The GNSS board's IMU ([gnssImuState]); absent or unknown values read NA. */
+    public val gnssImuHealth: SensorHealth
+        get() = SensorHealth.entries.firstOrNull { it.raw == gnssImuState } ?: SensorHealth.NA
+
     /** #1166: the one quiet advisory line for a hold-up cap that never charged, or null. */
     public val holdupAdvisoryText: String? get() = holdupAdvisoryText(holdupState, scapVoltage)
 
@@ -549,11 +586,21 @@ public data class TelemetryData(
 
     public val hasSensorHealth: Boolean get() = sensorHealth != 0
 
-    /** One row of the pre-launch health card (iOS SensorHealthRow; id = name). */
-    public data class SensorHealthRow(val name: String, val state: SensorHealth)
+    /** The base station flags this rocket ID as two rockets ([duplicateId]). */
+    public val duplicateIdSuspected: Boolean get() = (duplicateId ?: 0) != 0
 
-    // Core sensors always shown; Storage only when reported; a pyro channel
-    // only when configured for the flight (state != NA).
+    /**
+     * One row of the pre-launch health card (iOS SensorHealthRow; id = name).
+     * [detail] is an optional plain-language line (the dot's TalkBack state).
+     */
+    public data class SensorHealthRow(
+        val name: String,
+        val state: SensorHealth,
+        val detail: String? = null,
+    )
+
+    // Core sensors always shown; GNSS IMU and Storage only when reported; a
+    // pyro channel only when configured for the flight (state != NA).
     public val sensorHealthRows: List<SensorHealthRow>
         get() {
             val rows = mutableListOf(
@@ -564,6 +611,9 @@ public data class TelemetryData(
                 SensorHealthRow("Battery", battHealth),
                 SensorHealthRow("Mag", magHealth),
             )
+            if (gnssImuHealth != SensorHealth.NA) {   // "gi": absent from older firmware / a v5 rocket or BS
+                rows.add(SensorHealthRow("GNSS IMU", gnssImuHealth, gnssImuHealthDetail(gnssImuHealth)))
+            }
             if (storageHealth != SensorHealth.NA) {
                 rows.add(SensorHealthRow("Storage", storageHealth))
             }
@@ -590,9 +640,10 @@ public data class TelemetryData(
 
     // Red = a hard fault waiting won't fix (baro/IMU/battery BAD, full/failing
     // flight-log store, or a configured pyro with no continuity).  Green needs
-    // every required item OK — including EKF converged and a GNSS fix.  Mag is
-    // advisory and never gates.  Storage absent (NA, older firmware) is
-    // ignored, not red.  Amber = anything in between.
+    // every required item OK — including EKF converged and a GNSS fix.  Mag and
+    // the GNSS board's IMU ("gi") are advisory and never gate: neither is read
+    // below.  Storage absent (NA, older firmware) is ignored, not red.  Amber =
+    // anything in between.
     public val flightReadiness: FlightReadiness
         get() {
             if (!hasSensorHealth) return FlightReadiness.UNKNOWN
@@ -678,10 +729,24 @@ public data class TelemetryData(
      * frame, so a wedged boot and a just-started one carry the same "bt" — only
      * the dwell separates them.  FcBootStep.COMPLETE is exempt: setup_fc() has
      * finished and the app is merely waiting for the first real NonSensorData.
+     * So are RESCUE and NO_FLIGHT_LOOP, which stay put by design: "no
+     * progress" would only tell the operator to keep waiting.
      */
     public fun fcBootStalled(dwellS: Int): Boolean =
-        fcBooting && fcBootStep != FcBootStep.COMPLETE &&
+        fcBooting && fcBootStep != FcBootStep.COMPLETE && !fcRescue && !fcNoFlightLoop &&
             dwellS >= fcBootStallAfterS(fcBootStep)
+
+    /**
+     * The FC is in rescue mode: it will not finish booting on its own, and a
+     * flight computer firmware update is what it is waiting for.
+     */
+    public val fcRescue: Boolean get() = fcBootStep == FcBootStep.RESCUE
+
+    /**
+     * The FC finished starting but runs no flight loop, and nothing the app can
+     * send will change that.
+     */
+    public val fcNoFlightLoop: Boolean get() = fcBootStep == FcBootStep.NO_FLIGHT_LOOP
 
     /**
      * The one secondary line under the state label (iOS twin: RocketStateView
@@ -883,8 +948,10 @@ public data class TelemetryData(
             flightStatusBits = flexInt(json, "fs") ?: 0,     // #293: tolerant
             pyroStatusBits = flexInt(json, "ps") ?: 0,       // #293: tolerant
             sensorHealth = flexInt(json, "h") ?: 0,                     // #571
+            gnssImuState = flexInt(json, "gi"),                         // absent stays null = NA
             sourceRocketId = flexInt(json, "rid"),           // #571: rid is the demux key
             sourceUnitName = strictString(json, "run"),
+            duplicateId = flexInt(json, "dup"),                         // #1650
             // #95: missing "ds" → LIVE (older firmware doesn't emit it);
             // unknown raw values also read as LIVE.
             dataStatus = DataStatus.fromRaw(flexInt(json, "ds") ?: 0),  // #571
@@ -939,6 +1006,24 @@ public fun modemAdvisoryText(state: Int?): String? = when (state) {
     2 -> "Radio daughterboard not answering — no LoRa"
     3 -> "Radio daughterboard firmware mismatch — no LoRa"
     else -> null
+}
+
+/**
+ * One plain sentence on what the GNSS IMU dot ("gi") means, or null when the
+ * row is hidden (NA). Read out by TalkBack as the dot's state.
+ *
+ * iOS twin: `TelemetryData.gnssImuHealthDetail(_:)`.
+ */
+public fun gnssImuHealthDetail(state: TelemetryData.SensorHealth): String? = when (state) {
+    TelemetryData.SensorHealth.OK -> "The GNSS board's IMU is fully aiding its tracking loops."
+    TelemetryData.SensorHealth.DEGRADED ->
+        "The GNSS board's IMU is not fully aiding: it aids the vertical only" +
+            " until it knows its heading (the six-face calibration with the GNSS board" +
+            " on J1 gives it one; run it again if the board was moved), or its IMU is off in the board's settings."
+    TelemetryData.SensorHealth.BAD ->
+        "The GNSS board stopped using its IMU: its at-rest check failed" +
+            " or its samples stopped."
+    TelemetryData.SensorHealth.NA -> null
 }
 
 public fun holdupAdvisoryText(state: Int?, scapVolts: Float?): String? = when (HoldupState.fromCode(state)) {

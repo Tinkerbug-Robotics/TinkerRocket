@@ -41,6 +41,10 @@ G_MS2                  = 9.80665
 # rejected by 2+ orders of magnitude. self-scales with dt: at a 1 s
 # dropout the allowed Δ is 300 m, at 5 ms it's 1.5 m.
 MAX_BARO_RATE_MS = 300.0
+# ...and only a step of more than this from the last accepted sample is a
+# spike: at the BMP585's ~2 ms spacing the rate alone trips on 0.6 m, inside
+# a vented bay's static-port noise at speed (TR_KinematicChecks.cpp).
+MIN_BARO_SPIKE_STEP_M = 5.0
 # After this many consecutive rejects the gate accepts the next sample
 # unconditionally and reseeds — prevents a permanently wedged sensor
 # from leaving us baro-blind for the rest of the flight.
@@ -251,8 +255,10 @@ class KinematicChecks:
         if new_baro:
             if self._baro_gate_init:
                 dt = max(0.001, (now_ms - self._last_baro_gate_ms) * 0.001)
-                rate = abs(pressure_altitude - self._palt_accepted) / dt
-                if (rate > MAX_BARO_RATE_MS
+                step = abs(pressure_altitude - self._palt_accepted)
+                rate = step / dt
+                if (step > MIN_BARO_SPIKE_STEP_M
+                        and rate > MAX_BARO_RATE_MS
                         and self._consec_baro_rejects < MAX_CONSEC_BARO_REJECTS):
                     # Spike: don't pass to KF, hold last good for downstream.
                     self._consec_baro_rejects += 1

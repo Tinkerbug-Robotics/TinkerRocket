@@ -1,0 +1,9 @@
+{
+ "time_us": 1100000,
+ "version": 1,
+ "network_id": 7,
+ "rocket_id": 2,
+ "board_rev_code": 33,
+ "unit_id": "9e8a1b2c",
+ "unit_name": "Twenty-char unitname",
+ "fw_version": "41b2ab92-m1+20261022-1126"}

@@ -92,7 +92,7 @@ public object BleCommandId {
     public const val SENSOR_CAL_APPLY_OC: Int = 62 // SensorCalApplyData 18 B
     public const val SENSOR_CAL_READ_OC: Int = 63
     public const val IMU_ORIENT: Int = 64          // [0xFF auto | code 0..23]
-    public const val GUIDANCE_CONFIG: Int = 65     // GuidanceConfigData 45 B — first 36 FROZEN (#534)
+    public const val GUIDANCE_CONFIG: Int = 65     // GuidanceConfigFrame 53 B — first 36 FROZEN (#534)
     public const val FIN_CONFIG: Int = 66          // FinConfigData 18 B
     public const val IMU_RATE: Int = 67            // [rate_hz u16] 960/1920/3840
     // "LoRa off" — [bool] 1 = hold radio silence.  Rocket link only: the BS
@@ -139,4 +139,75 @@ public object BleCommandId {
      * why 21 stays.
      */
     public const val PAD_CAL_RUN: Int = 75
+
+    // #1629: the low-g accelerometer's six-face hand calibration
+    // (tools/accel_cal_six_face.py is the reference flow).  The offset is a
+    // property of the flight computer board, kept in its NVS: only the
+    // calibration screen writes it — never a profile push, never the
+    // connect-time sync.  Every answer is a 0xD1 file-ops frame
+    // ([AccelCalStatus]).
+
+    /**
+     * `[offset_x f32][offset_y f32][offset_z f32]` (AccelCalApplyData 12 B),
+     * board frame, m/s²: store and apply; all zero clears it.  Refused past
+     * 1.0 m/s² on any axis (answered with what it kept) and in flight or
+     * after landing (not answered at all), so the read-back (77) is what
+     * tells.
+     */
+    public const val ACC_CAL_APPLY: Int = 76
+
+    /** No payload: answered with one 0xD1 frame (the stored offset, the last face window). */
+    public const val ACC_CAL_READ: Int = 77
+
+    /**
+     * No payload: average the low-g accelerometer over one 3 s face window.
+     * A MEASURING 0xD1 frame comes back at once, then DONE or FAILED; a
+     * refusal (in flight, after landing, in a sim) is a FAILED frame with no
+     * samples and no MEASURING before it.
+     */
+    public const val ACC_FACE_MEASURE: Int = 78
+
+    /**
+     * GNSS log: `[setting u8]` — 0 detailed (all of a Septentrio mosaic-G5's
+     * data in the log, the IMU at most 4k), 1 reduced (its position at 20 Hz
+     * and raw measurements once a second, the 8k rates open). The out
+     * computer relays it to the flight computer, which keeps it in its NVS,
+     * reports it as the config readback's `glog`, and moves `irmax` with it.
+     * Firmware that predates it ignores it.
+     */
+    public const val GNSS_LOG: Int = 79
+
+    /**
+     * #1629, the high-g: HighGCalApplyData 49 B, `[op u8][matrix f32 ×9]
+     * [bias f32 ×3]` ([HighGCalApply]) — the high-g accelerometer's six-face
+     * alignment to the low-g, M row-major and b in m/s², board frame.  op 1
+     * stores and applies them; op 0 clears M back to identity and keeps b.
+     * Answered, like 76, with a 0xD1 frame that now carries the high-g, and
+     * read back with 77.  Refused past HG_CAL_* and in flight; an older
+     * flight or out computer does not answer it at all.
+     */
+    public const val HG_CAL_APPLY: Int = 80
+
+    /**
+     * GNSS antenna offset: `[known u8][x_mm i16][y_mm i16][z_mm i16]` (7 B,
+     * little-endian) — from the flight computer's IMU to the GNSS antenna's
+     * phase center along the board's own axes (+X forward, +Y left, +Z up out
+     * of the component side), or unknown (known 0, then all zeros). The
+     * flight computer refuses a component outside -2000..2000 mm, keeps the
+     * rest in its NVS, rotates it into the rocket frame with its own mounting
+     * setting, and reports it as the config readback's `antk`/`antx`/`anty`/
+     * `antz`. Only the mosaic-G5's navigation filter uses it. Firmware that
+     * predates it ignores it.
+     */
+    public const val ANTENNA_OFFSET: Int = 81
+
+    /**
+     * The gnss-sdr-dev board's IMU mounting: SdrAlignCmdData 2 B, `[op u8]
+     * [id u8]` ([SdrAlignCommand]: 1 save, 2 clear, 3 restart, 4 report; the
+     * app's id). The flight computer sends it to the board until the board
+     * echoes it and answers with 0xD2 frames ([SdrAlignStatus]) carrying the
+     * id; it refuses in flight, after a flight, during a magnetometer
+     * calibration and with no board on J1.
+     */
+    public const val SDR_ALIGN: Int = 83
 }

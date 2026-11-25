@@ -29,12 +29,36 @@ enum DashboardSheet: Identifiable {
 
     var id: String {
         switch self {
-        case .simulator(let d):     return "simulator-\(d.peripheral?.identifier.uuidString ?? "")"
-        case .settings(let d):      return "settings-\(d.peripheral?.identifier.uuidString ?? "")"
-        case .servoTest(let d):     return "servoTest-\(d.peripheral?.identifier.uuidString ?? "")"
+        case .simulator(let d):     return "simulator-\(d.peripheralID?.uuidString ?? "")"
+        case .settings(let d):      return "settings-\(d.peripheralID?.uuidString ?? "")"
+        case .servoTest(let d):     return "servoTest-\(d.peripheralID?.uuidString ?? "")"
         case .driftCast:            return "driftCast"
-        case .frequencyScan(let d): return "frequencyScan-\(d.peripheral?.identifier.uuidString ?? "")"
-        case .preflight(let d):     return "preflight-\(d.peripheral?.identifier.uuidString ?? "")"
+        case .frequencyScan(let d): return "frequencyScan-\(d.peripheralID?.uuidString ?? "")"
+        case .preflight(let d):     return "preflight-\(d.peripheralID?.uuidString ?? "")"
+        }
+    }
+
+    /// The same sheet, on the instance the fleet holds NOW for its device.
+    ///
+    /// A case keeps the BLEDevice the sheet was opened with, and BLEFleet
+    /// replaces that object on every disconnect/reconnect. Read straight off
+    /// the case, an open sheet went dead after any reconnect: after an
+    /// out-computer flash (the OC reboots) Settings showed the old firmware
+    /// version with "Update firmware…" disabled, and everything gated on
+    /// `isConnected` — config pushes, Launch Simulation, Apply frequency —
+    /// stayed off until the sheet was closed and opened again. Worse, Servo
+    /// Test's stop on dismiss went to the dead copy, which dropped it, leaving
+    /// the flight computer in servo test mode. The dashboard resolves the case
+    /// on every render, so each sheet follows its link through the swap; `id`
+    /// keys on the peripheral, so the swap leaves the same sheet up.
+    func live(in fleet: BLEFleet) -> DashboardSheet {
+        switch self {
+        case .simulator(let d):     return .simulator(fleet.liveDevice(for: d))
+        case .settings(let d):      return .settings(fleet.liveDevice(for: d))
+        case .servoTest(let d):     return .servoTest(fleet.liveDevice(for: d))
+        case .driftCast:            return .driftCast
+        case .frequencyScan(let d): return .frequencyScan(fleet.liveDevice(for: d))
+        case .preflight(let d):     return .preflight(fleet.liveDevice(for: d))
         }
     }
 }
@@ -132,6 +156,9 @@ struct DashboardView: View {
                             locationManager: locationManager,
                             activeSheet: $activeSheet
                         )
+                        // Marks the rocket the callouts follow (chip and
+                        // section header) while voice is on.
+                        .environment(\.voiceCalloutsOn, flightAnnouncer.isEnabled)
                     } else {
                         // --- Not connected ---
                         NavigationLink(destination: FlightLogsView()) {
@@ -269,7 +296,8 @@ struct DashboardView: View {
                                 Image(systemName: "book.fill")
                             }
 
-                            NavigationLink(destination: MapView(device: device, locationManager: locationManager)) {
+                            NavigationLink(destination: MapView(device: device, locationManager: locationManager,
+                                                                fleet: fleet)) {
                                 Image(systemName: "map.fill")
                             }
 
@@ -301,6 +329,13 @@ struct DashboardView: View {
             }
         }
         .navigationViewStyle(.stack)
+        // The pushed screens need the fleet too, not only the dashboard sheet
+        // (attached outside this modifier, it injects its own below).
+        // RocketProfileView, reached from the rocket icon and the rocket card,
+        // presents Settings, which resolves its live device off the fleet —
+        // and FirmwareUpdateView, behind Settings' "Update firmware…", read it
+        // there with nothing injected.
+        .environmentObject(fleet)
         .onAppear {
             attachActiveDevice()
         }
@@ -339,7 +374,10 @@ struct DashboardView: View {
         }
         .sheet(item: $activeSheet) { sheet in
             Group {
-                switch sheet {
+                // Resolved here, not when the sheet opened: this closure runs
+                // on every fleet change, so a reconnect hands the open sheet
+                // the rebuilt BLEDevice (see DashboardSheet.live(in:)).
+                switch sheet.live(in: fleet) {
                 // Reverse Drift Cast is a standalone wind/trajectory tool — it
                 // runs with no live device (#42).  "Send to Unit" inside the
                 // view is the only part gated on an active connection.
@@ -350,9 +388,23 @@ struct DashboardView: View {
                 case .settings(let device):
                     SettingsView(device: device)
                 case .servoTest(let device):
+                    // A base station relays the test to its focused rocket, so
+                    // the fin limits are THAT rocket's — never the active
+                    // profile, which belongs to the last direct link. No bound
+                    // profile means no known limits, so no test.
+                    let profile = device.isBaseStation
+                        ? device.focusRocketID.flatMap { rid in
+                            profileStore.profile(
+                                networkID: device.networkID, rocketID: rid,
+                                name: device.remoteRockets.first { $0.rocketID == rid }?.unitName,
+                                knownDevices: fleet.knownDevices)
+                        }
+                        : profileStore.activeProfile
                     ServoTestView(device: device,
-                                  finMinDeg: Double(profileStore.activeProfile?.finMinDeg ?? -20),
-                                  finMaxDeg: Double(profileStore.activeProfile?.finMaxDeg ?? 20))
+                                  finMinDeg: Double(profile?.finMinDeg ?? -20),
+                                  finMaxDeg: Double(profile?.finMaxDeg ?? 20),
+                                  unavailableReason: device.isBaseStation && profile == nil
+                                      ? ServoTestView.unboundRelayReason : nil)
                 case .frequencyScan(let device):
                     // #150: restored — the scan pipeline (cmd 60 → 0xAA
                     // blob → scanSamples) survived #136 intact; while
@@ -364,13 +416,13 @@ struct DashboardView: View {
                 }
             }
             // SwiftUI sheets get a fresh environment by default — re-inject
-            // fleet so SettingsView's FirmwareUpdateView can resolve the
-            // OTASession off it (#15 second pass).
+            // fleet: SettingsView resolves its live device off it, and its
+            // FirmwareUpdateView the OTASession (#15 second pass).
             .environmentObject(fleet)
         }
         .sheet(isPresented: $showProvisioning) {
             if let device = fleet.activeDevice {
-                DeviceProvisioningSheet(device: device, store: fleet.knownDevices)
+                DeviceProvisioningSheet(device: device, store: fleet.knownDevices, fleet: fleet)
             }
         }
         .sheet(isPresented: Binding(
@@ -450,28 +502,12 @@ struct ConnectedFleetView: View {
     @ObservedObject var locationManager: LocationManager
     @Binding var activeSheet: DashboardSheet?
 
-    /// Roster scoped to what this screen is about: rockets carried by the
-    /// foreground base station, plus anything directly connected (an
-    /// explicit user action always shows), plus identifying links.
-    private var scopedSubjects: [RocketSubject] {
-        let foreground = fleet.foregroundBaseStation
-        return fleet.rockets.filter { subject in
-            if subject.direct != nil { return true }
-            guard let fg = foreground else { return false }
-            return subject.relays.contains { $0.baseStation === fg }
-        }
-    }
-
-    private var displayedSubjects: [RocketSubject] {
-        scopedSubjects.filter { subject in
-            guard let key = subject.key else { return true }
-            return !fleet.hiddenRocketKeys.contains(key)
-        }
-    }
-
     var body: some View {
-        let subjects = scopedSubjects
-        let displayed = displayedSubjects
+        // Roster scoped to what this screen is about (BLEFleet.scopedRockets:
+        // the foreground base station's rockets plus direct links), and the
+        // part of it not hidden. The map draws the same set.
+        let subjects = fleet.scopedRockets
+        let displayed = fleet.dashboardRockets
         let multi = displayed.count > 1
         let foregroundBS = fleet.foregroundBaseStation
 
@@ -507,6 +543,12 @@ struct ConnectedFleetView: View {
                 }
         }
 
+        if let mismatch = FirmwareStamp.mismatchLine(
+            FirmwareMismatchRow.units(baseStation: foregroundBS, rockets: displayed,
+                                      knownDevices: fleet.knownDevices)) {
+            FirmwareMismatchRow(text: mismatch)
+        }
+
         ForEach(displayed) { subject in
             if let direct = subject.direct {
                 DirectRocketSection(subject: subject,
@@ -532,7 +574,10 @@ struct ConnectedFleetView: View {
                                        remote: relay.remote,
                                        collapsible: multi,
                                        fleet: fleet,
-                                       locationManager: locationManager)
+                                       locationManager: locationManager,
+                                       followTarget: foregroundBS.flatMap { bs in
+                                           subject.relays.contains { $0.baseStation === bs } ? bs : nil
+                                       })
             }
         }
 
@@ -556,6 +601,7 @@ private struct DirectRocketSection: View {
     @Binding var activeSheet: DashboardSheet?
     let collapsible: Bool
     @State private var collapsed = false
+    @Environment(\.voiceCalloutsOn) private var voiceOn
 
     var body: some View {
         // Header only when it does real work: separating sections and
@@ -565,7 +611,8 @@ private struct DirectRocketSection: View {
         if collapsible {
             RocketSectionHeader(subject: subject,
                                 collapsible: collapsible,
-                                collapsed: $collapsed)
+                                collapsed: $collapsed,
+                                speaks: fleet.speaksFor(subject, voiceOn: voiceOn))
         }
         if collapsed {
             CollapsedRocketSummary(telemetry: device.telemetry)
@@ -590,18 +637,34 @@ private struct FocusedRelaySection: View {
     @Binding var activeSheet: DashboardSheet?
     let collapsible: Bool
     @State private var collapsed = false
+    @Environment(\.voiceCalloutsOn) private var voiceOn
+
+    private var identityLine: String? {
+        guard let key = subject.key else { return nil }
+        return fleet.knownDevices.rocket(networkID: key.networkID, rocketID: key.rocketID,
+                                         name: subject.freshestRelay?.remote.unitName)
+            .flatMap { FirmwareStamp.identityLine(for: $0) }
+    }
 
     var body: some View {
         // Same solo-redundancy rule as DirectRocketSection: the BS strip
-        // right above already says which rocket its radio follows.
-        if collapsible {
+        // right above already says which rocket its radio follows — unless
+        // the header has something the strip cannot say (a shared rocket ID,
+        // or a flown rocket gone quiet).
+        if collapsible || RocketSectionHeader.needsHeaderWhenSolo(
+            subject, flown: subject.key.map { fleet.flownRockets.contains($0) } ?? false) {
             RocketSectionHeader(subject: subject,
                                 collapsible: collapsible,
-                                collapsed: $collapsed)
+                                collapsed: $collapsed,
+                                identityLine: identityLine,
+                                speaks: fleet.speaksFor(subject, voiceOn: voiceOn))
         }
         if collapsed {
             CollapsedRocketSummary(telemetry: bs.telemetry)
         } else {
+            // #1629: the followed rocket's board is known only from its last
+            // Bluetooth link; the base station's own reads say nothing of it.
+            RegistryCalibrationLine(subject: subject, knownDevices: fleet.knownDevices)
             ConnectedDashboardView(device: bs,
                                    fleet: fleet,
                                    locationManager: locationManager,
@@ -851,6 +914,27 @@ struct ConnectedDashboardView: View {
                     .frame(maxWidth: .infinity)
                     .opacity(staleOpacity)
                 }
+
+                // #1629: what this board's flight computer lacks for
+                // calibration, as the board said it — never the profile, and
+                // never a calibration not read yet. Same quiet line and rule
+                // as the advisories above: no recolour, no arm block. It
+                // opens Settings, which lists each sensor.
+                if !device.isBaseStation,
+                   let calLine = device.calibration.notCalibratedLine {
+                    Button { activeSheet = .settings(device) } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle")
+                            Text(calLine)
+                            Image(systemName: "chevron.right")
+                                .font(.caption2)
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.orange)
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
 
             // #557: the FC lost its GNSS module and is flying a baro+IMU-only
@@ -902,6 +986,7 @@ struct ConnectedDashboardView: View {
                 trackingHealthy: dataStatus == .live,
                 directOrientationName: device.imuOrientationName,
                 directOrientationMode: device.imuOrientationMode,
+                directGnssReceiver: device.fcGnss,
                 staleOpacity: staleOpacity,
                 // Same signal the STALE banner above is drawn from, so the
                 // banner and the held verdict can never disagree.
@@ -920,11 +1005,21 @@ struct ConnectedDashboardView: View {
                 // armed/fired bits exist on this path, continuity comes from
                 // the health scorecard, and a tile tap opens the stand-back
                 // LoRa test rather than the config sheet.
+                // The FOCUSED rocket's own profile — the active profile is
+                // whichever rocket was last connected over Bluetooth, which
+                // with three rockets on one base station is usually another
+                // one. Unbound (never on a direct link): channels show off.
+                let focusedProfile = device.focusRocketID.flatMap { rid in
+                    profileStore.profile(
+                        networkID: device.networkID, rocketID: rid,
+                        name: device.remoteRockets.first { $0.rocketID == rid }?.unitName,
+                        knownDevices: fleet.knownDevices)
+                }
                 PyroChannelsView(
                     device: device,
                     relayMode: true,
                     configProvider: { ch in
-                        let p = profileStore.activeProfile
+                        let p = focusedProfile
                         switch ch {
                         case 1: return (p?.pyro1Enabled ?? false, p?.pyro1TriggerMode ?? 0, p?.pyro1TriggerValue ?? 0)
                         case 2: return (p?.pyro2Enabled ?? false, p?.pyro2TriggerMode ?? 0, p?.pyro2TriggerValue ?? 0)
@@ -932,7 +1027,8 @@ struct ConnectedDashboardView: View {
                         default: return (p?.pyro4Enabled ?? false, p?.pyro4TriggerMode ?? 0, p?.pyro4TriggerValue ?? 0)
                         }
                     },
-                    onTest: { pyroTestChannel = $0 })
+                    onTest: { pyroTestChannel = $0 },
+                    unknownConfigNote: focusedProfile == nil ? PyroChannelsView.unboundRelayPyroNote : nil)
                 // Stand-back pyro test over LoRa. Presented from the cards
                 // themselves — this branch is a view sequence, not a single
                 // container, so there is nothing else to hang it on.
@@ -1004,6 +1100,9 @@ struct RocketTelemetryCards: View {
     /// instead, so callers only supply the direct-link values.
     var directOrientationName: String = ""
     var directOrientationMode: IMUOrientationMode = .unknown
+    /// The GNSS receiver the flight computer found, for a DIRECT link (the
+    /// OC's fc_identity readback; a BS link does not relay it).
+    var directGnssReceiver: String? = nil
     /// Dimming applied while the stream is stale; 1.0 when live.
     var staleOpacity: Double = 1.0
     /// Age of the newest frame while the stream is NOT live, else nil.  Only
@@ -1074,7 +1173,8 @@ struct RocketTelemetryCards: View {
 
             Group {
                 if showRocketViews {
-                    GPSView(telemetry: telemetry, compact: true)
+                    GPSView(telemetry: telemetry, compact: true,
+                            receiver: isBaseStation ? nil : directGnssReceiver)
                         .opacity(staleOpacity)
                 }
 
@@ -1320,7 +1420,10 @@ struct RocketStateView: View {
 
     var bootLineColor: Color {
         guard let boot else { return .secondary }   // waiting on a silent FC
-        return (boot.isStalled(dwell: bootDwell) || !boot.degradedSubsystems.isEmpty)
+        // Rescue mode and "no flight loop" never "stall" (they stay put by
+        // design), but neither is any more a healthy boot than a stalled one.
+        return (boot.isRescue || boot.isNoFlightLoop || boot.isStalled(dwell: bootDwell) ||
+                !boot.degradedSubsystems.isEmpty)
             ? .orange : .secondary
     }
 
@@ -1381,7 +1484,8 @@ struct RocketStateView: View {
 /// Driven by the packed "h" bitfield (FC sensors/EKF + OC battery); the parent
 /// only renders it once the rocket actually reports a scorecard.  The rollup
 /// rule lives in TelemetryData.flightReadiness — EKF-init and a GNSS fix gate
-/// green, configured pyros must have continuity, and mag is advisory.
+/// green, configured pyros must have continuity, and mag and the GNSS board's
+/// IMU are advisory.
 /// The compact per-subsystem dot row inside HealthCardView's horizontal
 /// scroller.  Split out so the render test can draw it directly —
 /// ImageRenderer produces empty output for ScrollView children.
@@ -1434,8 +1538,14 @@ struct HealthDotRow: View {
                             Text(row.name)
                                 .font(.caption2)
                                 .lineLimit(1)
+                                // "GNSS IMU" is the longest name; at six to a
+                                // line on a narrow phone it would truncate to
+                                // "GNSS…" beside the GNSS dot.  Shrink first.
+                                .minimumScaleFactor(0.7)
                         }
                         .frame(maxWidth: .infinity)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityHint(row.detail ?? "")
                     }
                 }
             }
@@ -2055,12 +2165,23 @@ struct BatteryRow: View {
 struct GPSView: View {
     let telemetry: TelemetryData
     var compact: Bool = false
+    /// The receiver the flight computer found ("u-blox", "mosaic-G5"), under
+    /// the title: a V9 finds its receiver at boot, and this is how the pad
+    /// sees which. nil shows nothing.
+    var receiver: String? = nil
 
     var body: some View {
         if compact {
             HStack(spacing: 12) {
-                Text("GPS")
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("GPS")
+                        .font(.headline)
+                    if let receiver {
+                        Text(receiver)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
                 Text(telemetry.coordinatesDisplay)
                     .font(.system(.caption, design: .monospaced))
                 Spacer()
@@ -2082,6 +2203,9 @@ struct GPSView: View {
                 HStack(spacing: 20) {
                     DataItem(label: "Satellites", value: "\(telemetry.num_sats)")
                     DataItem(label: "GDOP", value: telemetry.gdop.map { String(format: "%.1f", $0) } ?? "N/A")
+                    if let receiver {
+                        DataItem(label: "Receiver", value: receiver)
+                    }
                 }
             }
             .padding()
@@ -2643,6 +2767,14 @@ struct PyroChannelsView: View {
     var configProvider: ((Int) -> (enabled: Bool, mode: UInt8, value: Float))? = nil
     /// Relay mode: open the stand-back LoRa test for this channel.
     var onTest: ((Int) -> Void)? = nil
+    /// Relay mode with no profile bound to the rocket: its trigger settings
+    /// are not known, so the tiles say so instead of "Disabled" and this line
+    /// says why. The stand-back test still works — it needs no profile.
+    var unknownConfigNote: String? = nil
+
+    static let unboundRelayPyroNote =
+        "No profile is bound to this rocket, so its trigger settings are unknown. "
+        + "Connect to it over Bluetooth once to bind its profile."
 
     @AppStorage("unitSystem") private var unitSystem: UnitSystem = .metric
     @State private var showPyroSheet = false
@@ -2672,6 +2804,11 @@ struct PyroChannelsView: View {
             // Never on a relay: those tiles are the profile by construction.
             if !relayMode, let note = pyroProvenanceNote {
                 Text(note)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            if relayMode, let unknownConfigNote {
+                Text(unknownConfigNote)
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -2780,7 +2917,9 @@ struct PyroChannelsView: View {
                             }
                         }
                     }
-                    Text(enabled ? triggerDescription(mode: mode, value: value) : "Disabled")
+                    Text(relayMode && unknownConfigNote != nil
+                         ? "Trigger unknown"
+                         : (enabled ? triggerDescription(mode: mode, value: value) : "Disabled"))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

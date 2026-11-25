@@ -159,6 +159,77 @@ class OtaSessionTest {
         assertEquals("v2-new", st.newVersion)
     }
 
+    // ── The next flash after a reconnect ─────────────────────────────────
+
+    /**
+     * 2026-10-16, a V9 updated over BLE: the out computer first, then the
+     * flight computer. The OC's flash ends in its reboot, so the FC flash is
+     * the first run on the session the fleet rebuilt. "Flash another" resets
+     * the finished run, and the next one must go out over the NEW session and
+     * land. Twin of the iOS OTASessionFlowTests case. That day's iOS bug was in
+     * the screen, which kept the dead device and grayed out the Flash button; this
+     * app's screen is handed `fleet.devices[id].session` on every recomposition.
+     */
+    @Test
+    fun afterAReconnect_aNewlyPickedImageCanBeFlashed() = runTest {
+        val r = rig(
+            identityJson =
+                """{"type":"config_identity","uid":"oc1","un":"Rocket","nid":5,"rid":1,"dt":"R","fw":"oc-v1"}""",
+            fcIdentityJson = """{"type":"fc_identity","fc_fw":"fc-v1"}""",
+        )
+        advanceTimeBy(1_200); runCurrent()
+
+        // The OC flash, through the reboot it causes.
+        r.ota.start(espImage("oc-v2"))
+        advanceTimeBy(100); runCurrent()
+        r.fw.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        r.fw.emitOtaStatus("ready_to_boot")
+        advanceTimeBy(200); runCurrent()
+        assertIs<OtaSession.State.Rebooting>(r.ota.state.value)
+        r.swapSession(null)
+        advanceTimeBy(300); runCurrent()
+        val fresh = FakeFirmware(backgroundScope).apply {
+            configIdentityJson =
+                """{"type":"config_identity","uid":"oc1","un":"Rocket","nid":5,"rid":1,"dt":"R","fw":"oc-v2"}"""
+            fcIdentityJson = """{"type":"fc_identity","fc_fw":"fc-v1"}"""
+        }
+        val rebuilt = DeviceSession(
+            scope = backgroundScope, transport = fresh,
+            connectedDeviceName = "TR-R-Rocket", clock = { currentTime },
+        )
+        rebuilt.start()
+        r.swapSession(rebuilt)
+        advanceTimeBy(1_500); runCurrent()
+        val oc = r.ota.state.value
+        assertIs<OtaSession.State.Verified>(oc)
+        assertEquals("oc-v2", oc.newVersion)
+
+        // "Flash another", then the FC image.
+        r.ota.reset()
+        assertIs<OtaSession.State.Idle>(r.ota.state.value)
+        r.ota.start(espImage("fc-v2"), targetIsFc = true)
+        advanceTimeBy(100); runCurrent()
+        val begin = fresh.commandFrames.last { it[0].toInt() == BleCommandId.OTA_BEGIN }
+        assertEquals(1, begin[1].toInt(), "target byte 1 = relay to the FC")
+        assertEquals("fc-v1", r.ota.preFlashVersion)
+        fresh.emitOtaStatus("ready")
+        advanceTimeBy(500); runCurrent()
+        fresh.emitOtaStatus("ready_to_boot")
+        advanceTimeBy(200); runCurrent()
+        // The OC stays up while the FC reboots behind it, and relays its new version.
+        fresh.emitTelemetryJson("""{"type":"fc_identity","fc_fw":"fc-v2"}""")
+        advanceTimeBy(1_500); runCurrent()
+
+        val fc = r.ota.state.value
+        assertIs<OtaSession.State.Verified>(fc)
+        assertEquals("fc-v2", fc.newVersion)
+        assertEquals(
+            1, r.fw.commandFrames.count { it[0].toInt() == BleCommandId.OTA_BEGIN },
+            "The dead transport saw nothing of the FC run",
+        )
+    }
+
     // ── Failure branches ─────────────────────────────────────────────────
 
     @Test

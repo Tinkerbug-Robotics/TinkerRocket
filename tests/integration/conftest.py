@@ -27,9 +27,15 @@ PREAMBLE = bytes([0xAA, 0x55, 0xAA, 0x55])
 
 MSG_TYPES = {
     0x90: "GNSS_SAT",     # per-satellite C/N0, variable length (10 + 6*n)
-    0x95: "GNSS_RTCM",    # raw RTCM3 frames, variable length (5 + up to 219)
+    0x95: "GNSS_RTCM",    # the receiver's own frames, RTCM3 or SBF, variable length (5 + up to 219)
     0x96: "RAW_GNSS_EKF", # the raw-GNSS shadow filter, 90 bytes at 10 Hz (#1600)
     0x99: "PAD_CAL_STATUS", # the pad calibration's progress, 40 bytes at 1 Hz on the ground (#1600 phase 5)
+    0x9A: "GNSS_CHECK",   # each receiver fix against the IMU, 24 bytes at 10 Hz (#1508)
+    0x9B: "RAW_GNSS_ATT", # the raw-GNSS filter's attitude 1-sigma and IMU biases, 46 bytes at 10 Hz
+    0x9C: "IMU_TEMP",     # the IMU's die temperature, 6 bytes at 1 Hz
+    0x9D: "GNSS_CLOCK",   # the GPS-to-MCU clock line, 68 bytes at ~1 Hz
+    0x9E: "PAD_CONTEXT",  # the pad, once after launch, variable length (7 + up to 196)
+    0x9F: "HEADING_FIT",  # the heading from thrust, 32 bytes at ~1 Hz in flight
     0xA0: "STATUS_QUERY",
     0xA1: "GNSS",
     0xA2: "ISM6HG256",

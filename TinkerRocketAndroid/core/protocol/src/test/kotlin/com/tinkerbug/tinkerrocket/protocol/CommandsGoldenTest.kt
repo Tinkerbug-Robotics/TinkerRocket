@@ -74,11 +74,16 @@ class CommandsGoldenTest {
         "cmd60_scan_12.bin",
         "cmd62_sensorcal_18.bin",
         "cmd64_imuorient_auto.bin",
-        "cmd65_guidance_45.bin",
+        "cmd65_guidance_53.bin",
         "cmd66_fin_18.bin",
         "cmd67_imurate_2.bin",
         "cmd70_otabegin_37.bin",
         "cmd75_padcal_10.bin",
+        "cmd76_accelcal_12.bin",
+        "cmd79_gnsslog_1.bin",
+        "cmd80_hgcal_49.bin",
+        "cmd81_antenna_7.bin",
+        "cmd83_sdralign_2.bin",
     )
 
     @Test
@@ -333,8 +338,8 @@ class CommandsGoldenTest {
     }
 
     @Test
-    fun `cmd65 guidance config 45 bytes`() {
-        val s = side("cmd65_guidance_45.bin")
+    fun `cmd65 guidance config 53 bytes`() {
+        val s = side("cmd65_guidance_53.bin")
         val built = Commands.guidanceConfig(
             enabled = s.i("enable") != 0,
             navGain = s.f("nav_gain"),
@@ -350,9 +355,16 @@ class CommandsGoldenTest {
             kpPos = s.f("kp_pos_per_s2"),
             kdVel = s.f("kd_vel_per_s"),
             guidanceLaw = s.i("guidance_law"),
+            tiltLimitBoostDeg = s.f("tilt_limit_boost_deg"),
+            tiltLimitCoastDeg = s.f("tilt_limit_coast_deg"),
         )
-        assertEquals(46, built.size, "GuidanceConfigData frame must be 1+45 bytes")
-        assertMatchesFixture("cmd65_guidance_45.bin", built)
+        assertEquals(54, built.size, "GuidanceConfigFrame must be 1+53 bytes")
+        assertMatchesFixture("cmd65_guidance_53.bin", built)
+        // The tilt limits sit after the 45-byte GuidanceConfigData (frame
+        // offsets 46/50 behind the cmd byte), little-endian.
+        val tail = java.nio.ByteBuffer.wrap(built, 46, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        assertEquals(s.f("tilt_limit_boost_deg"), tail.float)
+        assertEquals(s.f("tilt_limit_coast_deg"), tail.float)
     }
 
     @Test
@@ -388,6 +400,52 @@ class CommandsGoldenTest {
     }
 
     @Test
+    fun `cmd79 gnss log`() {
+        val s = side("cmd79_gnsslog_1.bin")
+        assertMatchesFixture("cmd79_gnsslog_1.bin", Commands.gnssLog(s.i("setting")))
+    }
+
+    @Test
+    fun `cmd83 the gnss-sdr-dev board's IMU mounting`() {
+        val s = side("cmd83_sdralign_2.bin")
+        assertEquals(83, s.i("cmd"))
+        assertMatchesFixture("cmd83_sdralign_2.bin", Commands.sdrAlign(s.i("op"), s.i("id")))
+        assertEquals("53" + "03" + "ff", Commands.sdrAlign(SdrAlignCommand.OP_RESTART, 255).toHex())
+    }
+
+    @Test
+    fun `cmd81 antenna offset`() {
+        val s = side("cmd81_antenna_7.bin")
+        assertEquals(81, s.i("cmd"))
+        assertMatchesFixture(
+            "cmd81_antenna_7.bin",
+            Commands.antennaOffset(s.i("known") == 1, s.i("x_mm"), s.i("y_mm"), s.i("z_mm")),
+        )
+    }
+
+    @Test
+    fun `cmd81 antenna offset packs signed little-endian millimeters`() {
+        // 312 = 0x0138, -25 = 0xFFE7, 4 = 0x0004 — the same bytes the iOS
+        // AntennaOffsetSettingTests pin.
+        assertEquals("51" + "01" + "3801" + "e7ff" + "0400", Commands.antennaOffset(true, 312, -25, 4).toHex())
+        assertEquals(
+            "51" + "01" + "30f8" + "d007" + "0000",
+            Commands.antennaOffset(AntennaOffset(true, -2000, 2000, 0)).toHex(),
+        )
+        // Unknown always goes out as zeros, whatever is passed.
+        assertEquals("51" + "00" + "0000" + "0000" + "0000", Commands.antennaOffset(false, 7, 8, 9).toHex())
+        assertEquals("51" + "00" + "0000" + "0000" + "0000", Commands.antennaOffset(AntennaOffset.UNKNOWN).toHex())
+        assertEquals(1 + 7, Commands.antennaOffset(AntennaOffset.UNKNOWN).size)   // cmd byte + payload
+    }
+
+    @Test
+    fun `cmd81 antenna offset refuses what the firmware would`() {
+        assertFailsWith<IllegalArgumentException> { Commands.antennaOffset(true, 2001, 0, 0) }
+        assertFailsWith<IllegalArgumentException> { Commands.antennaOffset(true, 0, -2001, 0) }
+        assertFailsWith<IllegalArgumentException> { Commands.antennaOffset(true, 0, 0, 40000) }
+    }
+
+    @Test
     fun `cmd70 ota begin`() {
         val s = side("cmd70_otabegin_37.bin")
         assertMatchesFixture(
@@ -412,7 +470,64 @@ class CommandsGoldenTest {
         assertMatchesFixture("cmd75_padcal_10.bin", built)
     }
 
+    @Test
+    fun `cmd76 accel cal apply`() {
+        val s = side("cmd76_accelcal_12.bin")
+        val built = Commands.accelCalApply(
+            offsetX = s.f("offset_x"), offsetY = s.f("offset_y"), offsetZ = s.f("offset_z"),
+        )
+        assertEquals(1 + 12, built.size, "AccelCalApplyData frame must be 1+12 bytes")
+        assertMatchesFixture("cmd76_accelcal_12.bin", built)
+    }
+
+    @Test
+    fun `cmd80 high-g cal apply`() {
+        val s = side("cmd80_hgcal_49.bin")
+        val m = listOf("m00", "m01", "m02", "m10", "m11", "m12", "m20", "m21", "m22").map { s.f(it) }
+        val built = Commands.highGCalApply(
+            op = s.i("op"),
+            matrix = m,
+            bias = listOf(s.f("bias_x"), s.f("bias_y"), s.f("bias_z")),
+        )
+        assertEquals(1 + HighGCalApply.PAYLOAD_LENGTH, built.size, "HighGCalApplyData frame must be 1+49 bytes")
+        assertEquals(HighGCalApply.OP_STORE, s.i("op"))
+        assertMatchesFixture("cmd80_hgcal_49.bin", built)
+    }
+
     // ----------------------------------- hand pins (no fixture / iOS XCTest)
+
+    @Test
+    fun `cmd80 clear is op 0 with the identity and zeros`() {
+        // The flight computer ignores the matrix and bias of a clear; the app
+        // sends the identity and zeros, as iOS and the script do.
+        val clear = Commands.highGCalApply(HighGCalApply.OP_CLEAR)
+        assertEquals(50, clear.size)
+        assertEquals(80, clear[0].toInt())
+        assertEquals(0, clear[1].toInt())
+        val b = LeBuffer(clear, position = 2)
+        assertEquals(listOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f), List(9) { b.f32() })
+        assertEquals(listOf(0f, 0f, 0f), List(3) { b.f32() })
+        assertFailsWith<IllegalArgumentException> { Commands.highGCalApply(1, matrix = listOf(1f, 0f, 0f)) }
+        assertFailsWith<IllegalArgumentException> { Commands.highGCalApply(1, bias = listOf(0f)) }
+    }
+
+    @Test
+    fun `cmd76 from the solved offset as the screen sends it`() {
+        // The six-face solve works in doubles; the wire is f32.  The emitter
+        // packed (0.0412, -0.0273, 0.0156) m/s², so the same three numbers,
+        // narrowed the way the screen narrows them, must be the same bytes.
+        val solved = listOf(0.0412, -0.0273, 0.0156)
+        assertMatchesFixture(
+            "cmd76_accelcal_12.bin",
+            Commands.accelCalApply(solved[0].toFloat(), solved[1].toFloat(), solved[2].toFloat()),
+        )
+    }
+
+    @Test
+    fun `cmd76 all zero is the clear`() {
+        // The flight computer reads an all-zero offset as "remove the stored one".
+        assertEquals(listOf(76) + List(12) { 0 }, Commands.accelCalApply(0f, 0f, 0f).map { it.toInt() })
+    }
 
     @Test
     fun `cmd75 without an ionosphere is ten zero bytes`() {

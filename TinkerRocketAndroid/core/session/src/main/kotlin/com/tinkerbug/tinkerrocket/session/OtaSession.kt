@@ -170,7 +170,7 @@ public class OtaSession(
             _state.value = if (st?.state == OtaStatusUpdate.State.VERIFY_FAILED) {
                 State.Failed("Device refused OTA_BEGIN: ${st.err ?: "unknown"}")
             } else {
-                State.Failed("Device did not accept OTA_BEGIN within ${beginTimeout / 1000}s")
+                State.Failed(OtaBeginFailure.notAccepted(targetIsFc, beginTimeout / 1000))
             }
             // Every failure exit after OTA_BEGIN aborts, so the device and the
             // app agree the session is over (#1049).  A begin the device never

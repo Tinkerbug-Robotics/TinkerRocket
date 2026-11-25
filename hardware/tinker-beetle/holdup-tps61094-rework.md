@@ -347,7 +347,7 @@ distance half of this finding does not exist there yet. The second 0805 was
 added to the V10 schematic on 2026-09-11 as `C144` (same part as its `C17`); it
 must go beside `C17` at `U47`'s VOUT pins when that board is laid out.
 
-## EN/MODE are hard-wired, and that is correct (2026-09-03 — documents #1023)
+## EN/MODE are hard-wired, and that is correct (2026-09-03 — documents #1023; superseded 2026-11-12, see "EN/MODE held up from `+3V3`" below)
 
 `U47`'s EN and MODE both tie to `V_BUCK` (= VIN), putting the part permanently in
 **Auto buck/boost**. The four modes are selected by these two pins:
@@ -412,6 +412,65 @@ pad**. Grounding the pad gives an immediate rail-off and a code refresh.
 **Do not put this on an out-computer GPIO.** EN low with MODE still high is *true
 shutdown* — it drops `+3V3` and takes both processors down. That is not a power
 firmware should hold in flight. A pad a human has to touch is the right shape.
+
+## EN/MODE held up from `+3V3` (2026-11-12 — Mantis V11 and Beetle V2, schematic only)
+
+**What the bench showed.** The second V10 (out computer `…AB:60`), with its 2 F
+`C130` fitted, dropped the moment the pack came off. The section above assumed
+`V_BUCK` drains only through the `VBUCK_OK` divider (tau ~19 s, EN cut-off ~34 s).
+Eight days later the V10 gained `R140`, 10 kΩ across `V_BUCK`, so that `VBUCK_OK`
+reads LOW ~0.4 s after the bypass opens (#1165,
+[`../tinker-mantis/v10-power-parity-2026-09-11.md`](../tinker-mantis/v10-power-parity-2026-09-11.md)
+§1.2). Nobody checked it against `U47`: EN and MODE are on that same node. With
+32 µF there, tau = 0.32 s, so EN leaves the guaranteed-HIGH band (0.58 V) about
+0.5 s after the bypass opens and reaches the guaranteed-LOW threshold (0.2 V,
+VEN_L at VOUT > 1.8 V) at ~0.9 s. At (0, 0) the part is in Forced bypass: the
+bypass FET ties `+3V3` to the dead `V_BUCK` and the board drops. The parity
+doc's "2–4 s of hold-up" never held on a V10. This is the analysis that fits the
+symptom; the board itself was not reworked to prove it (no `R140` lift).
+
+**Change.** `U47`'s EN and MODE come off `V_BUCK` and sit on their own node,
+fed through a diode-OR from `V_BUCK` and `+3V3`:
+
+| board | OR-gate | node |
+|---|---|---|
+| Mantis V11 | `D10` BAV170M (SOT-883, the part `D9` already is) | `Net-(D10-K)` |
+| Beetle V2 | `D13` (from `V_BUCK`) + `D14` (from `+3V3`), BAT54XV2T1G (already `D1`–`D4`, `D9`) | `Net-(D13-K)` |
+
+- At power-up `V_BUCK` enables the part exactly as before. EN still has to come
+  from VIN first (§7.3.2), and it does.
+- Once `+3V3` exists it holds EN and MODE high itself, so the hold-up runs until
+  the cap is spent (VOUT < 1.6 V, SUP UVLO ~0.6 V), however fast `V_BUCK` drains.
+  `R140` stays, and `VBUCK_OK` keeps its 0.4 s pack-loss signal.
+- **No pull-down resistor.** EN and MODE each have an active 800 kΩ pull-down
+  when low or floating, and go high-impedance (1 nA) when high (§7.3.3). The
+  diodes' microamps beat it easily. During the hold-up the node sits at
+  ~3.0 V − ~0.5 V ≈ 2.5 V, far above 0.58 V and well under the 6.5 V
+  absolute maximum.
+- When the cap is finally spent, VOUT falls and the node falls with it;
+  everything is near 0 V by the time EN crosses its threshold.
+
+The Beetle never had `R140`: its `V_BUCK` carries only the 460 kΩ divider,
+plus `R49`, the buck's power-good pull-up, which the buck may pull low while its
+input decays. So its cut-off was ~34 s on paper and unmeasured. The same OR
+takes the hold-up's length off `V_BUCK`'s decay altogether.
+
+**Power LED (Mantis only).** `R65`/`D6` move from `V_BUCK` to `+3V3`, the "one
+wire cut and one label" the parity doc offered. The LED now stays lit while the
+board rides the cap and goes out when the cap is spent (~0.1 mA). The Beetle's
+power LED (`D8`/`R68`) was already on `+3V3`.
+
+**Checks.** Mantis netlist diff: `D10`'s three pins, `U47`.2/.3
+`V_BUCK` → `Net-(D10-K)`, and `R65`.1 `V_BUCK` → `+3V3`; nothing else.
+ERC 911 → 911. Beetle netlist diff: `D13`, `D14`, and `U47`.2/.3
+`V_BUCK` → `Net-(D13-K)`; nothing else. ERC 719 → 722, three
+`endpoint_off_grid` (the EN/MODE bar is drawn at y = 36.195, off the 1.27 mm
+grid, and the diodes have to land on it). `bom.csv`: Mantis BAV170M line now
+`D9, D10` ×2; Beetle BAT54XV2T1G line now `D1–D4, D13, D14` ×6.
+
+**Layout (owner).** Neither PCB is updated. Update PCB from Schematic, place
+`D10` (Mantis) or `D13`/`D14` (Beetle) near `U47`'s pins 2–3, and refill
+zones. The Mantis `R65` pad moves from `V_BUCK` to `+3V3`.
 
 ## L11 inductor: Bourns SRP4020FA-2R2M on a corrected land (2026-09-27 — both boards, schematic only)
 

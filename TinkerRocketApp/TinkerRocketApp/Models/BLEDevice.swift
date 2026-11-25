@@ -44,11 +44,10 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // MARK: - Published per-device state
 
-    /// `didSet`: the fleet re-routes voice on this edge.  It is the one that
-    /// matters most — a direct rocket link dropping at launch is what hands
-    /// the callouts over to the base station, and it happens on every flight.
-    /// Synchronous on purpose; the fleet's `$devices` subscription lands a
-    /// runloop turn later.
+    /// `didSet`: the fleet re-routes voice and profile sync on this edge —
+    /// voice when a base station drops or comes back, profile sync when a
+    /// direct rocket does.  Synchronous on purpose; the fleet's `$devices`
+    /// subscription lands a runloop turn later.
     @Published var isConnected = false {
         didSet { if isConnected != oldValue { fleet?.routeDeviceBindings() } }
     }
@@ -76,6 +75,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// on 2026-08-25, when an app build without base-station log support was
     /// handed a lora_*.bin. Android already reported this; iOS did not.
     @Published var csvGenerationError: String?
+    /// A download kept although it came up short of the listed size: the
+    /// board ended it itself (EOF, its byte count matching what arrived), so
+    /// the missing bytes are ones it did not send, not ones lost on the link.
+    /// Out-computer firmware before the byte-exact stream did this whenever a
+    /// file held bytes outside a whole log frame. nil when the last download
+    /// matched its listing.
+    @Published var downloadWarning: String?
     @Published var downloadStates: [String: DownloadState] = [:]
     @Published var simLaunched = false
     @Published var groundTestActive = false
@@ -108,6 +114,54 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// each change. nil until the first frame, so non-nil also says this
     /// rocket's firmware knows command 75. Reset on disconnect.
     @Published private(set) var padCalStatus: PadCalStatus?
+
+    /// Latest accelerometer-calibration status from the FC (#1629): file_ops
+    /// behind 0xD1, in answer to commands 76/77/78 and when a face window
+    /// closes. nil until the first frame. Reset on disconnect. The offset is a
+    /// board property that only the six-face screen writes: it is in no rocket
+    /// profile and no connect-time sync.
+    @Published private(set) var accelCalStatus: AccelCalStatus?
+
+    /// Latest report of the gnss-sdr-dev board's IMU mounting, as the flight
+    /// computer relays it: file_ops behind 0xD2, once a second on the ground
+    /// with the board on J1 and at each change. nil until the first frame
+    /// (none comes from a rocket without the board). Reset on disconnect.
+    @Published private(set) var sdrAlignStatus: SdrAlignStatus?
+
+    /// #1629: what THIS board holds for calibration, read from the board on
+    /// connect (`requestCalibrationStatus`) and kept current by the status
+    /// frames the flight computer republishes after every calibration it
+    /// stores. Fields stay nil until the board answers. Folded into the
+    /// registry so My Devices and a relayed rocket's section can say it too.
+    /// Android twin: DeviceSession.calibration.
+    @Published private(set) var calibration = BoardCalibration()
+    /// Until when an IDLE mag-cal frame answers OUR read. The calibrator also
+    /// sends IDLE when a calibration session ends, which says nothing about
+    /// what is stored, so an IDLE counts as "no magnetometer calibration" only
+    /// inside this window.
+    private var magCalReadUntil: Date?
+    private var calibrationRequested = false
+    private var lastRailOn = false
+    /// How long an IDLE mag-cal frame counts as the answer to a read: the out
+    /// computer serves queued commands about once a second, behind whatever
+    /// the connect-time profile sync queued first.
+    static let calReadWindow: TimeInterval = 30
+
+    /// Every 0xD1 frame, in order. The six-face screen sequences them (a
+    /// MEASURING frame, then the window's result), which `accelCalStatus`
+    /// cannot carry: two equal frames publish no change, and SwiftUI may
+    /// coalesce changes that come close together.
+    let accelCalFrames = PassthroughSubject<AccelCalStatus, Never>()
+
+    /// Every 0xD2 frame, in order: the six-face screen matches its command's
+    /// answer in them (BoardAlignFlow.take).
+    let sdrAlignFrames = PassthroughSubject<SdrAlignStatus, Never>()
+
+    /// Every GNSS antenna offset this link sends (cmd 81), as sent. Whoever
+    /// sent it (Send All, the push on a profile switch, the settings screen),
+    /// it is the user's act: the profile syncer's late antenna adopt stands
+    /// down on it (ActiveRocketSyncer.armAntennaAdoptIfNeeded).
+    let antennaOffsetSent = PassthroughSubject<AntennaOffset, Never>()
 
     /// Latest flash-space stats: rocketStorage on a direct rocket link (0xCC),
     /// bsStorage on a base-station link (0xCD). Each is shown by its own bar.
@@ -144,8 +198,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// `didSet`: a device joins the roster as `.unknown` and only resolves its
     /// role when the config_identity readback lands ~1 s later (#375) — long
     /// after the fleet's roster subscription has run.  Without this edge a
-    /// rocket that reconnects mid-flight would never take voice back off the
-    /// base station.
+    /// renamed base station would never get voice, and a renamed rocket would
+    /// never get profile sync.
     @Published var deviceType: BLEDeviceType = .unknown {
         didSet { if deviceType != oldValue { fleet?.routeDeviceBindings() } }
     }
@@ -168,6 +222,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// gets wrong forever.
     @Published var fcBoardRev: String?
     @Published var ocBoardRev: String?
+    /// The GNSS receiver the flight computer found ("fc_identity" / "fc_gnss"):
+    /// "u-blox", "mosaic-G5" or "LC86G". The V9 finds its receiver at boot,
+    /// so the pad shows which one it took. nil when the FC found none (it
+    /// flies GNSS-absent) or its firmware does not say.
+    @Published var fcGnss: String?
 
     /// Latest OTA status frame from the device (#8 phase 2). Driven by
     /// ota_status JSON notifications on the file-ops characteristic.
@@ -181,6 +240,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// mounting before arming. Empty until a v3-orientation FC reports it.
     @Published var imuOrientationName: String = ""
     @Published var imuOrientationMode: IMUOrientationMode = .unknown
+    /// The mounting code in that "imu_orient" message (0...23; in auto-exact
+    /// the nearest code, not the rotation in use). The rocket's own link
+    /// leaves "imo" out of telemetry, so the six-face screen's live hint
+    /// turns lx/ly/lz back with this. nil until a message carries one; reset
+    /// on disconnect, so a hint never runs on an earlier link's mounting.
+    @Published var imuOrientationCode: Int?
 
     /// Live guidance-target echo (#435): FC-authoritative state of the
     /// station-keep aim point ("guid_target" frames relayed by the OC).
@@ -313,9 +378,44 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// removes us), and a strong link would form a retain cycle.
     weak var fleet: BLEFleet?
 
-    // Flight voice announcer (set by DashboardView).  Typed as a protocol so
-    // dispatch tests can inject a spy without touching AVAudioSession.
-    var flightAnnouncer: (any TelemetryAnnouncer)?
+    // Flight voice announcer, set by `BLEFleet.routeAnnouncer` on the
+    // foreground base station only.  Typed as a protocol so dispatch tests
+    // can inject a spy without touching AVAudioSession.
+    var flightAnnouncer: (any TelemetryAnnouncer)? {
+        didSet {
+            // routeAnnouncer re-assigns the same announcer on every routing
+            // pass; only a different one starts with no stream.
+            if flightAnnouncer !== oldValue { voiceStreamRocketID = nil }
+        }
+    }
+
+    /// The relayed rocket whose frames the announcer was last handed. A
+    /// change is a hand-over (`TelemetryAnnouncer.followStream`).
+    private(set) var voiceStreamRocketID: UInt8?
+
+    /// The relayed rocket the callouts follow: the computer the dashboard is
+    /// showing (`VoiceRocketPolicy`). Usually the focused rocket. nil before
+    /// anything is heard or pinned.
+    var voiceRocketID: UInt8? {
+        let hidden = fleet?.hiddenRocketKeys ?? []
+        let now = Date()
+        return VoiceRocketPolicy.choose(
+            focus: focusRocketID,
+            focusHidden: focusRocketID.map {
+                hidden.contains(RocketKey(networkID: networkID, rocketID: $0))
+            } ?? false,
+            focusPinFresh: now < (focusPinGraceUntil ?? .distantPast),
+            current: voiceStreamRocketID,
+            rockets: remoteRockets.map { r in
+                VoiceRocketPolicy.Candidate(
+                    rocketID: r.rocketID,
+                    hidden: hidden.contains(RocketKey(networkID: networkID, rocketID: r.rocketID)),
+                    silentFor: now.timeIntervalSince(r.lastSeen),
+                    state: r.telemetry.state,
+                    landed: r.telemetry.landed_flag,
+                    simulated: r.telemetry.sim_active)
+            })
+    }
 
     // MARK: - Internal state
 
@@ -332,6 +432,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     // CoreBluetooth objects (peripheral is set by BLEFleet on connect)
     var peripheral: CBPeripheral?
+    /// Which link this instance is for. Unlike the instance, it survives
+    /// BLEFleet replacing the BLEDevice on every disconnect/reconnect. nil for
+    /// the peripheral-less virtual rocket. Declared here rather than in an
+    /// extension so tests can override it: a CBPeripheral can't be built in one.
+    var peripheralID: UUID? { peripheral?.identifier }
     private var telemetryCharacteristic: CBCharacteristic?
     private var commandCharacteristic: CBCharacteristic?
     private var fileOpsCharacteristic: CBCharacteristic?
@@ -402,6 +507,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         // the generation bump disarms a fallback armed before the drop.
         padCalStatus = nil
         padCalGeneration += 1
+        accelCalStatus = nil
+        sdrAlignStatus = nil
+        calibration = BoardCalibration()
+        magCalReadUntil = nil
+        calibrationRequested = false
+        lastRailOn = false
+        imuOrientationCode = nil
         pyroTestRefusal = nil
         // #435: the guidance-target echo is per-connection live state; the
         // OC re-pushes it in the connect-time config readback, so a stale
@@ -887,6 +999,23 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         }
     }
 
+    /// Transmit slots (up to three rockets on one base station), BS BLE cmd 82
+    /// (BLE_BS_CMD_SET_TX_SLOTS). The BASE STATION runs them: it times each
+    /// rocket's frames and tells each one where to put its transmit grid
+    /// (uplink 82), slot (rid - 1) % 3 unless that slot is taken. 1 = run
+    /// slots (the default); 0 = stop, and release every rocket to free-running.
+    /// Desired-state, never a toggle (same reason as cmd 68). Rockets refuse a
+    /// slot while hopping, so slots only apply in fixed-frequency mode (at
+    /// SF8); the readback "lts" confirms. Not 70: that is OTA_BEGIN on BLE.
+    /// Settings sends it only to a base station that reports "lts".
+    func sendLoRaTxSlots(_ on: Bool) {
+        sendRawCommand(82, payload: Data([on ? 0x01 : 0x00]))
+        if var cfg = rocketConfig {
+            cfg.loraTxSlots = on
+            rocketConfig = cfg
+        }
+    }
+
     /// #1176 step 6 — end a flight the rocket RESTORED after an in-flight
     /// reboot, without waiting for it to time itself out.
     ///
@@ -1029,21 +1158,27 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(32, payload: Data([enabled ? 0x01 : 0x00]))
     }
 
-    /// Full guidance config (GuidanceConfigData = 45 bytes, cmd 65).  v1 floats LE
+    /// Full guidance config (GuidanceConfigFrame = 53 bytes, cmd 65).  v1 floats LE
     /// in struct order, then coast_delay(u16), enable(u8), target_mode(u8); #534
-    /// appended kp_pos(f32), kd_vel(f32), guidance_law(u8).  THE FIRST 36 BYTES
-    /// ARE FROZEN — the FC parses by offset, so append only, never insert.
+    /// appended kp_pos(f32), kd_vel(f32), guidance_law(u8) — the 45-byte
+    /// GuidanceConfigData; then the tilt limits tilt_limit_boost_deg(f32) and
+    /// tilt_limit_coast_deg(f32) at offsets 45/49.  THE FIRST 36 BYTES ARE
+    /// FROZEN — the FC parses by offset, so append only, never insert.
     ///
     /// Both laws' parameters are sent unconditionally, every time, regardless of
     /// which law is selected or which fields the UI is showing: the FC keeps the
     /// unused law fully configured so switching laws never flies an untuned one.
+    /// The FC takes each tilt limit in (0, 60] deg and keeps its previous value
+    /// for anything else.
     ///
-    /// A 45-byte-era FC REJECTS a 36-byte frame outright (length check) and logs
-    /// it, so app and firmware must ship in lockstep.
+    /// Firmware that predates the tilt limits flies the first 45 bytes and its
+    /// compiled limits (its OC relays only those); a newer OC in front of an
+    /// older FC gets the frame refused and logged, so update both boards.
     func sendGuidanceConfig(enabled: Bool, navGain: Float, maxAccel: Float, accelToFin: Float,
                             maxFinDeg: Float, minSpeed: Float, coastDelayMs: UInt16,
                             targetMode: UInt8, targetE: Float, targetN: Float, targetAlt: Float,
-                            kpPos: Float, kdVel: Float, guidanceLaw: UInt8) {
+                            kpPos: Float, kdVel: Float, guidanceLaw: UInt8,
+                            tiltLimitBoostDeg: Float, tiltLimitCoastDeg: Float) {
         var payload = Data()
         var ng = navGain, ma = maxAccel, a2f = accelToFin, mf = maxFinDeg, ms = minSpeed
         var te = targetE, tn = targetN, ta = targetAlt
@@ -1063,11 +1198,18 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         payload.append(Data(bytes: &kp, count: 4))
         payload.append(Data(bytes: &kd, count: 4))
         payload.append(guidanceLaw)
+        // --- appended tilt limits (offsets 45/49) ---
+        var tlb = tiltLimitBoostDeg, tlc = tiltLimitCoastDeg
+        payload.append(Data(bytes: &tlb, count: 4))
+        payload.append(Data(bytes: &tlc, count: 4))
         #if DEBUG
-        assert(payload.count == 45, "GuidanceConfigData must be 45 bytes, built \(payload.count)")
+        assert(payload.count == 53, "GuidanceConfigFrame must be 53 bytes, built \(payload.count)")
         #endif
-        sendRawCommand(65, payload: payload)   // GuidanceConfigData = 45 bytes
-        if var cfg = rocketConfig { cfg.guidanceEnabled = enabled; rocketConfig = cfg }
+        sendRawCommand(65, payload: payload)   // GuidanceConfigFrame = 53 bytes
+        // Nothing is written into rocketConfig here: the flight computer's
+        // report says what it applied ("gen" in config_guid), and a send that
+        // never arrived must not read as applied.  An optimistic write here
+        // hid exactly that.
     }
 
     /// Fin layout (FinConfigData = 18 bytes, cmd 66). Derives each servo's fin
@@ -1123,6 +1265,41 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         sendRawCommand(67, payload: payload)
         if var cfg = rocketConfig {
             cfg.imuRateHz = rateHz
+            rocketConfig = cfg
+        }
+    }
+
+    /// GNSS log — `RocketProfile.gnssLogDetailed` (0) or `.gnssLogReduced`
+    /// (1): all of a mosaic-G5's data in the log with the IMU at most 4k, or
+    /// its position and once-a-second raw measurements with the 8k rates
+    /// open. The FC applies it on the pad and persists it in FC NVS; the out
+    /// computer then re-sends the readback, whose `irmax` the rate menu
+    /// follows.
+    func sendGnssLogConfig(_ setting: UInt8) {
+        sendRawCommand(79, payload: Data([setting]))
+        if var cfg = rocketConfig {
+            cfg.gnssLogSetting = setting
+            rocketConfig = cfg
+        }
+    }
+
+    /// GNSS antenna offset (cmd 81, 7 bytes): `[known u8][x_mm i16][y_mm i16]
+    /// [z_mm i16]`, little-endian, in the flight computer board's own axes.
+    /// Unknown goes out as known 0 with zeros. The FC refuses a component
+    /// outside ±2000 mm, so such a value is never sent. The FC keeps it in its
+    /// NVS and reports it as the readback's `antk`/`antx`/`anty`/`antz`.
+    /// Each send is published on `antennaOffsetSent`.
+    func sendAntennaOffsetConfig(_ offset: AntennaOffset) {
+        guard offset.isSendable else { return }
+        sendRawCommand(81, payload: offset.payload)
+        antennaOffsetSent.send(offset)
+        // Only over a readback that carries the setting: firmware without it
+        // ignores the command, and the screen must keep saying so. It is what
+        // was sent, not what the flight computer reported, so the screen says
+        // "not reported yet" until the next readback says "fc".
+        if var cfg = rocketConfig, cfg.antennaOffset != nil {
+            cfg.antennaOffset = offset
+            cfg.antennaOffsetFromFlightComputer = false
             rocketConfig = cfg
         }
     }
@@ -1218,14 +1395,33 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     /// read from `focusedRelayAgeMs` — that property only refreshes on the
     /// 2 s RSSI tick, so at a fire instant it can be stale-true by up to a
     /// full tick. A T-0 check deserves the real clock.
+    ///
+    /// A focused rocket ID that looks like two rockets (`dup`, or the relayed
+    /// name alternating) is never ready: the uplink names a rocket ID, and
+    /// both rockets would act on it.
     var pyroCommandPathReady: Bool {
         guard isConnected else { return false }
         guard isBaseStation else { return true }
         guard let focus = focusRocketID,
               let remote = remoteRockets.first(where: { $0.rocketID == focus })
         else { return false }
-        let ageMs = UInt32(clamping: Int(Date().timeIntervalSince(remote.lastSeen) * 1000))
+        let now = Date()
+        guard !remote.duplicateIDSuspected(now: now) else { return false }
+        let ageMs = UInt32(clamping: Int(now.timeIntervalSince(remote.lastSeen) * 1000))
         return ageMs <= Self.relayStaleThresholdMs
+    }
+
+    /// True when this base station hears `rocketID` as what looks like two
+    /// rockets (see RemoteRocket.duplicateIDSuspected).
+    func isDuplicateIDSuspected(rocketID: UInt8, now: Date = Date()) -> Bool {
+        remoteRockets.first { $0.rocketID == rocketID }?.duplicateIDSuspected(now: now) ?? false
+    }
+
+    /// The pyro refusal reason the stand-back test shows: the focused rocket's
+    /// ID is shared, so a relayed pyro command would reach both rockets.
+    var focusedRocketIDShared: Bool {
+        guard isBaseStation, let focus = focusRocketID else { return false }
+        return isDuplicateIDSuspected(rocketID: focus)
     }
 
     /// What the link can actually say about a pyro channel's continuity.
@@ -1325,8 +1521,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         if isBaseStation {
             // Stand-back pyro test: relay over LoRa to the focused rocket.
             // Broadcast (0xFF) is deliberately never used here — a pyro
-            // command must name its rocket.
-            guard let rid = focusRocketID else { return }
+            // command must name its rocket, and a name two rockets answer
+            // to names neither.
+            guard let rid = focusRocketID, !isDuplicateIDSuspected(rocketID: rid) else { return }
             sendRelayCommand(targetRocketID: rid, innerCommand: 35,
                              innerPayload: Data([channel]))
         } else {
@@ -1352,8 +1549,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // uplink cmd 36) so the operator keeps LoRa distance from a live
             // charge. Blind fire-and-retry (#285): the rocket dedups the
             // retry train; delivery is confirmed by the operator's own eyes
-            // and the post-fire continuity re-test, not by any ACK.
-            guard let rid = focusRocketID else { return }
+            // and the post-fire continuity re-test, not by any ACK. Refused
+            // outright when the rocket ID looks shared (both would fire).
+            guard let rid = focusRocketID, !isDuplicateIDSuspected(rocketID: rid) else { return }
             sendRelayCommand(targetRocketID: rid, innerCommand: 36,
                              innerPayload: Data([channel]))
         } else {
@@ -1479,6 +1677,84 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             self.sendCommand(21)
             onLegacy()
         }
+    }
+
+    // MARK: - Accelerometer six-face calibration (#1629)
+    //
+    // tools/accel_cal_six_face.py is the reference; AccelCalFlow runs the
+    // same steps. Each command is answered with a 0xD1 frame on file_ops
+    // (`accelCalStatus` / `accelCalFrames`).
+
+    /// Store and apply the low-g accelerometer's offset: command 76 with
+    /// AccelCalApplyData, three little-endian Float32 (x, y, z), board frame,
+    /// m/s². All zero clears it. The FC refuses any |component| > 1.0 m/s²
+    /// (and answers with its unchanged status), and refuses in flight, after
+    /// a flight and during a magnetometer calibration (without an answer).
+    func sendAccelCalApply(x: Float, y: Float, z: Float) {
+        sendRawCommand(76, payload: AccelCalApply.payload(x: x, y: y, z: z))
+    }
+
+    /// Ask the FC for its stored offset and last face window: one 0xD1 frame.
+    func sendAccelCalRead() { sendRawCommand(77) }
+
+    /// #1629: ask the flight computer what it holds — the magnetometer (61),
+    /// the gyro and high-g bias (63) and the six-face offset and high-g
+    /// alignment (77). All three only read storage and republish it. Sent on
+    /// connect, again when the rail comes up with answers missing, and by the
+    /// calibration screens when they close. Rocket links only.
+    func requestCalibrationStatus() {
+        guard !isBaseStation else { return }
+        magCalReadUntil = nowProvider().addingTimeInterval(Self.calReadWindow)
+        sendMagCalRead()
+        sendSensorCalRead()
+        sendAccelCalRead()
+    }
+
+    /// APPLIED always means a calibration is stored (a read's answer, or a
+    /// calibration just accepted). IDLE means none only as the answer to a
+    /// read; anything else (sampling, review, aborted) says nothing about
+    /// storage.
+    private func noteMagCalStatus(_ status: MagCalStatus) {
+        switch status.subType {
+        case .applied:
+            foldCalibration(BoardCalibration(mag: true))
+        case .idle:
+            if let until = magCalReadUntil, nowProvider() <= until {
+                magCalReadUntil = nil
+                foldCalibration(BoardCalibration(mag: false))
+            }
+        default:
+            break
+        }
+    }
+
+    private func foldCalibration(_ reading: BoardCalibration) {
+        var stamped = reading
+        stamped.readAt = nowProvider()
+        calibration = calibration.merged(stamped)
+        fleet?.knownDevices.deviceDidReportCalibration(unitID: unitID, reading: stamped)
+    }
+
+    /// Average the low-g accelerometer over one 3 s face window: a 0xD1
+    /// MEASURING frame at once, then DONE or FAILED. A refusal (in flight,
+    /// after a flight, in a sim, during a magnetometer calibration) is a
+    /// FAILED frame with no samples and no MEASURING before it.
+    func sendAccelFaceMeasure() { sendRawCommand(78) }
+
+    /// The gnss-sdr-dev board's IMU mounting: command 83 with SdrAlignCmdData
+    /// ([op, id]: save, clear, restart or report). The flight computer sends it
+    /// to the board until the board echoes it, and answers with 0xD2 frames
+    /// that carry the id; it refuses in flight, after a flight, during a
+    /// magnetometer calibration and with no board on J1.
+    func sendSdrAlignCommand(op: UInt8, id: UInt8) {
+        sendRawCommand(83, payload: SdrAlignCommand.payload(op: op, id: id))
+    }
+
+    /// The high-g's six-face alignment to the low-g: HighGCalApplyData, 49
+    /// bytes (op, M row-major, b). Answered with a 0xD1 frame that carries the
+    /// high-g as stored; an older flight or out computer does not answer.
+    func sendHighGCalApply(op: UInt8, matrix: [Float] = HighGCalApply.identity, bias: [Float] = [0, 0, 0]) {
+        sendRawCommand(80, payload: HighGCalApply.payload(op: op, matrix: matrix, bias: bias))
     }
 
     func sendToggleLogging() {
@@ -1727,6 +2003,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         downloadCompletionHandler = completion
         isDownloading = true
         downloadProgress = 0.0
+        downloadWarning = nil
         if let fileInfo = files.first(where: { $0.name == filename }), fileInfo.size > 0 {
             downloadExpectedSize = Int(fileInfo.size)
         } else {
@@ -1751,9 +2028,12 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         isDownloading = true
         downloadProgress = 0.0
         downloadExpectedSize = Int(files.first(where: { $0.name == filename })?.size ?? 0)
+        downloadWarning = nil
     }
 
     func handleFileChunkForTesting(_ data: Data) { handleFileChunk(data) }
+    /// The 3 s stall timer firing, without waiting for it.
+    func completeDownloadFromStallForTesting() { completeDownload(fromStallTimer: true) }
 #endif
 
     // MARK: - File chunk handling (private)
@@ -1884,10 +2164,32 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             downloadCompletionHandler?(nil)
             return
         }
-        // #832: this shortfall check used to be gated on `fromStallTimer`, so
-        // the EOF path — the common one — wrote whatever it had and reported
-        // success. The listing's size is just as authoritative on either path.
-        if downloadExpectedSize > 0 && downloadedData.count < downloadExpectedSize {
+        // #832: short against the listing. Who ended the transfer decides it.
+        //  - The stall timer: the device went quiet and we cannot know what it
+        //    meant to send. Rejected, as before.
+        //  - The device's own EOF: handleFileChunk only calls this when every
+        //    chunk was contiguous and the EOF frame's byte count equals what
+        //    arrived (a dropped data chunk fails on its gap, a dropped final
+        //    chunk on the redundant EOF's count). So the device sent exactly
+        //    these bytes and called the file complete. Out-computer firmware
+        //    before the byte-exact stream (tr_ble::nextSegment) left out stored
+        //    bytes that were not part of a whole log frame — the V5 nose cone's
+        //    2026-10-24 flight listed 6,901,811 B and sent 6,901,781 — and
+        //    rejecting here threw the whole flight away over 30 bytes. Keep it,
+        //    say so, and record the shortfall so the row reads as downloaded
+        //    for this listing.
+        if downloadExpectedSize > 0 && downloadedData.count < downloadExpectedSize && !fromStallTimer {
+            let received = downloadedData.count
+            let listed = downloadExpectedSize
+            print("[DOWNLOAD] \(filename): EOF-confirmed \(received) B, listed \(listed) B — kept, \(listed - received) B short")
+            FileCache.shared.recordShortDownload(FileCache.cacheName(for: filename, unitID: unitID),
+                                                 listedSize: UInt32(listed),
+                                                 receivedSize: UInt32(received))
+            let note = "\(filename): the board ended the transfer after \(received) of the \(listed) bytes it "
+                + "listed (\(listed - received) short) and the file was kept. The missing bytes are ones the "
+                + "board's firmware did not send, not ones lost on the link."
+            DispatchQueue.main.async { [weak self] in self?.downloadWarning = note }
+        } else if downloadExpectedSize > 0 && downloadedData.count < downloadExpectedSize {
             let handler = downloadCompletionHandler
             downloadingFilename = nil
             downloadedData = Data()
@@ -1921,6 +2223,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
     func generateAndCacheCSV(
         from binaryURL: URL,
         filename: String,
+        source: FlightSource? = nil,
         completion: @escaping (URL?) -> Void
     ) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -1950,21 +2253,25 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 // the summary rather than writing an empty one.
                 let head = [UInt8]((try? Data(contentsOf: binaryURL)) ?? Data())
                 if BSLogCSVGenerator.isBaseStationLog(head) {
-                    let csv = try BSLogCSVGenerator.writeCSV(head)
-                    try csv.write(to: tempCSV, atomically: true, encoding: .utf8)
-                    let cachedURL = try FileCache.shared.cacheCSV(at: tempCSV, for: filename)
+                    // The combined CSV, plus one per rocket when the log holds
+                    // several (three rockets, one base station).
+                    let cachedURL = try FileCache.shared.cacheBaseStationLogCSVs(
+                        bytes: head, binaryFilename: filename)
                     DispatchQueue.main.async { completion(cachedURL) }
                     return
                 }
 
                 let generator = CSVGenerator()
-                let summary = try generator.generateCSV(
+                var summary = try generator.generateCSV(
                     from: binaryURL,
                     to: tempCSV,
                     progressCallback: { [weak self] progress in
                         DispatchQueue.main.async { self?.csvGenerationProgress = progress }
                     }
                 )
+                // #1658: the log's own record of its computer wins; the live
+                // identity adds the profile, the FC and when.
+                summary.source = FlightSource.merged(log: summary.source, live: source)
                 let summaryTempName: String
                 if filename.hasSuffix(".bin") {
                     summaryTempName = String(filename.dropLast(4)) + ".json"
@@ -2039,19 +2346,43 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // file and disabling the download button (downloadButtonDisabled
             // returns true for .completed), so the operator could not re-pull
             // the log in that session.
-            if FileCache.shared.isFlightCached(filename, expectedSize: deviceFile.size) {
+            let name = cachedName(for: filename)
+            if FileCache.shared.isFlightCached(name, expectedSize: deviceFile.size) {
                 return .completed
             }
             // Cached but the wrong size: treat as not downloaded so it can be
             // retried, rather than trusting a stale .completed.
-            if FileCache.shared.isFlightCached(filename) {
+            if FileCache.shared.isFlightCached(name) {
                 return .notDownloaded
             }
         }
         return downloadStates[filename] ?? .notDownloaded
     }
 
-    func downloadAndCacheFlight(_ filename: String, completion: @escaping (Bool) -> Void) {
+    /// #1658: who a flight is being downloaded from, snapshotted when the
+    /// download starts (on the main actor, where the identity lives; the
+    /// conversion runs on a background queue). `rocketProfile` is the name of
+    /// the profile bound to this unit, which the caller looks up.
+    func downloadSource(rocketProfile: String?) -> FlightSource {
+        let known = !unitID.isEmpty
+        func text(_ s: String) -> String? { s.isEmpty ? nil : s }
+        return FlightSource(
+            unit_id: text(unitID),
+            unit_name: text(unitName),
+            rocket_profile: rocketProfile,
+            rocket_id: known ? Int(rocketID) : nil,
+            fc_board: fcBoardRev,
+            oc_board: ocBoardRev,
+            fc_fw: text(fcFirmwareVersion),
+            oc_fw: text(firmwareVersion),
+            fc_gnss: fcGnss,
+            downloaded_at: ISO8601DateFormatter().string(from: Date())
+        )
+    }
+
+    func downloadAndCacheFlight(_ filename: String, rocketProfile: String? = nil,
+                                completion: @escaping (Bool) -> Void) {
+        let source = isBaseStation ? nil : downloadSource(rocketProfile: rocketProfile)
         DispatchQueue.main.async { self.downloadStates[filename] = .downloading }
         if isBaseStation {
             downloadFile(filename) { [weak self] fileURL in
@@ -2073,14 +2404,6 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     // still handled correctly.
                     let bytes = [UInt8](try Data(contentsOf: fileURL))
                     if BSLogCSVGenerator.isBaseStationLog(bytes) {
-                        let csv = try BSLogCSVGenerator.writeCSV(bytes)
-                        let csvName = filename.hasSuffix(".bin")
-                            ? String(filename.dropLast(4)) + ".csv"
-                            : filename + ".csv"
-                        let tempCSV = FileManager.default.temporaryDirectory
-                            .appendingPathComponent(csvName)
-                        try csv.write(to: tempCSV, atomically: true, encoding: .utf8)
-
                         // ORDER MATTERS, AND NOT OBVIOUSLY. cacheBinary()
                         // deletes the cached CSV for the binary it is given
                         // (#832: the CSV is normally DERIVED from the binary
@@ -2097,8 +2420,13 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                         // rendering, the .bin is the evidence the post-flight
                         // tools read directly, and it rides the existing Share
                         // Flight Data sheet from there.
+                        //
+                        // The base station keeps ONE log for every rocket it
+                        // hears; a log holding several is also rendered as one
+                        // CSV per rocket ID ("Rocket N" in Saved Flights),
+                        // beside the combined one.
                         let _ = try? FileCache.shared.cacheBinary(at: fileURL, for: filename)
-                        let _ = try FileCache.shared.cacheDirectCSV(at: tempCSV, filename: csvName)
+                        try FileCache.shared.cacheBaseStationLogCSVs(bytes: bytes, binaryFilename: filename)
                     } else {
                         let _ = try FileCache.shared.cacheDirectCSV(at: fileURL, filename: filename)
                     }
@@ -2116,6 +2444,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             }
             return
         }
+        // Cached under the unit-qualified name, so another board's file of the
+        // same name can never replace this one. Rows stay keyed by the board's.
+        let cacheName = FileCache.cacheName(for: filename, unitID: unitID)
         downloadFile(filename) { [weak self] binaryURL in
             guard let self = self, let binaryURL = binaryURL else {
                 DispatchQueue.main.async { self?.downloadStates[filename] = .failed; completion(false) }
@@ -2123,13 +2454,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             }
             let cachedBinaryURL: URL
             do {
-                cachedBinaryURL = try FileCache.shared.cacheBinary(at: binaryURL, for: filename)
+                cachedBinaryURL = try FileCache.shared.cacheBinary(at: binaryURL, for: cacheName)
             } catch {
                 DispatchQueue.main.async { self.downloadStates[filename] = .failed; completion(false) }
                 return
             }
             DispatchQueue.main.async { self.downloadStates[filename] = .generatingCSV; self.csvGenerationProgress = 0.0 }
-            self.generateAndCacheCSV(from: cachedBinaryURL, filename: filename) { [weak self] csvURL in
+            self.generateAndCacheCSV(from: cachedBinaryURL, filename: cacheName,
+                                     source: source) { [weak self] csvURL in
                 DispatchQueue.main.async {
                     if csvURL != nil {
                         self?.downloadStates[filename] = .completed; completion(true)
@@ -2146,11 +2478,18 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             guard let csvURL = FileCache.shared.getCachedDirectCSV(filename) else { return nil }
             return [csvURL]
         }
-        guard let binaryURL = FileCache.shared.getCachedBinary(for: filename),
-              let csvURL = FileCache.shared.getCachedCSV(for: filename) else { return nil }
+        let name = cachedName(for: filename)
+        guard let binaryURL = FileCache.shared.getCachedBinary(for: name),
+              let csvURL = FileCache.shared.getCachedCSV(for: name) else { return nil }
         var files = [binaryURL, csvURL]
-        if let summaryURL = FileCache.shared.getCachedSummary(for: filename) { files.append(summaryURL) }
+        if let summaryURL = FileCache.shared.getCachedSummary(for: name) { files.append(summaryURL) }
         return files
+    }
+
+    /// The name this unit's copy of a board file is cached under
+    /// (FileCache.cachedName(for:unitID:)).
+    func cachedName(for boardFilename: String) -> String {
+        FileCache.shared.cachedName(for: boardFilename, unitID: unitID)
     }
 
     func rebuildDownloadStates(for filenames: [String]) {
@@ -2166,7 +2505,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     }
                 } else {
                     if let deviceFile = self.files.first(where: { $0.name == filename }),
-                       FileCache.shared.isFlightCached(filename, expectedSize: deviceFile.size) {
+                       FileCache.shared.isFlightCached(self.cachedName(for: filename),
+                                                       expectedSize: deviceFile.size) {
                         self.downloadStates[filename] = .completed
                     }
                 }
@@ -2267,6 +2607,8 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
         case 0xCD: parseBaseStationStorageStats(data)
         case 0xCE: parsePyroTestRefusal(data)  // rail-off pyro refusal
         case 0xD0: parsePadCalStatus(data)     // pad calibration, #1600 phase 5
+        case 0xD1: parseAccelCalStatus(data)   // accelerometer six-face calibration, #1629
+        case 0xD2: parseSdrAlignStatus(data)   // the gnss-sdr-dev board's IMU mounting
         case 0x7B:                              // '{' → JSON object
             if let s = OTAStatusUpdate.parse(data) {
                 otaStatus = s
@@ -2324,6 +2666,18 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let irmax = dict["irmax"] as? Int, let hz = UInt16(exactly: irmax) {
                 cfg.imuRateMaxHz = hz
             }
+            // Only the two settings land: anything else reads as "not reported".
+            if let glog = dict["glog"] as? Int, let s = UInt8(exactly: glog), s <= RocketProfile.gnssLogReduced {
+                cfg.gnssLogSetting = s
+            }
+            // All four keys or none: anything missing, or a value the
+            // firmware would refuse, reads as "not reported".
+            if let k = dict["antk"] as? Int, let x = dict["antx"] as? Int,
+               let y = dict["anty"] as? Int, let z = dict["antz"] as? Int {
+                cfg.antennaOffset = AntennaOffset(known: k, xMm: x, yMm: y, zMm: z)
+            }
+            // Anything but "fc", absence included, is the out computer's copy.
+            cfg.antennaOffsetFromFlightComputer = cfg.antennaOffset != nil && dict["antsrc"] as? String == "fc"
             cfg.loraFreqMHz = parseFloat(dict["lf"])
             cfg.loraSF = (dict["lsf"] as? Int).map { UInt8($0) }
             cfg.loraBwKHz = parseFloat(dict["lbw"])
@@ -2332,6 +2686,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.loraHopDisabled = dict["lhd"] as? Bool   // #106 (nil if device doesn't report it)
             cfg.loraHopDwell = dict["lhdw"] as? Int      // #150 (0 = hopping unavailable)
             cfg.loraTxDisabled = dict["ltxd"] as? Bool   // nil if firmware predates "LoRa off"
+            cfg.loraTxSlots = dict["lts"] as? Bool       // nil if firmware predates transmit slots
             if let existing = self.rocketConfig {
                 cfg.pyro1Enabled = existing.pyro1Enabled
                 cfg.pyro1TriggerMode = existing.pyro1TriggerMode
@@ -2363,6 +2718,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 // on the can't-verify list.
                 cfg.servoExtras = existing.servoExtras
                 cfg.guidanceExtras = existing.guidanceExtras
+                cfg.guidanceTilt = existing.guidanceTilt
                 cfg.rollWaypoints = existing.rollWaypoints
             }
             self.rocketConfig = cfg
@@ -2451,7 +2807,22 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     minSpeed: ms, coastDelayMs: UInt16(clamping: cd),
                     targetMode: UInt8(clamping: tm),
                     targetE: te, targetN: tn, targetAltM: ta,
-                    kpPos: kp, kdVel: kd, guidanceLaw: UInt8(clamping: law))
+                    kpPos: kp, kdVel: kd, guidanceLaw: UInt8(clamping: law),
+                    enabled: dict["gen"] as? Bool)
+                self.rocketConfig = cfg
+            }
+            return
+        }
+
+        // The guidance tilt limits, in a frame of their own (config_guid is
+        // already near the notify limit).  Sent only by firmware that has
+        // them; both keys are required, and a malformed frame leaves the
+        // group nil (= "not reported"), as above.
+        if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           dict["type"] as? String == "config_tilt" {
+            var cfg = self.rocketConfig ?? RocketConfig()
+            if let b = parseFloat(dict["gtlb"]), let c = parseFloat(dict["gtlc"]) {
+                cfg.guidanceTilt = RocketGuidanceTilt(boostDeg: b, coastDeg: c)
                 self.rocketConfig = cfg
             }
             return
@@ -2495,7 +2866,16 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // command, so pushed values confirm through this same path.
             fleet?.knownDevices.deviceDidReportIdentity(
                 unitID: unitID, name: unitName, deviceType: deviceType,
-                networkID: networkID, rocketID: rocketID, pusher: self)
+                networkID: networkID, rocketID: rocketID,
+                firmware: dict["fw"] as? String, pusher: self)
+            // An fc_identity that beat this readback had no record to land in.
+            if fcIdentityAwaitingRegistry { recordFlightComputerIdentity() }
+            // #1629: a rocket's calibration is read once its role is known —
+            // a base station has no sensors to calibrate and no handler.
+            if !calibrationRequested && deviceType == .rocket {
+                calibrationRequested = true
+                requestCalibrationStatus()
+            }
             return
         }
 
@@ -2510,9 +2890,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             // "unprovisioned" and must stay nil rather than becoming "".
             fcBoardRev = (dict["fc_board"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             ocBoardRev = (dict["oc_board"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            // The receiver the FC found: "" is none (GNSS-absent), so it
+            // clears; an OC that predates the key leaves the value alone.
+            if let gnss = dict["fc_gnss"] as? String { fcGnss = gnss.isEmpty ? nil : gnss }
             print("[CFG] FC identity: fc_fw=\(fcFirmwareVersion) "
                   + "fc_board=\(fcBoardRev ?? "unprovisioned") "
-                  + "oc_board=\(ocBoardRev ?? "unprovisioned")")
+                  + "oc_board=\(ocBoardRev ?? "unprovisioned") "
+                  + "fc_gnss=\(fcGnss ?? "none")")
+            recordFlightComputerIdentity()
             return
         }
 
@@ -2528,6 +2913,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let mode = dict["mode"] as? Int {
                 imuOrientationMode = IMUOrientationMode(rawValue: mode) ?? .unknown
             }
+            if let code = dict["code"] as? Int { imuOrientationCode = code }
             if let set = dict["set"] as? Int, var cfg = rocketConfig {
                 cfg.imuOrientSetting = UInt8(clamping: set)
                 rocketConfig = cfg
@@ -2579,7 +2965,11 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if let rid = newTelemetry.source_rocket_id, rid > 0, isBaseStation {
                 let bsID = peripheral?.identifier ?? UUID()
                 let rocketID = UInt8(rid)
+                // This rocket's previous frame: the edge reference if voice
+                // hands over to it on this one.
+                var priorFrame: TelemetryData?
                 if let existing = remoteRockets.first(where: { $0.rocketID == rocketID }) {
+                    priorFrame = existing.telemetry
                     existing.updateTelemetry(newTelemetry, unitName: newTelemetry.source_unit_name)
                 } else {
                     let remote = RemoteRocket(
@@ -2605,7 +2995,14 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                           !remoteRockets.contains(where: {
                               $0.rocketID == pinned &&
                               Date().timeIntervalSince($0.lastSeen) < Self.focusPinStaleAfter
-                          }) {
+                          }),
+                          // A rocket that has flown going quiet is a rocket on
+                          // the ground out of range — the one the operator is
+                          // walking to. Keep its section (lost, last fix) up
+                          // rather than handing the screen to whoever is still
+                          // on the pad; Follow moves it on purpose.
+                          !(fleet?.flownRockets.contains(
+                              RocketKey(networkID: networkID, rocketID: pinned)) ?? false) {
                     // SELF-HEAL a dangling pin. "Sticky" must not mean
                     // "unfalsifiable": the pin is latched once above, re-seeded
                     // from the in-memory fleet cache on every reconnect
@@ -2644,9 +3041,9 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                 // are only unique per network (#390 two-pair support). The BS
                 // only forwards packets matching its own network id, so its
                 // networkID is the right scope for its relayed rockets.
-                let fix = fleet?.recordRocketFix(
-                    from: newTelemetry,
-                    key: RocketKey(networkID: networkID, rocketID: rocketID))
+                let relayKey = RocketKey(networkID: networkID, rocketID: rocketID)
+                let fix = fleet?.recordRocketFix(from: newTelemetry, key: relayKey)
+                fleet?.noteFlightProgress(newTelemetry, key: relayKey)
 
                 if rocketID == focusRocketID {
                     self.updateSimBannerLatch(newTelemetry)
@@ -2655,13 +3052,21 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
                     // cache returns a non-nil value so a GPS-less packet
                     // can't blank the marker.
                     if let fix { self.lastValidRocketFix = fix }
-                    // The relayed JSON carries the full rocket state (st/aapo/
-                    // lnch/land/mspd/palt — see TR_BLE_To_APP.cpp).  Without
-                    // this call voice callouts only fire when paired directly
-                    // to the rocket, never during a real flight (#138).
-                    // Focused rocket only — two interleaved flights' callouts
-                    // are noise (#390).
-                    self.flightAnnouncer?.processTelemetry(newTelemetry)
+                }
+                // The relayed JSON carries the full rocket state (st/aapo/
+                // lnch/land/mspd/palt — see TR_BLE_To_APP.cpp).  Without this
+                // voice callouts only fire when paired directly to the rocket,
+                // never during a real flight (#138).  One rocket only — two
+                // interleaved flights' callouts are noise (#390) — and that
+                // rocket is the one on screen, which is usually but not always
+                // the focused one (VoiceRocketPolicy).
+                if let announcer = self.flightAnnouncer, rocketID == self.voiceRocketID {
+                    if let following = self.voiceStreamRocketID, following != rocketID {
+                        print("[VOICE] callouts move from rocket \(following) to rocket \(rocketID)")
+                        announcer.followStream(baseline: priorFrame)
+                    }
+                    self.voiceStreamRocketID = rocketID
+                    announcer.processTelemetry(newTelemetry)
                 }
                 return
             }
@@ -2674,24 +3079,55 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             if newTelemetry.pwr_pin_on && self.poweringOn {
                 self.clearPoweringOn()
             }
+            // #1629: the flight computer answers the calibration reads; with
+            // its rail off at connect they may never have reached it. Ask
+            // again when it comes up, if anything is still unanswered.
+            if newTelemetry.pwr_pin_on && !self.lastRailOn && self.calibrationRequested {
+                let c = self.calibration
+                if c.mag == nil || c.accel == nil || c.gyro == nil { self.requestCalibrationStatus() }
+            }
+            self.lastRailOn = newTelemetry.pwr_pin_on
             // Direct rocket connection — use this device's own rocketID
             // (relayed-telemetry path above uses source_rocket_id instead).
             // Skip when rocketID is unset so a BS-self packet (which falls
             // through to here without a source_rocket_id) doesn't nil out
             // a fix this device just mirrored from a relay packet.
-            if self.rocketID > 0,
-               let fix = fleet?.recordRocketFix(
-                   from: newTelemetry,
-                   key: RocketKey(networkID: networkID, rocketID: rocketID)) {
-                self.lastValidRocketFix = fix
+            if self.rocketID > 0 {
+                let key = RocketKey(networkID: networkID, rocketID: rocketID)
+                if let fix = fleet?.recordRocketFix(from: newTelemetry, key: key) {
+                    self.lastValidRocketFix = fix
+                }
+                fleet?.noteFlightProgress(newTelemetry, key: key)
             }
-            self.flightAnnouncer?.processTelemetry(newTelemetry)
+            // Voice is base-station only: a direct rocket link leaves range at
+            // launch.  The fleet never routes the announcer to a rocket link;
+            // this guard keeps one that holds it anyway from speaking.
+            if isBaseStation {
+                self.flightAnnouncer?.processTelemetry(newTelemetry)
+            }
         } catch {
             print("Failed to parse telemetry: \(error)")
             if let jsonString = String(data: data, encoding: .utf8) {
                 print("Raw JSON: \(jsonString)")
             }
         }
+    }
+
+    /// Set while an fc_identity has arrived before the config_identity that
+    /// names this board's record.
+    private var fcIdentityAwaitingRegistry = false
+
+    /// Keep the registry's firmware/board copy current, so a section for this
+    /// rocket heard later through a base station can still name them.
+    private func recordFlightComputerIdentity() {
+        guard !unitID.isEmpty else {
+            fcIdentityAwaitingRegistry = true
+            return
+        }
+        fcIdentityAwaitingRegistry = false
+        fleet?.knownDevices.deviceDidReportFlightComputer(
+            unitID: unitID, fcFirmware: fcFirmwareVersion,
+            fcBoard: fcBoardRev, ocBoard: ocBoardRev)
     }
 
     private func parseFloat(_ value: Any?) -> Float? {
@@ -2725,6 +3161,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
         magCalStatus = status
+        noteMagCalStatus(status)
     }
 
     private func parseSensorCalStatus(_ data: Data) {
@@ -2739,6 +3176,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
         sensorCalStatus = status
+        foldCalibration(BoardCalibration(gyro: status.valid))
     }
 
     /// 0xD0 — pad calibration status (#1600 phase 5): [0xD0][40-byte
@@ -2752,6 +3190,35 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             return
         }
         padCalStatus = status
+    }
+
+    /// 0xD1 — accelerometer calibration status (#1629): [0xD1][40-byte
+    /// AccelCalStatusData], and the 74-byte AccelCalHighGStatus after it from
+    /// a flight computer that sends the high-g. A short frame is dropped whole.
+    private func parseAccelCalStatus(_ data: Data) {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 1 + AccelCalStatus.payloadLength, bytes[0] == 0xD1,
+              let status = AccelCalStatus.decode(Array(bytes[1...])) else {
+            print("[ACCCAL] malformed status (\(bytes.count) bytes)")
+            return
+        }
+        accelCalStatus = status
+        accelCalFrames.send(status)
+        foldCalibration(BoardCalibration(accel: status.isStored, highGAligned: status.highG?.isStored))
+    }
+
+    /// 0xD2 — the gnss-sdr-dev board's IMU mounting, as the flight computer
+    /// relays it: [0xD2][107-byte SdrAlignStatusData]. A short frame is
+    /// dropped whole.
+    private func parseSdrAlignStatus(_ data: Data) {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 1 + SdrAlignStatus.payloadLength, bytes[0] == 0xD2,
+              let status = SdrAlignStatus.decode(Array(bytes[1...])) else {
+            print("[SDRALIGN] malformed status (\(bytes.count) bytes)")
+            return
+        }
+        sdrAlignStatus = status
+        sdrAlignFrames.send(status)
     }
 
     /// 0xCE — rail-off pyro-test refusal (OC sendPyroTestRefusal).

@@ -381,7 +381,7 @@ TEST(RecoveryArmGate, AFlightPastTheTimeoutIsRefutedRegardlessOfMotion)
     State st; reset(st, 0);
     Inputs in = still();
     in.baro_rate_mps   = -20.0f;                 // would otherwise open A1
-    in.flight_elapsed_ms = 600000;
+    in.flight_elapsed_ms = Config{}.max_flight_ms;   // 1800 s, the FC's flight-time ceiling
     run(st, in, 0, 3000);
     EXPECT_TRUE(refuted(st));
     EXPECT_FALSE(armingPermitted(st));

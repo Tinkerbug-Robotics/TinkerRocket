@@ -231,12 +231,18 @@ public object Commands {
         frame(BleCommandId.GUIDANCE_POINT) { f64(latDeg); f64(lonDeg); f32(altitudeM) }
 
     /**
-     * cmd 65 — GuidanceConfigData, 45 B.  v1 floats LE in struct order, then
+     * cmd 65 — GuidanceConfigFrame, 53 B.  v1 floats LE in struct order, then
      * `coast_delay u16`, `enable u8`, `target_mode u8`; #534 appended
-     * `kp_pos f32`, `kd_vel f32`, `guidance_law u8` at offsets 36/40/44.
-     * THE FIRST 36 BYTES ARE FROZEN — the FC parses by offset; append only,
-     * never insert.  Both laws' parameters are always sent, regardless of
-     * which law is selected.  A 45-byte-era FC rejects a 36-byte frame.
+     * `kp_pos f32`, `kd_vel f32`, `guidance_law u8` at offsets 36/40/44
+     * (GuidanceConfigData, 45 B); v3 appends the tilt limits
+     * `tilt_limit_boost_deg f32`, `tilt_limit_coast_deg f32` at 45/49
+     * (GuidanceTiltLimitData).  THE FIRST 36 BYTES ARE FROZEN — the FC parses
+     * by offset; append only, never insert.  Both laws' parameters are always
+     * sent, regardless of which law is selected.  The FC takes each tilt limit
+     * in (0, 60] deg and keeps its previous one otherwise.  Firmware that
+     * predates the tilt limits flies the first 45 bytes and its compiled
+     * limits (its OC relays only those); a newer OC in front of an older FC
+     * gets the frame refused and logged, so update both boards.
      */
     public fun guidanceConfig(
         enabled: Boolean,
@@ -253,6 +259,8 @@ public object Commands {
         kpPos: Float,
         kdVel: Float,
         guidanceLaw: Int,
+        tiltLimitBoostDeg: Float,
+        tiltLimitCoastDeg: Float,
     ): ByteArray = frame(BleCommandId.GUIDANCE_CONFIG) {
         f32(navGain); f32(maxAccel); f32(accelToFin); f32(maxFinDeg); f32(minSpeed)
         f32(targetE); f32(targetN); f32(targetAlt)
@@ -262,6 +270,8 @@ public object Commands {
         // --- appended #534 (offsets 36/40/44) ---
         f32(kpPos); f32(kdVel)
         u8(guidanceLaw)
+        // --- appended v3: tilt limits (offsets 45/49) ---
+        f32(tiltLimitBoostDeg); f32(tiltLimitCoastDeg)
     }
 
     // ------------------------------------------------------------ fin layout
@@ -355,6 +365,36 @@ public object Commands {
      *  (960/1920/3840). */
     public fun imuRate(rateHz: Int): ByteArray =
         frame(BleCommandId.IMU_RATE) { u16(rateHz) }
+
+    /** cmd 79 — GNSS log: `[setting u8]`, 0 detailed or 1 reduced (what the
+     *  rocket logs of a mosaic-G5's data, and so whether the 8k IMU rates
+     *  fit). */
+    public fun gnssLog(setting: Int): ByteArray =
+        frame(BleCommandId.GNSS_LOG) { u8(setting) }
+
+    /**
+     * cmd 81 — GNSS antenna offset, 7 B: `[known u8][x_mm i16][y_mm i16]
+     * [z_mm i16]`, in the flight computer board's own axes.  Unknown
+     * (`known = false`) always goes out as zeros, whatever is passed.  A
+     * measured component outside [AntennaOffset.RANGE_MM] fails loudly (the
+     * #1054 rule): the firmware would refuse it, so no caller may build one.
+     */
+    public fun antennaOffset(known: Boolean, xMm: Int, yMm: Int, zMm: Int): ByteArray {
+        val limit = AntennaOffset.RANGE_MM
+        require(!known || (xMm in limit && yMm in limit && zMm in limit)) {
+            "antenna offset out of range: $xMm, $yMm, $zMm"
+        }
+        return frame(BleCommandId.ANTENNA_OFFSET) {
+            bool(known)
+            i16(if (known) xMm else 0)
+            i16(if (known) yMm else 0)
+            i16(if (known) zMm else 0)
+        }
+    }
+
+    /** cmd 81 from one [AntennaOffset] value (profile push, settings edit). */
+    public fun antennaOffset(offset: AntennaOffset): ByteArray =
+        antennaOffset(offset.known, offset.xMm, offset.yMm, offset.zMm)
 
     // ------------------------------------------------------------------ pyro
 
@@ -491,6 +531,45 @@ public object Commands {
         frame(BleCommandId.PAD_CAL_RUN) {
             bytes(iono?.payload() ?: ByteArray(Klobuchar.PAYLOAD_LENGTH))
         }
+
+    /**
+     * cmd 76 — AccelCalApplyData, 12 B (#1629):
+     * `[offset_x f32][offset_y f32][offset_z f32]`, the low-g accelerometer's
+     * offset in the BOARD frame (+X forward, +Y left, +Z up), m/s².  All zero
+     * clears the stored offset.  The flight computer refuses any component
+     * past 1.0 m/s² (a bad solve) and refuses in flight.
+     */
+    public fun accelCalApply(offsetX: Float, offsetY: Float, offsetZ: Float): ByteArray =
+        frame(BleCommandId.ACC_CAL_APPLY) { f32(offsetX); f32(offsetY); f32(offsetZ) }
+
+    /**
+     * cmd 80 — HighGCalApplyData, 49 B (#1629, the high-g):
+     * `[op u8][matrix f32 ×9][bias f32 ×3]`, the high-g's alignment to the
+     * low-g, M row-major and b in m/s², board frame.  [HighGCalApply.OP_STORE]
+     * stores and applies them; [HighGCalApply.OP_CLEAR] (the identity and
+     * zeros, which it ignores) sets M back to identity and keeps b.
+     */
+    public fun highGCalApply(
+        op: Int,
+        matrix: List<Float> = HighGCalApply.IDENTITY,
+        bias: List<Float> = HighGCalApply.ZERO_BIAS,
+    ): ByteArray {
+        require(matrix.size == 9) { "the alignment is a 3x3, got ${matrix.size} entries" }
+        require(bias.size == 3) { "the bias has three axes, got ${bias.size}" }
+        return frame(BleCommandId.HG_CAL_APPLY) {
+            u8(op)
+            matrix.forEach { f32(it) }
+            bias.forEach { f32(it) }
+        }
+    }
+
+    /**
+     * cmd 83 — SdrAlignCmdData, 2 B: `[op u8][id u8]`, a command about the
+     * gnss-sdr-dev board's IMU mounting ([SdrAlignCommand]) and the app's id
+     * for it, which the 0xD2 answers carry.
+     */
+    public fun sdrAlign(op: Int, id: Int): ByteArray =
+        frame(BleCommandId.SDR_ALIGN) { u8(op); u8(id) }
 
     // ------------------------------------------------------------------ scan
 

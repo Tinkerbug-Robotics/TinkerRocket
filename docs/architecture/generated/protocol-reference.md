@@ -22,7 +22,7 @@ Start-of-frame bytes from [`TR_I2C_Interface.h`](https://github.com/Tinkerbug-Ro
 
 ## FC ↔ OC message types
 
-101 codes. The dispatch on both ends is a flat first-match chain, so
+122 codes. The dispatch on both ends is a flat first-match chain, so
 two handlers sharing a value means the second is silently dead — which is why
 this list is CI-enforced for uniqueness.
 
@@ -95,7 +95,8 @@ this list is CI-enforced for uniqueness.
 | `0xEA` | `SENSOR_CAL_READ` | OC → FC | OC→FC: publish current NVS sensor cal |
 | `0xE0` | `SENSOR_CAL_STATUS_MSG` | FC → OC | FC→OC: SensorCalStatusData |
 | `0xE1` | `FLIGHT_SETTINGS_MSG` | FC → OC |  |
-| `0xE2` | `LOG_BUFFER_STATS_MSG` | OC → log | OC→self: 28-byte LogBufferStatsData, ~1 Hz, straight to the log |
+| `0xE2` | `LOG_BUFFER_STATS_MSG` | OC → log | OC→self: 52-byte LogBufferStatsData (28 before #1659), ~1 Hz, straight to the log |
+| `0x87` | `OC_IDENTITY_MSG` | OC → log | OC→self: 68-byte OcIdentityData, ~1 Hz while logging, straight to the log |
 | `0xE3` | `OTA_BEGIN_PENDING` | OC → FC | OC→FC: OTA_BEGIN_MSG payload follows |
 | `0xE4` | `OTA_BEGIN_MSG` | FC → OC | [size:4 LE][sha256:32] = 36 bytes |
 | `0xE5` | `OTA_FINISH_CMD` | OC → FC | OC→FC: finalize + verify + reboot |
@@ -107,7 +108,7 @@ this list is CI-enforced for uniqueness.
 | `0xEE` | `ORIENT_CONFIG_MSG` | FC → OC | 1-byte ImuOrientConfigData |
 | `0xF1` | `LORA_MSG` | FC → OC |  |
 | `0xEF` | `GUIDANCE_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as GUIDANCE_CONFIG_MSG |
-| `0xF0` | `GUIDANCE_CONFIG_MSG` | FC → OC | 45-byte GuidanceConfigData |
+| `0xF0` | `GUIDANCE_CONFIG_MSG` | FC → OC | 53-byte GuidanceConfigFrame |
 | `0xF2` | `FIN_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as FIN_CONFIG_MSG |
 | `0xF3` | `FIN_CONFIG_MSG` | FC → OC | 18-byte FinConfigData |
 | `0xF5` | `IMU_RATE_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as IMU_RATE_CONFIG_MSG |
@@ -117,20 +118,40 @@ this list is CI-enforced for uniqueness.
 | `0xF4` | `I2C_TX_RESYNC` | — |  |
 | `0xF9` | `LORA_UPLINK_MSG` | OC → log | OC→self: 13-byte LoRaUplinkData, one per uplink decode, straight to the log |
 | `0xFA` | `FC_BOOT_STATUS_MSG` | FC → OC | FC→OC: 4-byte FcBootStatusData, boot progress during setup_fc only |
-| `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 194-byte ConfigReportData, everything the app's config |
+| `0xFB` | `CONFIG_REPORT_MSG` | FC → OC | FC→OC: 209-byte ConfigReportData, everything the app's config |
 | `0x90` | `GNSS_SAT_MSG` | FC → OC | FC→OC over I2S: GNSSSatData, per-satellite C/N0 at every GNSS |
 | `0x91` | `RECOVERY_END_PENDING` | OC → FC |  |
 | `0x93` | `ISM6_BATCH_MSG` | FC → OC | FC→OC over I2S: a count byte, then that many ISM6HG256Data records |
 | `0xFC` | `BS_LORA_RX_MSG` | FC → OC | BS→self: BsLoRaRxHeader + the raw LoRa frame, one per received packet |
 | `0xFD` | `BS_EVENT_MSG` | FC → OC | BS→self: BsEventHeader + UTF-8 text, one per hop/session event |
 | `0x94` | `PYRO_FAULT_TRIP_MSG` | OC → log | OC→self: 13-byte PyroFaultTripData, two per fault-current trip, straight to the log |
-| `0x95` | `GNSS_RTCM_MSG` | FC → OC | FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's raw RTCM3 frame |
+| `0x95` | `GNSS_RTCM_MSG` | FC → OC | FC→OC over I2S: GnssRtcmHeader + the GNSS receiver's own frame (RTCM3 or SBF) |
 | `0x96` | `RAW_GNSS_EKF_MSG` | FC → OC | FC→OC over I2S: RawGnssEkfData, the raw-GNSS shadow filter at 10 Hz, straight to the log |
 | `0x97` | `PAD_CAL_PENDING` | OC → FC | OC→FC: pad calibration; PadCalConfigData follows as PAD_CAL_CONFIG_MSG |
 | `0x98` | `PAD_CAL_CONFIG_MSG` | OC → FC | OC→FC: 10-byte PadCalConfigData |
 | `0x99` | `PAD_CAL_STATUS_MSG` | FC → OC | FC→OC over I2S: PadCalStatusData, 1 Hz on the ground; logged, and relayed to the app |
+| `0x9A` | `GNSS_CHECK_MSG` | FC → OC |  |
+| `0x9B` | `RAW_GNSS_ATT_MSG` | FC → OC |  |
+| `0x9C` | `IMU_TEMP_MSG` | FC → OC | FC→OC over I2S: Ism6TempData, the IMU's die temperature once a |
+| `0x9D` | `GNSS_CLOCK_MSG` | FC → OC | FC→OC over I2S: GnssClockData, the MCU clock against GPS time |
+| `0x9E` | `PAD_CONTEXT_MSG` | FC → OC | FC→OC over I2S: PadContextHeader + its kind's body, what a |
+| `0x9F` | `HEADING_FIT_MSG` | FC → OC | FC→OC over I2S: HeadingFitData, the heading from thrust, each |
+| `0x80` | `ACC_CAL_APPLY_PENDING` | OC → FC | OC→FC: payload follows as ACC_CAL_APPLY_MSG |
+| `0x81` | `ACC_CAL_APPLY_MSG` | FC → OC | 12-byte AccelCalApplyData payload |
+| `0x82` | `ACC_CAL_READ` | OC → FC | OC→FC: publish the stored offset as a status frame |
+| `0x83` | `ACC_CAL_STATUS_MSG` | FC → OC | FC→OC over I2S: AccelCalStatusData |
+| `0x84` | `ACC_FACE_PENDING` | OC → FC | OC→FC: average the low-g over one face window |
+| `0x85` | `HG_CAL_APPLY_PENDING` | OC → FC | OC→FC: payload follows as HG_CAL_APPLY_MSG |
+| `0x86` | `HG_CAL_APPLY_MSG` | FC → OC | 49-byte HighGCalApplyData payload |
+| `0x8E` | `GNSS_LOG_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as GNSS_LOG_CONFIG_MSG |
+| `0x8F` | `GNSS_LOG_CONFIG_MSG` | OC → FC | OC→FC: 1-byte GnssLogConfigData |
+| `0x8C` | `ANTENNA_CONFIG_PENDING` | OC → FC | OC→FC: payload follows as ANTENNA_CONFIG_MSG |
+| `0x8D` | `ANTENNA_CONFIG_MSG` | OC → FC | OC→FC: 7-byte AntennaOffsetConfigData |
+| `0x88` | `SDR_ALIGN_STATUS_MSG` | FC → OC | FC→OC over I2S: 111-byte SdrAlignStatusData, 1 Hz on the ground with the board on J1 |
+| `0x89` | `SDR_ALIGN_CMD_PENDING` | OC → FC | OC→FC: payload follows as SDR_ALIGN_CMD_MSG |
+| `0x8A` | `SDR_ALIGN_CMD_MSG` | OC → FC | OC→FC: 2-byte SdrAlignCmdData payload |
 
-> 52 of these 101 codes carry no comment in the header,
+> 54 of these 122 codes carry no comment in the header,
 > so the Notes column is blank for them. Direction is inferred from the
 > `_PENDING` / `_CMD` / `_MSG` suffix in that case, which is a convention,
 > not a guarantee. A trailing `// OC→FC: what it does` on the constant
@@ -145,28 +166,43 @@ that changes size fails the build rather than corrupting a log silently.
 |--------|-------|
 | `FlightSnapshotData` | 224 |
 | `FlightSettingsData` | 223 |
+| `ConfigReportData` | 209 |
 | `GNSSSatData` | 202 |
-| `ConfigReportData` | 194 |
+| `PadContextNav` | 124 |
+| `AccelCalStatusFrame` | 114 |
+| `SdrAlignStatusData` | 111 |
 | `RawGnssEkfData` | 90 |
 | `RollProfileData` | 76 |
 | `RollProfileData` | 76 |
+| `AccelCalHighGStatus` | 74 |
+| `GnssClockData` | 68 |
+| `OcIdentityData` | 68 |
 | `LoRaFastData` | 55 |
 | `LoRaFastData` | 55 |
+| `GuidanceConfigFrame` | 53 |
+| `LogBufferStatsData` | 52 |
 | `NonSensorData` | 52 |
 | `NonSensorData` | 52 |
+| `HighGCalApplyData` | 49 |
+| `RawGnssAttData` | 46 |
 | `GuidanceConfigData` | 45 |
 | `GNSSData` | 42 |
 | `GNSSData` | 42 |
 | `OutStatusQueryData` | 42 |
 | `OutStatusQueryData` | 42 |
+| `PadContextCal` | 41 |
+| `AccelCalStatusData` | 40 |
 | `PadCalStatusData` | 40 |
+| `PadContextHg` | 37 |
 | `MagCalStatusData` | 36 |
-| `LogBufferStatsData` | 28 |
+| `PadContextAnt` | 33 |
+| `HeadingFitData` | 32 |
 | `BaseStationStorageStatsData` | 26 |
+| `GnssCheckData` | 24 |
 | `PyroConfigData` | 24 |
+| `LoRaSlowData` | 23 |
+| `LoRaSlowData` | 23 |
 | `ISM6HG256Data` | 22 |
-| `LoRaSlowData` | 22 |
-| `LoRaSlowData` | 22 |
 | `ServoConfigData` | 22 |
 | `ServoConfigData` | 22 |
 | `GuidancePointData` | 20 |
@@ -182,7 +218,9 @@ that changes size fails the build rather than corrupting a log silently.
 | `MagCalApplyData` | 14 |
 | `POWERData` | 14 |
 | `LoRaUplinkData` | 13 |
+| `PadContextAcc` | 13 |
 | `PyroFaultTripData` | 13 |
+| `AccelCalApplyData` | 12 |
 | `BMP585Data` | 12 |
 | `BsLoRaRxHeader` | 12 |
 | `MagCalMMCOffset` | 12 |
@@ -190,18 +228,24 @@ that changes size fails the build rather than corrupting a log silently.
 | `PadCalConfigData` | 10 |
 | `BsEventHeader` | 9 |
 | `RollWaypoint` | 9 |
+| `GuidanceTiltLimitData` | 8 |
 | `ServoTestAnglesData` | 8 |
+| `AntennaOffsetConfigData` | 7 |
+| `FcStatusData` | 7 |
 | `LoRaFrameHeader` | 7 |
+| `PadContextHeader` | 7 |
 | `GNSSSatBlock` | 6 |
+| `Ism6TempData` | 6 |
 | `Vec3i16` | 6 |
-| `FcStatusData` | 5 |
 | `GnssRtcmHeader` | 5 |
 | `FcBootStatusData` | 4 |
 | `ServoReplayData` | 4 |
 | `i24le_t` | 3 |
 | `ImuRateConfigData` | 2 |
+| `SdrAlignCmdData` | 2 |
 | `CameraConfigData` | 1 |
 | `DataReadyFlags` | 1 |
+| `GnssLogConfigData` | 1 |
 | `ImuOrientConfigData` | 1 |
 | `LoRaChannelSetSelection` | 1 |
 | `LogStateFlags` | 1 |
@@ -215,7 +259,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Out Computer
 
-57 commands.
+64 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -267,7 +311,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 62 |  | Issue #132 — app pushes a saved sensor cal (gyro + high-g) back into FC NVS as part of the rocket-profile… |
 | 63 |  | (Renumbered 58 -> 63, see note on the MAG_CAL_READ case above.) |
 | 64 |  | IMU mounting orientation: [setting:1] — IMU_ORIENT_AUTO or a TR_Orientation code (0..23, manual incl. roll… |
-| 65 |  | Full guidance config (GuidanceConfigData): relay the whole struct to the FC |
+| 65 |  | Full guidance config (GuidanceConfigFrame): relay the whole frame to the FC. A 45-byte frame from an app that… |
 | 66 |  | Full fin layout (FinConfigData): relay the whole struct to the FC |
 | 67 |  | IMU logging rate: [rate_hz:2 LE] — IMU_RATE_DYNAMIC (0, "4k Dynamic"), IMU_RATE_DYNAMIC_8K (1) or a… |
 | 68 | `LORA_CMD_SET_TX_DISABLED` | "LoRa off": [disabled:1] — 1 mutes every LoRa transmit, 0 resumes. Same constant (and therefore the same… |
@@ -275,6 +319,13 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 73 |  | #1271 — the operator acknowledges the blind-window loss(es). BLE ONLY, and deliberately absent from… |
 | 74 |  | #773 step 2 — provision this OUT COMPUTER's board revision. BLE ONLY, like cmd 73 above and for the same… |
 | 75 |  | Pad calibration (#1600 phase 5): [iono i8 x8][gps_day u16 LE] — the GPS broadcast ionosphere the app read… |
+| 76 |  | #1629 — the low-g accelerometer's six-face hand calibration (tools/accel_cal_six_face.py): store and apply… |
+| 77 |  | #1629 — read the stored low-g offset and the last face window back |
+| 78 |  | #1629 — average the low-g accelerometer over one face, the board still |
+| 79 |  | GNSS log setting: [setting:1] — GNSS_LOG_DETAILED (0, every SBF block of a mosaic-G5) or GNSS_LOG_REDUCED (1,… |
+| 80 |  | The high-g's six-face alignment to the low-g: store and apply the fitted matrix and bias, or clear the matrix… |
+| 81 |  | GNSS antenna offset: [known:1][x_mm:2][y_mm:2][z_mm:2], LE — the antenna's phase centre from the FC's IMU in… |
+| 83 |  | The gnss-sdr-dev board's IMU on its flight board: save, clear or restart its mounting, or ask for its report… |
 | 200 |  | Bench-only: arm config-frame drops, see test_cfg_drop_count |
 
 > 8 of these have no comment in the dispatch and so no
@@ -283,7 +334,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 
 ### app to Base Station
 
-21 commands.
+22 commands.
 
 | Cmd | Constant | Description |
 |-----|----------|-------------|
@@ -308,6 +359,7 @@ for internal uniqueness by [`tools/check_ble_command_ids.py`](https://github.com
 | 47 | `BLE_BS_CMD_SET_PHONE_FIX` | Where the base station actually is. Logged, never acted on -- nothing in the BS behaviour depends on this, it… |
 | 50 | `BLE_BS_CMD_RELAY_TO_ROCKET` | Relay command to a specific rocket via LoRa uplink Payload: [target_rid:1][inner_cmd:1][inner_payload:0..33… |
 | 60 | `BLE_BS_CMD_FREQ_SCAN` | Frequency scan (base-station radio, pre-launch collision avoidance). Payload: [start_mhz f32][stop_mhz… |
+| 82 | `BLE_BS_CMD_SET_TX_SLOTS` | Three-rocket support: transmit slots on/off. Payload [on]: 1 = the base station runs slots (default), 0 = it… |
 
 ## Telemetry flags
 
@@ -370,6 +422,7 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_CMD_HOP_PAUSE` | `0x10` (16) | uplink cmd: park on lora_freq_mhz for N ms (#90) |
 | `LORA_CMD_SET_HOP_DISABLED` | `0x11` (17) | uplink cmd: 1 byte payload, 0=hopping enabled (default), 1=disabled (fixed-frequency mode for diagnostics,… |
 | `LORA_CMD_SET_TX_DISABLED` | `0x44` (68) | uplink + rocket BLE cmd: 1 byte payload, 1 = "LoRa off" (mute every transmit, keep listening), 0 =… |
+| `LORA_CMD_TX_SLOT_ADJUST` | `0x52` (82) | uplink: [ref_seq u16][delta_ms i16]; delta INT16_MIN = release |
 | `LORA_FRAME_FAST` | `0x00` (0) |  |
 | `LORA_FRAME_SLOW` | `0x01` (1) |  |
 | `LORA_HOP_DWELL_MAX` | `0x04` (4) | #133 slow-hop robustness cap |
@@ -381,11 +434,13 @@ Two bits per sensor at the shifts below, each holding a `SensorHealthState`
 | `LORA_NOISE_THRESHOLD_DB` | `0x0F` (15) | skip if peak > median + this |
 | `LORA_NUM_SATS_MASK` | `0x3F` (63) |  |
 | `LORA_NVS_SCHEMA_VERSION` | `0x04` (4) |  |
-| `LORA_PROTO_VERSION` | `0x05` (5) |  |
+| `LORA_PROTO_VERSION` | `0x06` (6) |  |
+| `LORA_PROTO_VERSION_V5` | `0x05` (5) | still read: see v6 above |
 | `LORA_SIM_BIT` | `0x40` (64) |  |
 | `LORA_SLOT_CYCLE` | `0x06` (6) |  |
 | `LORA_SLOW_SLOT` | `0x05` (5) | 0-based index within the cycle |
 | `LORA_STATE_SHIFT` | `0x04` (4) | bits 4-6: rocket state |
+| `LORA_TX_SLOT_COUNT` | `0x03` (3) | slot = (rid - 1) % 3 unless that slot is taken |
 | `LORA_UL_ACCEPTED` | `0x01` (1) | passed every filter, command dispatched |
 | `LORA_UL_MALFORMED` | `0x10` (16) | bad sync byte or short frame |
 | `LORA_UL_NID_DROP` | `0x04` (4) | wrong network_id |

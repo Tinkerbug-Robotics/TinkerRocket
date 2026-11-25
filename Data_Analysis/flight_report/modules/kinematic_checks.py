@@ -37,10 +37,15 @@ try:
         BARO_MACH_LOCKOUT_OFF,
         NSF_BURNOUT,
     )
-    from sim_kinematic_checks import KinematicChecks  # noqa: E402
+    from sim_kinematic_checks import (  # noqa: E402
+        KinematicChecks,
+        MAX_BARO_RATE_MS,
+        MIN_BARO_SPIKE_STEP_M,
+    )
     _IMPORT_OK = True
     _IMPORT_ERROR = ""
 except ImportError as e:
+    MAX_BARO_RATE_MS = MIN_BARO_SPIKE_STEP_M = None
     _IMPORT_OK = False
     _IMPORT_ERROR = str(e)
 

@@ -1,0 +1,19 @@
+# Name,   Type, SubType, Offset,  Size,    Flags
+# The flight computer's partition table for a board whose boot flash is 4 MB:
+# the Tinker-Beetle V2 (-DTR_BOARD_M2=1), whose ESP32-S3FH4R2 carries its flash
+# in the package. Selected by sdkconfig.defaults.flash4mb, with the 4 MB
+# declaration that goes with it. Every other board keeps partitions.csv.
+#
+# The same partitions as partitions.csv, in the same order, with the two app
+# slots cut from 3 MB to 1.9375 MB each (0x1F0000): the largest pair on the
+# 64 KB app alignment that fits after nvs and otadata. An image that outgrows a
+# slot fails the build ("All app partitions are too small for binary"), and an
+# OTA of one is refused by esp_ota_begin before anything is erased.
+#
+# `nvs` and `otadata` keep the offsets and sizes they have in partitions.csv,
+# so the tools and notes that name them hold for both tables.
+# Ends at 0x3f0000, 64 KB short of the end of the part.
+nvs,      data, nvs,     0x9000,  0x5000,
+otadata,  data, ota,     0xe000,  0x2000,
+ota_0,    app,  ota_0,   0x10000, 0x1F0000,
+ota_1,    app,  ota_1,   0x200000,0x1F0000,

@@ -282,6 +282,22 @@ FlightSettingsData canonicalFlightSettings() {
     return s;
 }
 
+// #1658: the out computer's identity record. The unit name fills its 20 bytes
+// with no NUL and the firmware stamp is shorter than its 32, so a decoder has
+// to handle both ends: a full field and a NUL-padded one.
+OcIdentityData canonicalOcIdentity() {
+    OcIdentityData o{};
+    o.time_us = 1100000u;   // 1.1 s: inside the tiny flight's span, on the OC clock
+    o.version = OC_IDENTITY_VERSION;
+    o.network_id = 7;
+    o.rocket_id = 2;
+    o.board_rev_code = board_identity::encodeRevCode("M1", false);   // provisioned
+    std::memcpy(o.unit_id, "9e8a1b2c", sizeof(o.unit_id));
+    std::memcpy(o.unit_name, "Twenty-char unitname", sizeof(o.unit_name));
+    std::strncpy(o.fw_version, "41b2ab92-m1+20261022-1126", sizeof(o.fw_version));
+    return o;
+}
+
 MagCalStatusData canonicalMagCal() {
     MagCalStatusData m{};
     m.time_us = 777777u;
@@ -502,6 +518,22 @@ void buildLogframes(Builder& b) {
     // are 10 B forever — so both lengths stay pinned here.
     const auto pwr = canonicalPower();
     const auto pwrFull = bytesOf(pwr);
+    // #1658: the computer that wrote the log. Strings as text, the board code
+    // as its byte ("M1", provisioned).
+    {
+        const auto oid = canonicalOcIdentity();
+        auto field = [](const char* f, size_t n) { return std::string(f, strnlen(f, n)); };
+        b.add("logframes", "ocidentity_68.bin", bytesOf(oid),
+              Json().u("time_us", oid.time_us).u("version", oid.version)
+                  .u("network_id", oid.network_id).u("rocket_id", oid.rocket_id)
+                  .u("board_rev_code", oid.board_rev_code)
+                  .str("unit_id", field(oid.unit_id, sizeof(oid.unit_id)))
+                  .str("unit_name", field(oid.unit_name, sizeof(oid.unit_name)))
+                  .str("fw_version", field(oid.fw_version, sizeof(oid.fw_version)))
+                  .done(),
+              "OcIdentityData v1, msg 0x87 (#1658): OC-self, ~1 Hz while logging; "
+              "unit_name fills all 20 bytes with no NUL");
+    }
     b.add("logframes", "power_14.bin", pwrFull,
           Json().u("time_us", pwr.time_us).u("voltage_raw", pwr.voltage_raw)
               .i("current_raw", pwr.current_raw).i("soc_raw", pwr.soc_raw)
@@ -755,6 +787,130 @@ void buildFileops(Builder& b) {
               .i("pad_alt_mm", pc.pad_alt_mm).u("pos_sigma_cm", pc.pos_sigma_cm)
               .done(),
           "PadCalStatusData behind 0xD0 (#1600 phase 5); frame = 41 B");
+
+    // 0xD1 the low-g accelerometer hand calibration's status (#1629): a stored
+    // offset and a finished face window, every field distinct, signs mixed.
+    AccelCalStatusData ac{};
+    ac.flags = ACCF_STORED | ACCF_APPLIED;
+    ac.face_state = ACC_FACE_DONE;
+    ac.offset_mps2[0] = 0.0412f;
+    ac.offset_mps2[1] = -0.0273f;
+    ac.offset_mps2[2] = 0.0156f;
+    ac.face_mean_mps2[0] = -0.0831f;
+    ac.face_mean_mps2[1] = 0.1149f;
+    ac.face_mean_mps2[2] = 9.8213f;
+    ac.face_sd_mps2[0] = 0.0123f;
+    ac.face_sd_mps2[1] = 0.0134f;
+    ac.face_sd_mps2[2] = 0.0145f;
+    ac.face_n = 2880;
+    std::vector<uint8_t> acF{0xD1};
+    append(acF, bytesOf(ac));
+    b.add("fileops", "accelcal_0xD1_40.bin", acF,
+          Json().u("flags", ac.flags).u("face_state", ac.face_state)
+              .f("offset_x", ac.offset_mps2[0]).f("offset_y", ac.offset_mps2[1]).f("offset_z", ac.offset_mps2[2])
+              .f("face_mean_x", ac.face_mean_mps2[0]).f("face_mean_y", ac.face_mean_mps2[1])
+              .f("face_mean_z", ac.face_mean_mps2[2]).f("face_sd_x", ac.face_sd_mps2[0])
+              .f("face_sd_y", ac.face_sd_mps2[1]).f("face_sd_z", ac.face_sd_mps2[2]).u("face_n", ac.face_n)
+              .done(),
+          "AccelCalStatusData behind 0xD1 (#1629); frame = 41 B");
+
+    // 0xD1 from a flight computer that sends the high-g (and an out computer
+    // that relays all of it): the low-g's 40 bytes above, then
+    // AccelCalHighGStatus -- a stored alignment from the six faces.
+    AccelCalStatusFrame acf{};
+    acf.lg = ac;
+    acf.hg.face_hg_mean_mps2[0] = 0.9012f;
+    acf.hg.face_hg_mean_mps2[1] = -1.3577f;
+    acf.hg.face_hg_mean_mps2[2] = 10.4419f;
+    acf.hg.face_hg_sd_mps2[0] = 0.5618f;
+    acf.hg.face_hg_sd_mps2[1] = 0.5613f;
+    acf.hg.face_hg_sd_mps2[2] = 0.5252f;
+    acf.hg.hg_flags = HGF_STORED | HGF_APPLIED | HGF_BIAS;
+    acf.hg.hg_bias_src = HG_BIAS_SRC_SIX_FACE;
+    const float hgm[9] = {1.0081f, 0.0042f, -0.0031f, -0.0027f, 0.9934f, 0.0056f, 0.0018f, -0.0049f, 1.0122f};
+    memcpy(acf.hg.hg_matrix, hgm, sizeof(hgm));
+    acf.hg.hg_bias_mps2[0] = -0.6512f;
+    acf.hg.hg_bias_mps2[1] = 1.48f;
+    acf.hg.hg_bias_mps2[2] = -0.3127f;
+    std::vector<uint8_t> acfF{0xD1};
+    append(acfF, bytesOf(acf));
+    b.add("fileops", "accelcal_0xD1_114.bin", acfF,
+          Json().u("flags", ac.flags).u("face_state", ac.face_state).u("face_n", ac.face_n)
+              .f("hg_face_mean_x", acf.hg.face_hg_mean_mps2[0]).f("hg_face_mean_y", acf.hg.face_hg_mean_mps2[1])
+              .f("hg_face_mean_z", acf.hg.face_hg_mean_mps2[2]).f("hg_face_sd_x", acf.hg.face_hg_sd_mps2[0])
+              .f("hg_face_sd_y", acf.hg.face_hg_sd_mps2[1]).f("hg_face_sd_z", acf.hg.face_hg_sd_mps2[2])
+              .u("hg_flags", acf.hg.hg_flags).u("hg_bias_src", acf.hg.hg_bias_src)
+              .f("m00", hgm[0]).f("m01", hgm[1]).f("m02", hgm[2]).f("m10", hgm[3]).f("m11", hgm[4])
+              .f("m12", hgm[5]).f("m20", hgm[6]).f("m21", hgm[7]).f("m22", hgm[8])
+              .f("hg_bias_x", acf.hg.hg_bias_mps2[0]).f("hg_bias_y", acf.hg.hg_bias_mps2[1])
+              .f("hg_bias_z", acf.hg.hg_bias_mps2[2])
+              .done(),
+          "AccelCalStatusFrame behind 0xD1: AccelCalStatusData then AccelCalHighGStatus; frame = 115 B");
+
+    // 0xD2 the gnss-sdr-dev board IMU's mounting, as the FC relays the
+    // board's report: six faces held, the whole rotation (U10 turned 45 deg
+    // about this IMU's z), every axis calibrated, a save the board echoed;
+    // every byte field distinct, signs mixed.
+    SdrAlignStatusData sa{};
+    sa.ver = SDR_ALIGN_STATUS_VER;
+    sa.flags = SDRA_BOARD | SDRA_REPORT | SDRA_TIME | SDRA_LINE | SDRA_AUTOSAVE | SDRA_STILL;
+    sa.imu = 2;
+    sa.have = SDRA_HAVE_WHOLE;
+    sa.from = SDRA_FROM_RESTS;
+    sa.saved = SDRA_SAVED_SAME;
+    sa.n_pose = 6;
+    sa.cal_axes = 7;
+    sa.last_rest = SDRA_REST_PAIRED;
+    sa.gen = 17;
+    sa.n_rest = 44;
+    sa.n_pair = 13;
+    sa.cmd_id = 42;
+    sa.cmd_op = SDR_ALIGN_OP_SAVE;
+    sa.cmd_res = SDRA_RES_DONE;
+    sa.fc_cmd_state = SDRA_CMD_ECHOED;
+    sa.fc_cmd_op = SDR_ALIGN_OP_SAVE;
+    sa.fc_cmd_id = 9;
+    sa.rests_sent = 51;
+    sa.rest_age_ds = 23;
+    sa.board_age_ds = 4;
+    sa.spread_deg = 90.0f;
+    sa.resid_deg = 0.14f;
+    sa.cal_rms_mps2 = 0.012f;
+    sa.q[0] = 0.70710677f;
+    sa.q[1] = 0.0012f;
+    sa.q[2] = -0.0034f;
+    sa.q[3] = 0.70710677f;
+    sa.scale[0] = 1.012f;
+    sa.scale[1] = 0.987f;
+    sa.scale[2] = 1.003f;
+    sa.bias_mps2[0] = 0.153f;
+    sa.bias_mps2[1] = -0.271f;
+    sa.bias_mps2[2] = 0.0089f;
+    const int8_t dirs[6][3] = {{127, 0, 0}, {-127, 1, -2}, {0, 127, 3}, {-4, -127, 0}, {5, 0, 127}, {0, -6, -127}};
+    const uint8_t pairs[6] = {2, 3, 2, 1, 4, 255};
+    for (int i = 0; i < 6; i++)
+    {
+        memcpy(sa.pose_dir[i], dirs[i], 3);
+        sa.pose_pairs[i] = pairs[i];
+    }
+    sa.moved_deg = 0.0f;   // from 1: this boot's rests (moved is from 3's)
+    std::vector<uint8_t> saF{0xD2};
+    append(saF, bytesOf(sa));
+    b.add("fileops", "sdralign_0xD2_111.bin", saF,
+          Json().u("ver", sa.ver).u("flags", sa.flags).u("imu", sa.imu).u("have", sa.have).u("from", sa.from)
+              .u("saved", sa.saved).u("n_pose", sa.n_pose).u("cal_axes", sa.cal_axes).u("last_rest", sa.last_rest)
+              .u("gen", sa.gen).u("n_rest", sa.n_rest).u("n_pair", sa.n_pair).u("cmd_id", sa.cmd_id)
+              .u("cmd_op", sa.cmd_op).u("cmd_res", sa.cmd_res).u("fc_cmd_state", sa.fc_cmd_state)
+              .u("fc_cmd_op", sa.fc_cmd_op).u("fc_cmd_id", sa.fc_cmd_id).u("rests_sent", sa.rests_sent)
+              .u("rest_age_ds", sa.rest_age_ds).u("board_age_ds", sa.board_age_ds)
+              .f("spread_deg", sa.spread_deg).f("resid_deg", sa.resid_deg).f("cal_rms", sa.cal_rms_mps2)
+              .f("q0", sa.q[0]).f("q1", sa.q[1]).f("q2", sa.q[2]).f("q3", sa.q[3])
+              .f("scale_x", sa.scale[0]).f("scale_y", sa.scale[1]).f("scale_z", sa.scale[2])
+              .f("bias_x", sa.bias_mps2[0]).f("bias_y", sa.bias_mps2[1]).f("bias_z", sa.bias_mps2[2])
+              .i("pose1_x", dirs[1][0]).i("pose1_y", dirs[1][1]).i("pose1_z", dirs[1][2])
+              .u("pose5_pairs", pairs[5]).f("moved_deg", sa.moved_deg)
+              .done(),
+          "SdrAlignStatusData behind 0xD2; frame = 112 B");
 }
 
 // App→device command payloads: [cmd u8][payload], byte-exact.  Struct-backed
@@ -943,6 +1099,42 @@ void buildCommands(Builder& b) {
               "SensorCalApplyData");
     }
 
+    {
+        // #1629: the low-g hand calibration's offset (tools/accel_cal_six_face.py)
+        AccelCalApplyData a{};
+        a.offset_mps2[0] = 0.0412f;
+        a.offset_mps2[1] = -0.0273f;
+        a.offset_mps2[2] = 0.0156f;
+        b.add("commands", "cmd76_accelcal_12.bin", cmd(76, bytesOf(a)),
+              Json().u("cmd", 76).f("offset_x", 0.0412f).f("offset_y", -0.0273f).f("offset_z", 0.0156f).done(),
+              "AccelCalApplyData");
+    }
+
+    {
+        // the high-g's six-face alignment to the low-g (BLE 80)
+        HighGCalApplyData h{};
+        h.op = HG_CAL_OP_STORE;
+        const float m[9] = {1.0081f, 0.0042f, -0.0031f, -0.0027f, 0.9934f, 0.0056f, 0.0018f, -0.0049f, 1.0122f};
+        memcpy(h.matrix, m, sizeof(m));
+        h.bias_mps2[0] = -0.6512f;
+        h.bias_mps2[1] = 1.48f;
+        h.bias_mps2[2] = -0.3127f;
+        b.add("commands", "cmd80_hgcal_49.bin", cmd(80, bytesOf(h)),
+              Json().u("cmd", 80).u("op", 1)
+                  .f("m00", m[0]).f("m01", m[1]).f("m02", m[2]).f("m10", m[3]).f("m11", m[4])
+                  .f("m12", m[5]).f("m20", m[6]).f("m21", m[7]).f("m22", m[8])
+                  .f("bias_x", -0.6512f).f("bias_y", 1.48f).f("bias_z", -0.3127f).done(),
+              "HighGCalApplyData; op 1 store (0 clears the matrix and keeps the bias)");
+    }
+
+    {
+        // the gnss-sdr-dev board IMU's mounting: save it, the app's id 9 (BLE 83)
+        SdrAlignCmdData c{SDR_ALIGN_OP_SAVE, 9};
+        b.add("commands", "cmd83_sdralign_2.bin", cmd(83, bytesOf(c)),
+              Json().u("cmd", 83).u("op", 1).u("id", 9).done(),
+              "SdrAlignCmdData; op 1 save, 2 clear, 3 restart, 4 report; the app's id");
+    }
+
     b.add("commands", "cmd64_imuorient_auto.bin", cmd(64, bytesOf(ImuOrientConfigData{IMU_ORIENT_AUTO})),
           Json().u("cmd", 64).u("setting", 255).done(),
           "ImuOrientConfigData; 0xFF = auto, else orientation code 0..23");
@@ -958,16 +1150,22 @@ void buildCommands(Builder& b) {
         g.coast_delay_ms = 500; g.enable = 1; g.target_mode = GUIDE_TARGET_OVERHEAD;
         g.kp_pos_per_s2 = 0.05f; g.kd_vel_per_s = 0.4f;
         g.guidance_law = GUIDE_LAW_STATION_KEEP;
-        b.add("commands", "cmd65_guidance_45.bin", cmd(65, bytesOf(g)),
+        // The tilt tail at offset 45 is unaligned — distinct values so a
+        // shifted or swapped decode is visible.
+        GuidanceConfigFrame f{};
+        f.config = g;
+        f.tilt.tilt_limit_boost_deg = 25.0f; f.tilt.tilt_limit_coast_deg = 32.5f;
+        b.add("commands", "cmd65_guidance_53.bin", cmd(65, bytesOf(f)),
               Json().u("cmd", 65).f("nav_gain", 3.5f).f("max_accel_mps2", 30.0f)
                   .f("accel_to_fin_deg", 0.5f).f("max_fin_deg", 10.0f)
                   .f("min_speed_mps", 8.0f).f("target_e_m", 25.5f)
                   .f("target_n_m", -30.25f).f("target_alt_m", 250.0f)
                   .u("coast_delay_ms", 500).u("enable", 1).u("target_mode", 0)
                   .f("kp_pos_per_s2", 0.05f).f("kd_vel_per_s", 0.4f)
-                  .u("guidance_law", 1).done(),
-              "GuidanceConfigData: first 36 bytes FROZEN, append-only (#534); "
-              "a 45-B-era FC rejects a 36-B frame — ship in lockstep");
+                  .u("guidance_law", 1)
+                  .f("tilt_limit_boost_deg", 25.0f).f("tilt_limit_coast_deg", 32.5f).done(),
+              "GuidanceConfigFrame: GuidanceConfigData (first 36 bytes FROZEN, #534) + "
+              "tilt limits appended at 45; the 45-B v2 frame is a prefix — ship in lockstep");
     }
 
     {
@@ -985,6 +1183,14 @@ void buildCommands(Builder& b) {
     b.add("commands", "cmd67_imurate_2.bin", cmd(67, bytesOf(ImuRateConfigData{1920})),
           Json().u("cmd", 67).u("rate_hz", 1920).done(),
           "ImuRateConfigData; valid values 960/1920/3840");
+
+    b.add("commands", "cmd79_gnsslog_1.bin", cmd(79, bytesOf(GnssLogConfigData{GNSS_LOG_REDUCED})),
+          Json().u("cmd", 79).u("setting", GNSS_LOG_REDUCED).done(),
+          "GnssLogConfigData; 0 detailed, 1 reduced");
+
+    b.add("commands", "cmd81_antenna_7.bin", cmd(81, bytesOf(AntennaOffsetConfigData{1, 312, -25, 4})),
+          Json().u("cmd", 81).u("known", 1).i("x_mm", 312).i("y_mm", -25).i("z_mm", 4).done(),
+          "AntennaOffsetConfigData; known 0 unknown (all 0), 1 measured: board-frame mm, each within +-2000");
 
     {
         // Pad calibration (#1600 phase 5): 2026-10-13's GPS broadcast
@@ -1035,8 +1241,9 @@ void buildCsvFlight(Builder& b) {
     csvQuery.mag_type = MAG_TYPE_IIS2MDC;
     append(stream, frame(OUT_STATUS_QUERY, bytesOf(csvQuery)));   // t=1.0 s (rotation config)
     append(stream, frame(FLIGHT_SETTINGS_MSG, bytesOf(canonicalFlightSettings())));
+    append(stream, frame(OC_IDENTITY_MSG, bytesOf(canonicalOcIdentity())));   // #1658
 
-    int frames = 2;
+    int frames = 3;
     for (int i = 0; i <= 188; ++i) {
         const uint32_t t_ms = 1200 + 100u * i;
         const uint32_t t_us = t_ms * 1000u;
@@ -1172,7 +1379,14 @@ void buildCsvFlight(Builder& b) {
 // types on the real 5:1 schedule, a slow frame that must not blank the
 // position, a fast frame that must not blank the battery, an unknown-RSSI
 // sentinel, a sequence gap, and an event record interleaved with telemetry.
-void buildBsLogGolden(Builder& b) {
+//
+// LoRa v6: written twice. bs_tiny.bin is today's (the slow frames 23 B, their
+// status byte carrying the gnss-sdr-dev board's IMU aiding, 1); bs_tiny_v5.bin
+// is the same log as a v5 rocket sent it (every frame's version 5, the slow
+// frames 22 B: no status), which a reader must still read, as the base station
+// does. Both render the same CSV (bs_tiny.expected.csv): the CSV has no column
+// for the status.
+std::vector<uint8_t> bsLogGoldenStream(bool v5) {
     std::vector<uint8_t> stream;
     const uint8_t magic[8] = {'T', 'R', 'B', 'S', 'L', 'O', 'G',
                               BS_LOG_FORMAT_VERSION};
@@ -1210,6 +1424,7 @@ void buildBsLogGolden(Builder& b) {
     si.burnout_detected = false;
     si.imu_orient_code = 0;
     si.imu_orient_mode = 1;
+    si.gnss_imu = 1;                // v6: the board's IMU aiding (SH_OK)
 
     uint32_t frames = 0;
     // seq 3 is skipped on purpose so a reader has a gap to compute.
@@ -1221,13 +1436,15 @@ void buildBsLogGolden(Builder& b) {
 
         uint8_t frame_bytes[SIZE_OF_LORA_FAST] = {0};
         size_t  frame_len = 0;
-        if (loraFrameTypeForSlot(seq) == LORA_FRAME_SLOW) {
+        const uint8_t ftype = loraFrameTypeForSlot(seq);
+        if (ftype == LORA_FRAME_SLOW) {
             conv.packLoRaSlowBytes(si, frame_bytes);
-            frame_len = SIZE_OF_LORA_SLOW;
+            frame_len = v5 ? SIZE_OF_LORA_SLOW_V5 : SIZE_OF_LORA_SLOW;   // v5: no status
         } else {
             conv.packLoRaFastBytes(si, frame_bytes);
             frame_len = SIZE_OF_LORA_FAST;
         }
+        if (v5) frame_bytes[offsetof(LoRaFrameHeader, ver_type)] = loraVerType(LORA_PROTO_VERSION_V5, ftype);
 
         BsLoRaRxHeader hdr{};
         hdr.time_ms = 500u * static_cast<uint32_t>(seq);
@@ -1256,15 +1473,29 @@ void buildBsLogGolden(Builder& b) {
         append(payload, std::vector<uint8_t>(text, text + eh.text_len));
         append(stream, frame(BS_EVENT_MSG, payload));
     }
+    (void)frames;
+    return stream;
+}
 
-    b.add("csv", "bs_tiny.bin", stream,
-          Json().u("rx_records", frames).u("event_records", 1)
+void buildBsLogGolden(Builder& b) {
+    b.add("csv", "bs_tiny.bin", bsLogGoldenStream(false),
+          Json().u("rx_records", 12).u("event_records", 1)
               .u("fast_frames", 10).u("slow_frames", 2)
-              .u("skipped_seq", 3)
+              .u("skipped_seq", 3).u("lora_proto", LORA_PROTO_VERSION)
+              .u("slow_frame_len", SIZE_OF_LORA_SLOW).u("gnss_imu", 1)
               .done(),
           "base-station binary log built with the real packers; the CSV golden "
           "generated from it lives in tests_cpp/fixtures/csv_golden/ (app "
           "output, not emitter output)");
+    b.add("csv", "bs_tiny_v5.bin", bsLogGoldenStream(true),
+          Json().u("rx_records", 12).u("event_records", 1)
+              .u("fast_frames", 10).u("slow_frames", 2)
+              .u("skipped_seq", 3).u("lora_proto", LORA_PROTO_VERSION_V5)
+              .u("slow_frame_len", SIZE_OF_LORA_SLOW_V5).u("gnss_imu", 0)
+              .done(),
+          "bs_tiny.bin as a v5 rocket sent it (version 5, 22-byte slow frames "
+          "with no status byte); a v6 reader must render the same CSV, "
+          "bs_tiny.expected.csv");
 }
 
 }  // namespace

@@ -10,7 +10,9 @@
 //
 //  Callouts, in flight order: burnout speed, altitude every 5 s (post-burnout,
 //  pre-apogee), apogee, recovery deployments and their chute verdict (#813,
-//  see DeploymentWatcher), descent every 10 s, landing with distance.
+//  see DeploymentWatcher), descent every 10 s, landing with distance — or,
+//  when the link dies before the landed frame gets through, a predicted
+//  landing at the predicted touchdown (see TouchdownPredictor).
 //
 
 import Foundation
@@ -24,6 +26,10 @@ import Combine
 protocol TelemetryAnnouncer: AnyObject {
     func processTelemetry(_ telemetry: TelemetryData)
     func reset()
+    /// Voice moved to another rocket's stream on the same base station (see
+    /// `VoiceRocketPolicy`). `baseline` is that rocket's last frame before
+    /// the one about to be processed, or nil if none was heard.
+    func followStream(baseline: TelemetryData?)
 }
 
 /// The speech engine as the policy sees it — same shape as Android's
@@ -68,6 +74,10 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
     private let unitSystem: () -> UnitSystem
     /// Test seam for the recovery expectations; production reads `profileStore`.
     private let recoveryOverride: (() -> RecoveryProfile?)?
+    /// Run an action at a moment on the announcer's clock; cancelling the
+    /// returned token drops it.  The predicted landing call is the one
+    /// callout that has to fire with no frame arriving.  Tests capture it.
+    private let schedule: (Date, @escaping () -> Void) -> AnyCancellable
 
     /// The active rocket's profile, for grading a deployment against what THIS
     /// rocket is supposed to do (#813).  Set by the dashboard alongside the
@@ -109,6 +119,15 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
     /// Recovery-event detector (#813).  Self-guards on apogee and landing.
     private let deployment = DeploymentWatcher()
 
+    /// Predicted landing: the link usually dies at touchdown, before the
+    /// landed frame gets through (see `TouchdownPredictor`).
+    private let touchdown = TouchdownPredictor()
+    /// The last live descent frame, for the predicted call's distance.
+    private var lastLiveDescent: TelemetryData?
+    /// The landing call came from the prediction, not a landed frame.
+    private var landingWasPredicted = false
+    private var landingCallTimer: AnyCancellable?
+
     // MARK: - Constants
 
     private static let altitudeInterval: TimeInterval = 5.0       // seconds between altitude callouts
@@ -128,11 +147,13 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
          now: @escaping () -> Date = Date.init,
          unitSystem: @escaping () -> UnitSystem = { .current },
          persistEnabled: Bool = true,
-         recovery: (() -> RecoveryProfile?)? = nil) {
+         recovery: (() -> RecoveryProfile?)? = nil,
+         schedule: @escaping (Date, @escaping () -> Void) -> AnyCancellable = FlightAnnouncer.mainQueueSchedule) {
         self.speech = speech
         self.now = now
         self.unitSystem = unitSystem
         self.recoveryOverride = recovery
+        self.schedule = schedule
         super.init()
 
         speech.onStatusChange = { [weak self] in
@@ -190,6 +211,12 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
         // lets the currently-playing utterance finish naturally — we just
         // don't queue a new one.
         guard telemetry.data_status == .live else {
+            // Once the link is lost these re-pushes (every 2 s) are the frames
+            // that keep arriving, and in the background they are what wakes
+            // the app at all, timer or not.  Only these: a live frame means
+            // the link is up, and it makes its own landing call if it carries
+            // the landed flag.
+            checkPredictedLanding()
             previousTelemetry = telemetry
             return
         }
@@ -243,10 +270,14 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
 
         // --- Descent callouts (after apogee, before landed) ---
         if telemetry.past_apogee && !telemetry.landed_flag && state == "INFLIGHT" {
+            trackDescentForLandingCall(telemetry)
             checkDescentCallout(telemetry)
         }
 
         // --- Landing detection ---
+        if telemetry.landed_flag || state == "LANDED" {
+            landingCallTimer = nil
+        }
         if telemetry.landed_flag && !(prev?.landed_flag ?? false) && !landedAnnounced {
             landedAnnounced = true
             let distance = horizontalDistanceString(telemetry)
@@ -271,6 +302,37 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
     func reset() {
         resetFlightState()
         speech.stop()
+    }
+
+    /// Start following another rocket's stream (`VoiceRocketPolicy`).
+    ///
+    /// The one-shots and detectors were tracking the previous rocket's flight,
+    /// so they start over. Without that, a rocket that flew earlier leaves
+    /// apogee and landing marked as announced, and the next flight calls
+    /// neither. `baseline` becomes the edge reference: a computer already past
+    /// apogee or landed does not re-announce it at the switch, which a frame
+    /// from the other rocket as the reference would cause.
+    ///
+    /// The pad position carries over unless the baseline gives a fresh one:
+    /// rockets fly from one site, and a computer picked up mid-flight has no
+    /// pad fix of its own. Picked up in flight, the burnout callout is skipped
+    /// (its climb was not watched) but the altitude cadence it gates runs.
+    /// Picked up past apogee or landed, those count as said: the live apogee
+    /// votes toggle in descent (the V9's did on 2026-11-21), and each toggle
+    /// would otherwise be a fresh "Apogee". Anything still playing finishes.
+    func followStream(baseline: TelemetryData?) {
+        let pad = launchLocation
+        resetFlightState()
+        launchLocation = pad
+        previousTelemetry = baseline
+        guard let b = baseline else { return }
+        if !b.launch_flag && b.state != "INFLIGHT",
+           let lat = b.latitude, let lon = b.longitude, !lat.isNaN && !lon.isNaN {
+            launchLocation = (lat: lat, lon: lon)
+        }
+        if b.state == "INFLIGHT" { burnoutAnnounced = true }
+        if b.past_apogee { apogeeAnnounced = true }
+        if b.landed_flag || b.state == "LANDED" { landedAnnounced = true }
     }
 
     // MARK: - Event Detectors
@@ -407,6 +469,52 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
         }
     }
 
+    // MARK: - Predicted landing
+
+    /// One live descent frame: refresh the prediction and push the landing
+    /// call back to when it is now due.  While frames keep coming the call
+    /// keeps moving, so it only fires once the link has gone quiet.
+    private func trackDescentForLandingCall(_ telemetry: TelemetryData) {
+        // A live frame from well off the ground after a predicted call: the
+        // link came back and the rocket is still flying, so the prediction
+        // was early.  Take the call back and let the real landing make it.
+        if landingWasPredicted, let alt = telemetry.pressure_alt,
+           Double(alt) > DeploymentWatcher.minAglM {
+            landingWasPredicted = false
+            landedAnnounced = false
+        }
+        touchdown.observe(now: now(), altAglM: telemetry.pressure_alt,
+                          altitudeRateMps: telemetry.altitude_rate,
+                          profile: currentRecovery())
+        lastLiveDescent = telemetry
+        guard !landedAnnounced, let due = touchdown.callDueAt else { return }
+        landingCallTimer = schedule(due) { [weak self] in self?.checkPredictedLanding() }
+    }
+
+    /// Make the landing call from the prediction once it is due and the link
+    /// has gone quiet.  The landed frame that arrives minutes later, once
+    /// someone walks into range, then finds the call already made.
+    private func checkPredictedLanding() {
+        guard isEnabled, !landedAnnounced,
+              let due = touchdown.callDueAt, now() >= due,
+              let last = lastLiveDescent else { return }
+        landedAnnounced = true
+        landingWasPredicted = true
+        landingCallTimer = nil
+        announceImmediate("Predicted landing. \(horizontalDistanceString(last))")
+    }
+
+    /// Production `schedule`: a timer on the main run loop, which is where
+    /// telemetry dispatch runs.  Common modes, so it also fires while the
+    /// operator is scrolling the dashboard.
+    static func mainQueueSchedule(_ at: Date, _ action: @escaping () -> Void) -> AnyCancellable {
+        let timer = Timer(timeInterval: max(0, at.timeIntervalSinceNow), repeats: false) { _ in
+            action()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        return AnyCancellable { timer.invalidate() }
+    }
+
     // MARK: - Horizontal Distance
 
     private func horizontalDistanceString(_ telemetry: TelemetryData) -> String {
@@ -466,6 +574,10 @@ class FlightAnnouncer: NSObject, ObservableObject, TelemetryAnnouncer {
         lastDescentAnnounceTime = .distantPast
         launchLocation = nil
         deployment.reset()
+        touchdown.reset()
+        lastLiveDescent = nil
+        landingWasPredicted = false
+        landingCallTimer = nil
     }
 }
 

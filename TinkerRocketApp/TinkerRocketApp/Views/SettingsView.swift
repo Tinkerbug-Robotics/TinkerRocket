@@ -17,8 +17,29 @@ import SwiftUI
 import Combine
 
 struct SettingsView: View {
+    /// The device Settings was opened on. Only its peripheral is used; the
+    /// screen itself runs on the fleet's live instance (see body).
+    let device: BLEDevice
+    @EnvironmentObject var fleet: BLEFleet   // injected by DashboardView
+
+    /// BLEFleet replaces the BLEDevice on every disconnect/reconnect, and an
+    /// out-computer flash ends in the OC's reboot. Held directly, the opened
+    /// instance went dead: the Version row kept the old firmware, "Update
+    /// firmware…" stayed disabled, and every config push (all guarded on
+    /// `isConnected`) went nowhere until Settings was reopened (2026-10-16).
+    /// Resolved here, like FirmwareUpdateView does, rather than left to the
+    /// presenter: the dashboard resolves its sheets (DashboardSheet.live(in:)),
+    /// but RocketProfileView presents Settings too.
+    var body: some View {
+        SettingsContent(device: fleet.liveDevice(for: device))
+    }
+}
+
+private struct SettingsContent: View {
+    /// The fleet's live instance, swapped in by SettingsView after a
+    /// reconnect. The @State below (tab, edits in progress, the LoRa
+    /// switches) survives the swap; only what is read off the device changes.
     @ObservedObject var device: BLEDevice
-    @EnvironmentObject var fleet: BLEFleet   // injected by DashboardView for FirmwareUpdateView → OTASession lookup
     @EnvironmentObject var store: RocketProfileStore
     @Environment(\.dismiss) var dismiss
 
@@ -57,6 +78,8 @@ struct SettingsView: View {
     @State private var sPnMinSpeed = ""
     @State private var sPnKpPos = ""
     @State private var sPnKdVel = ""
+    @State private var sPnTiltBoost = ""
+    @State private var sPnTiltCoast = ""
 
     // Roll waypoints edited as strings; committed to the profile on change.
     @State private var rollWaypoints: [(time: String, angle: String)] = []
@@ -72,9 +95,38 @@ struct SettingsView: View {
     @State private var sMainDeployAlt = ""
     @State private var sDragK = ""
 
+    // GNSS antenna offset (cmd 81), in the board's own axes, edited as
+    // strings and sent when the three fields lose focus. `antennaDraft`: the
+    // picker says Measured but nothing is sent yet — zeros would tell the
+    // filter the antenna sits on the IMU, so the numbers come first, and the
+    // fields start empty. `antennaTyped`: typing not yet sent; until the user
+    // types, an empty field is no error.
+    @State private var sAntX = ""
+    @State private var sAntY = ""
+    @State private var sAntZ = ""
+    @State private var antennaDraft = false
+    @State private var antennaTyped = false
+
     // Drives the full-screen pyro test-fire cover.  (The per-channel continuity
     // readout state lives in the PyroChannelTestControls child view.)
-    @State private var pyroTestChannel: Int?
+    @State private var pyroTest: PyroTestRun?
+
+    /// A test fire, held on the link it was started on. The screen follows
+    /// the fleet's live instance, but a test must not: if its link drops
+    /// before T-0, PyroTestView aborts ("Link lost before fire", #292), and
+    /// following would send the fire over the rebuilt link instead — after a
+    /// continuity check and a focus latch made on the old one. Closing the
+    /// test and opening it again starts one on the live link.
+    private struct PyroTestRun: Identifiable {
+        let channel: Int
+        let device: BLEDevice
+        var id: Int { channel }
+    }
+
+    /// Screens pushed by value rather than by destination (see body).
+    private enum Screen: Hashable {
+        case firmwareUpdate
+    }
 
     // "Sent" feedback in section headers.
     @State private var servoApplied = false
@@ -109,6 +161,13 @@ struct SettingsView: View {
     @State private var loraTxTouchedAt: Date?
     private static let loraTxHydrationHoldS: TimeInterval = 3.0
 
+    // Transmit slots (BS only, three rockets on one base station) — device
+    // state on the base station, hydrated from its "lts" readback with the
+    // same tap-hold as link mode. Defaults on, like the firmware.
+    @State private var txSlotsOn = true
+    @State private var txSlotsTouchedAt: Date?
+    private static let txSlotsHydrationHoldS: TimeInterval = 3.0
+
     @FocusState private var focusedField: EditField?
     @State private var lastFocusedField: EditField?
 
@@ -126,32 +185,20 @@ struct SettingsView: View {
 
     private var currentFreqMHz: Float { device.rocketConfig?.loraFreqMHz ?? 915.0 }
 
-    private var isInitializing: Bool {
-        device.isConnected && !device.isBaseStation
-            && device.telemetry.state == "INITIALIZATION"
-    }
-
-    /// The power rail is off, so the FC — the thing that actually answers
-    /// config writes — isn't running.  This fails quietly rather than loudly:
-    /// the OC's #366 command queue HOLDS commands while the rail is down and
-    /// drains the batch at power-on, so a user can edit several screens of
-    /// settings and have them land much later, out of order, or not at all.
-    /// Block the sheet exactly as INITIALIZATION does, for the same reason —
-    /// the rocket can't honour the write yet.
-    ///
-    /// Two scoping guards, both load-bearing:
-    ///  - `!isBaseStation`: the BS relay's TelemetryData never carries
-    ///    pwr_pin_on (the LoRa packet has no room for it), so over a
-    ///    base-station link it reads false forever — an unscoped gate would
-    ///    lock Settings permanently on every BS connection.
-    ///  - `hasReceivedTelemetry` (#377): before the first frame `telemetry` is
-    ///    all zeros, and a zeroed pwr_pin_on is indistinguishable from a
-    ///    genuinely-off rocket.  Without this the overlay would flash on every
-    ///    connect, including for a rocket that is already powered on.
-    private var isRocketOff: Bool {
-        device.isConnected && !device.isBaseStation
-            && device.hasReceivedTelemetry
-            && !device.telemetry.pwr_pin_on
+    /// What this sheet may offer right now (SettingsAccess.swift has the rule
+    /// and why).  The flight computer's settings need it running: with its rail
+    /// off or its boot unfinished, the OC's #366 queue HOLDS the writes and
+    /// drains them much later, out of order, or not at all.  The out computer's
+    /// own settings and the firmware update never go through the flight
+    /// computer, so they stay — above all the update, which is how a flight
+    /// computer that cannot finish booting gets a working image.
+    private var access: SettingsAccess {
+        SettingsAccess.evaluate(isConnected: device.isConnected,
+                                isBaseStation: device.isBaseStation,
+                                hasReceivedTelemetry: device.hasReceivedTelemetry,
+                                pwrPinOn: device.telemetry.pwr_pin_on,
+                                state: device.telemetry.state,
+                                bootStepReported: device.telemetry.fc_boot_step != nil)
     }
 
     /// Calibrations run on the rocket, so they need it connected AND powered
@@ -186,9 +233,11 @@ struct SettingsView: View {
         case integralSep
         case guidTargetAlt, guidNavGain, guidMaxAccel, guidAccelToFin, guidMaxFin, guidMinSpeed
         case guidKpPos, guidKdVel
+        case guidTiltBoost, guidTiltCoast
         case wpTime(Int), wpAngle(Int)
         case pyroValue(Int)   // ch index 0..3
         case drogueRate, mainRate, mainDeployAlt, dragK
+        case antennaX, antennaY, antennaZ
     }
 
     /// Fin-angle range implied by the pulse + travel fields as they are being
@@ -216,7 +265,7 @@ struct SettingsView: View {
         .font(.subheadline)
     }
 
-    private enum EditGroup { case servo, pid, rollControl, guidance, rollWaypoints, pyro, recovery }
+    private enum EditGroup { case servo, pid, rollControl, guidance, rollWaypoints, pyro, recovery, antennaOffset }
 
     private func group(of field: EditField?) -> EditGroup? {
         switch field {
@@ -224,10 +273,11 @@ struct SettingsView: View {
         case .pidKp, .pidKi, .pidKd, .pidMin, .pidMax: return .pid
         case .rollDelay, .rollMinSpeed, .rateCap, .kpAngle, .integralSep: return .rollControl
         case .guidTargetAlt, .guidNavGain, .guidMaxAccel, .guidAccelToFin, .guidMaxFin, .guidMinSpeed,
-             .guidKpPos, .guidKdVel: return .guidance
+             .guidKpPos, .guidKdVel, .guidTiltBoost, .guidTiltCoast: return .guidance
         case .wpTime, .wpAngle: return .rollWaypoints
         case .pyroValue: return .pyro
         case .drogueRate, .mainRate, .mainDeployAlt, .dragK: return .recovery
+        case .antennaX, .antennaY, .antennaZ: return .antennaOffset
         case nil: return nil
         }
     }
@@ -241,6 +291,7 @@ struct SettingsView: View {
         case .rollWaypoints: applyRollProfile()
         case .pyro: applyPyroConfig()
         case .recovery: applyRecoveryConfig()
+        case .antennaOffset: applyAntennaOffset()
         }
     }
 
@@ -258,7 +309,17 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        NavigationView {
+        // A NavigationStack, with the firmware screen pushed by value. The
+        // Form below picks its layout from the device, and that changes while
+        // the firmware screen is up: a reconnect hands Settings a rebuilt
+        // BLEDevice, which may read `.unknown` until its identity readback or
+        // report the rail off in its first frame, and a flight computer flash
+        // reboots the FC, whose settings are swapped out until it runs again.
+        // A destination link is popped when its row moves to another branch of
+        // the Form (seen in the simulator, 2026-10-16); a value on the stack
+        // is not. The firmware flow always meets one of these: every flash
+        // ends in a reboot.
+        NavigationStack {
             Form {
                 // Firmware update is device-level (not profile-level). BS and
                 // no-profile devices have no tab bar, so they each carry a
@@ -271,22 +332,35 @@ struct SettingsView: View {
                 } else if store.activeProfile == nil {
                     noProfileSection
                     firmwareSection
-                } else if isRocketOff {
-                    // Swap the config sections out rather than covering them with
-                    // an INITIALIZATION-style overlay: firmwareSection lives
-                    // inside rocketSettingsSections (#314), and a full-sheet
-                    // overlay would take Firmware Update down with it. The OC
-                    // flashes ITSELF over BLE and never touches the FC rail, so
-                    // that one genuinely works with the rocket off — it's the
-                    // only thing on this screen that does.
-                    rocketOffSection
-                    firmwareSection
-                } else {
+                } else if access.allowsFlightComputerSettings {
                     rocketSettingsSections
+                } else {
+                    // Swap the flight computer's sections out rather than
+                    // covering the sheet: firmwareSection lives inside
+                    // rocketSettingsSections (#314), and the full-sheet
+                    // "Initializing…" overlay this replaces took Firmware Update
+                    // down with it, so an FC stuck in its boot locked out its
+                    // own fix. What the out computer answers by itself stays.
+                    if access == .rocketOff {
+                        rocketOffSection
+                    } else {
+                        FlightComputerNotRunningSection(device: device)
+                    }
+                    // Nothing below goes through the flight computer: the out
+                    // computer's own radio and network ID, the firmware update,
+                    // and the descent profile, which never leaves the app.
+                    radioSection
+                    networkSection
+                    firmwareSection
+                    recoverySection
                 }
             }
             .navigationTitle(navTitle)
-            .overlay { if isInitializing { initializingOverlay } }
+            .navigationDestination(for: Screen.self) { screen in
+                switch screen {
+                case .firmwareUpdate: FirmwareUpdateView(device: device)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") { dismiss() }
@@ -303,11 +377,8 @@ struct SettingsView: View {
             .onAppear { loadFromProfile() }
             // Test Pyro Channel (from the Pyro tab) presents the same full-screen
             // test-fire flow the dashboard uses.
-            .fullScreenCover(item: Binding<IdentifiableInt?>(
-                get: { pyroTestChannel.map { IdentifiableInt(value: $0) } },
-                set: { pyroTestChannel = $0?.value }
-            )) { item in
-                PyroTestView(device: device, channel: item.value)
+            .fullScreenCover(item: $pyroTest) { run in
+                PyroTestView(device: run.device, channel: run.channel)
             }
             .onChange(of: store.activeId) { _ in loadFromProfile() }
             // Leaving a tab commits its pending text edit; reloading then snaps
@@ -341,6 +412,10 @@ struct SettingsView: View {
                    loraTxTouchedAt.map({ Date().timeIntervalSince($0) > Self.loraTxHydrationHoldS }) ?? true {
                     loraTxOff = txd
                 }
+                if let lts = cfg.loraTxSlots,
+                   txSlotsTouchedAt.map({ Date().timeIntervalSince($0) > Self.txSlotsHydrationHoldS }) ?? true {
+                    txSlotsOn = lts
+                }
             }
         }
     }
@@ -371,8 +446,10 @@ struct SettingsView: View {
                 summaryRow("IMU mounting", p.imuOrientSetting == 0xFF
                     ? "Auto" : "Nose \(FlightSettingsData.b2rName(code: p.imuOrientSetting))")
                 summaryRow("Gain scheduling", p.gainScheduleEnabled ? "On" : "Off")
-                summaryRow("Mag cal", p.magCal == nil ? "Not saved" : "Saved")
-                summaryRow("Sensor cal", p.sensorCal == nil ? "Not saved" : "Saved")
+                // The profile's saved copies; what the board holds is under
+                // Calibration (#1629).
+                summaryRow("Mag cal in profile", p.magCal == nil ? "Not saved" : "Saved")
+                summaryRow("Sensor cal in profile", p.sensorCal == nil ? "Not saved" : "Saved")
             }
         }
 
@@ -441,9 +518,9 @@ struct SettingsView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            NavigationLink {
-                FirmwareUpdateView(device: device)
-            } label: {
+            // By value, so a reconnect that changes the Form's layout can't
+            // pop the screen mid-update (see body).
+            NavigationLink(value: Screen.firmwareUpdate) {
                 Label("Update firmware…", systemImage: "arrow.up.circle")
             }
             .disabled(!device.isConnected)
@@ -477,6 +554,16 @@ struct SettingsView: View {
             .pickerStyle(.segmented)
             .disabled(device.autoApplyRefusalReason() != nil ||
                       (hopUnavailable && !linkModeHopping))
+        }
+
+        // Three rockets, one base station: each rocket transmits in its own
+        // third of the 500 ms period. Next to link mode because it only
+        // applies in one of them.
+        if device.isBaseStation {
+            Section(header: Text("Transmit Slots"), footer: Text(txSlotsFooter)) {
+                Toggle("Transmit Slots", isOn: txSlotsBinding)
+                    .disabled(!txSlotsSupported || !device.isConnected)
+            }
         }
 
         Section(header: Text("LoRa Frequency"),
@@ -711,7 +798,9 @@ struct SettingsView: View {
             // continuity dot and buttons appeared/disappeared as siblings of the
             // focused Delay TextField on every live frame — which disrupted
             // keyboard layout on first focus (negative TUIKeyplane width → hang).
-            PyroChannelTestControls(device: device, channel: ch) { pyroTestChannel = $0 }
+            PyroChannelTestControls(device: device, channel: ch) {
+                pyroTest = PyroTestRun(channel: $0, device: device)
+            }
         }
     }
 
@@ -788,9 +877,16 @@ struct SettingsView: View {
         }
 
         Section("Calibration") {
+            // #1629: what THIS flight computer holds, read from the board
+            // (never the profile).
+            BoardCalibrationRows(device: device)
+
             // Magnetometer: navigates to MagCalView for the full tumble flow.
+            // Each calibration screen reads the board again on the way out,
+            // so the rows above say what was just stored.
             NavigationLink {
                 MagCalView(device: device)
+                    .onDisappear { device.requestCalibrationStatus() }
             } label: {
                 Label("Magnetometer Calibration", systemImage: "location.north.line")
             }
@@ -804,6 +900,7 @@ struct SettingsView: View {
             // without a rocket too, to show the ionosphere the phone holds.
             NavigationLink {
                 PadCalibrationView(device: device)
+                    .onDisappear { device.requestCalibrationStatus() }
             } label: {
                 HStack {
                     Label("Pad Calibration", systemImage: "gyroscope")
@@ -814,6 +911,20 @@ struct SettingsView: View {
                 }
             }
             Text("Place the rocket on its pad and keep it still. The gyro & accel calibration takes about 10 s; the GNSS survey keeps going until launch.")
+                .font(.caption).foregroundColor(.secondary)
+
+            // Six-face accelerometer calibration (#1629): an offset stored on
+            // the flight computer itself, which only this screen writes -- it
+            // is in no rocket profile and no connect-time sync. Gated like
+            // the magnetometer's: it needs the rocket connected and powered.
+            NavigationLink {
+                AccelCalibrationView(device: device)
+                    .onDisappear { device.requestCalibrationStatus() }
+            } label: {
+                Label("Accelerometer Calibration (Six Faces)", systemImage: "cube")
+            }
+            .disabled(!canCalibrate)
+            Text("Measures the accelerometer's offset with the board on each of its six faces. Once per flight computer; stored on the board.")
                 .font(.caption).foregroundColor(.secondary)
 
             if !canCalibrate {
@@ -868,6 +979,10 @@ struct SettingsView: View {
             Text(imuRateFooter)
                 .font(.caption).foregroundColor(.secondary)
         }
+
+        gnssLogSection
+
+        antennaOffsetSection
 
         radioSection
 
@@ -985,8 +1100,14 @@ struct SettingsView: View {
     private var imuRateFooter: String {
         let rate = profile.imuRateHz
         let peak = RocketProfile.imuRateChoices.first { $0.setting == rate }?.peakHz ?? 0
+        // The mosaic-G5's detailed GNSS log is what holds this rocket at 4k.
+        let gnssHint = gnssLogHoldsImuAt4k
+            ? " The 8k rates need GNSS Logging set to Reduced (below)." : ""
         if let maxHz = imuRateMaxHz, peak > maxHz {
-            return "This rocket logs at up to \(maxHz) Hz. It keeps its current rate until you pick one it can fly."
+            return "This rocket logs at up to \(maxHz) Hz. It keeps its current rate until you pick one it can fly." + gnssHint
+        }
+        if !gnssHint.isEmpty {
+            return "With the mosaic-G5 logging its detailed GNSS data, this rocket logs at up to 4k." + gnssHint
         }
         switch rate {
         case RocketProfile.imuRateDynamic:
@@ -1008,6 +1129,219 @@ struct SettingsView: View {
             })
     }
 
+    // MARK: GNSS log (cmd 79)
+
+    /// What the rocket logs of a Septentrio mosaic-G5's data: all of it with
+    /// the IMU at most 4k, or its position and once-a-second raw measurements
+    /// with the 8k rates open. Beside the rate because it moves the rate's
+    /// limit; the rate menu follows the rocket's `irmax`.
+    @ViewBuilder
+    private var gnssLogSection: some View {
+        Section(header: Text("GNSS Logging"), footer: Text(gnssLogFooter)) {
+            Picker("GNSS data", selection: gnssLogBinding) {
+                Text("Detailed").tag(RocketProfile.gnssLogDetailed)
+                Text("Reduced").tag(RocketProfile.gnssLogReduced)
+            }
+            .pickerStyle(.segmented)
+            .disabled(device.isConnected
+                      && (!gnssLogSettingSupported || device.telemetry.state == "INFLIGHT"))
+        }
+    }
+
+    /// True once a readback has arrived and carried `glog`; a readback
+    /// without it is firmware that has no such setting.
+    private var gnssLogSettingSupported: Bool {
+        device.rocketConfig?.gnssLogSetting != nil
+    }
+
+    /// The connected rocket's mosaic-G5 is logging its detailed data, and
+    /// that is what holds the IMU at 4k.
+    private var gnssLogHoldsImuAt4k: Bool {
+        guard device.isConnected, device.fcGnss == "mosaic-G5",
+              let cfg = device.rocketConfig, cfg.gnssLogSetting == RocketProfile.gnssLogDetailed
+        else { return false }
+        return (cfg.imuRateMaxHz ?? RocketProfile.imuRateBaselineMaxHz) <= RocketProfile.imuRateBaselineMaxHz
+    }
+
+    private var gnssLogFooter: String {
+        if device.isConnected {
+            if device.telemetry.state == "INFLIGHT" {
+                return "Locked while the rocket is flying."
+            }
+            if device.rocketConfig != nil, !gnssLogSettingSupported {
+                return "This rocket\u{2019}s firmware doesn\u{2019}t have this setting. Update it to use this."
+            }
+        }
+        var text = profile.gnssLogSetting == RocketProfile.gnssLogReduced
+            ? "Reduced: logs the mosaic-G5\u{2019}s position 20 times a second and its raw measurements once a second, which leaves room for the 8k IMU rates."
+            : "Detailed: logs all of the mosaic-G5\u{2019}s data, raw measurements included, 20 times a second. That fills the log about as fast as the IMU at 4k, so the IMU logs at up to 4k."
+        text += " The receiver\u{2019}s own microSD card keeps all of its data either way."
+        if device.isConnected, let receiver = device.fcGnss, receiver != "mosaic-G5" {
+            text = "This rocket\u{2019}s receiver is the \(receiver), not a Septentrio mosaic-G5, so this changes nothing on it. " + text
+        }
+        return text
+    }
+
+    private var gnssLogBinding: Binding<UInt8> {
+        Binding(
+            get: { profile.gnssLogSetting },
+            set: { setting in
+                updateProfile { $0.gnssLogSetting = setting }
+                if device.isConnected { device.sendGnssLogConfig(setting) }
+            })
+    }
+
+    // MARK: GNSS antenna offset (cmd 81)
+
+    /// Where the GNSS antenna sits relative to the flight computer's IMU, in
+    /// the board's own axes, for the mosaic-G5's navigation filter. Unknown
+    /// (the default) lets the filter allow for an antenna up to 30 cm away.
+    /// Locked while flying, and until the rocket says it has the setting —
+    /// the GNSS log rule.
+    @ViewBuilder
+    private var antennaOffsetSection: some View {
+        Section(header: Text("GNSS Antenna Offset"), footer: Text(antennaOffsetFooter)) {
+            Group {
+                Picker("Antenna offset", selection: antennaMeasuredBinding) {
+                    Text("Unknown").tag(false)
+                    Text("Measured").tag(true)
+                }
+                .pickerStyle(.segmented)
+                if antennaMeasuredShown {
+                    // No placeholder: the Measured draft starts empty, and a
+                    // grey "0" there would look like a zero already entered.
+                    stringRow("Board X", text: antennaText($sAntX), field: .antennaX, unit: "mm",
+                              placeholder: "")
+                    stringRow("Board Y", text: antennaText($sAntY), field: .antennaY, unit: "mm",
+                              placeholder: "")
+                    stringRow("Board Z", text: antennaText($sAntZ), field: .antennaZ, unit: "mm",
+                              placeholder: "")
+                    if let error = antennaInputError {
+                        Text(error)
+                            .font(.caption).foregroundColor(.red)
+                    }
+                }
+            }
+            .disabled(antennaOffsetLocked)
+        }
+    }
+
+    /// The picker reads Measured for a measured profile, and for one the user
+    /// has just switched to Measured but not yet entered.
+    private var antennaMeasuredShown: Bool {
+        profile.antennaOffsetKnown || antennaDraft
+    }
+
+    /// True once a readback has arrived and carried all four `ant*` keys; a
+    /// readback without them is firmware that has no such setting.
+    private var antennaOffsetSupported: Bool {
+        device.rocketConfig?.antennaOffset != nil
+    }
+
+    private var antennaOffsetLocked: Bool {
+        device.isConnected
+            && (!antennaOffsetSupported || device.telemetry.state == "INFLIGHT")
+    }
+
+    /// Which typed fields the firmware would refuse; nil when all three are
+    /// fine, and before the user has typed: a fresh draft's empty fields are
+    /// no mistake yet.
+    private var antennaInputError: String? {
+        guard antennaTyped else { return nil }
+        let bad = [("X", sAntX), ("Y", sAntY), ("Z", sAntZ)]
+            .filter { AntennaOffset.parseMm($0.1) == nil }
+            .map { $0.0 }
+        guard !bad.isEmpty else { return nil }
+        let which = bad.count == 1 ? "Board \(bad[0])" : "Board " + bad.joined(separator: ", ")
+        return "\(which): enter whole millimeters from -2000 to 2000. Nothing is sent until all three are."
+    }
+
+    private var antennaOffsetFooter: String {
+        var text = antennaMeasuredShown
+            ? "From the flight computer\u{2019}s IMU chip to the center of the GNSS antenna, along the board\u{2019}s own X, Y and Z axes (Z out of the component side), in millimeters. Within 2 to 3 cm is enough. Board axes: +X points forward (to the nose when the board is mounted nose-forward), +Y to the left, +Z up out of the component side."
+            : "Unknown (the default): the flight computer allows for a GNSS antenna up to 30 cm from its IMU. If you have measured where the antenna sits, choose Measured: the navigation filter then models it, which sharpens the attitude while the rocket turns fast, as when the drogue opens."
+        guard device.isConnected else { return text }
+        if device.telemetry.state == "INFLIGHT" {
+            return text + " Locked while the rocket is flying."
+        }
+        guard let cfg = device.rocketConfig else { return text }
+        guard let reported = cfg.antennaOffset else {
+            return text + " This rocket\u{2019}s firmware has no antenna offset setting."
+        }
+        // "antsrc": the flight computer's own report, or the out computer's
+        // copy of what it last relayed (and the app's mirror of a send).
+        let fromFc = cfg.antennaOffsetFromFlightComputer
+        if antennaDraft && !profile.antennaOffsetKnown {
+            text += " Not sent yet: enter all three, then tap Done."
+        } else if reported == profile.antennaOffset && fromFc {
+            text += " In use by the flight computer."
+        } else if reported == profile.antennaOffset {
+            text += " Sent to the rocket; the flight computer has not reported it yet."
+        } else if fromFc {
+            text += " The flight computer reports \(reported.label)."
+        } else {
+            text += " The out computer holds \(reported.label); the flight computer has not reported it yet."
+        }
+        if let receiver = device.fcGnss, receiver != "mosaic-G5" {
+            text += " Only the mosaic-G5\u{2019}s navigation filter uses it; the rocket keeps it for when one does."
+        }
+        return text
+    }
+
+    /// Unknown is sent at once (known 0 and zeros). Measured only opens the
+    /// three fields, empty: the offset goes out when they are committed.
+    private var antennaMeasuredBinding: Binding<Bool> {
+        Binding(
+            get: { antennaMeasuredShown },
+            set: { measured in
+                if measured {
+                    guard !profile.antennaOffsetKnown else { return }
+                    antennaDraft = true
+                    loadAntennaFields(.unknown)
+                } else {
+                    antennaDraft = false
+                    updateProfile { $0.antennaOffset = .unknown }
+                    loadAntennaFields(.unknown)
+                    if device.isConnected { device.sendAntennaOffsetConfig(.unknown) }
+                }
+            })
+    }
+
+    /// A field's text, marking the draft typed when the user changes it.
+    private func antennaText(_ text: Binding<String>) -> Binding<String> {
+        Binding(
+            get: { text.wrappedValue },
+            set: { typed in
+                if typed != text.wrappedValue { antennaTyped = true }
+                text.wrappedValue = typed
+            })
+    }
+
+    /// The three fields for `offset`: its millimeters when measured, empty
+    /// when unknown — an Unknown profile's zeros are no measurement.
+    private func loadAntennaFields(_ offset: AntennaOffset) {
+        sAntX = offset.known ? String(offset.xMm) : ""
+        sAntY = offset.known ? String(offset.yMm) : ""
+        sAntZ = offset.known ? String(offset.zMm) : ""
+        antennaTyped = false
+    }
+
+    /// Commit the three fields: all three valid, or nothing is stored or sent
+    /// (the inline error stays up). A no-op once the picker is back on
+    /// Unknown, so a field that loses focus after that cannot undo it.
+    private func applyAntennaOffset() {
+        guard antennaMeasuredShown,
+              let x = AntennaOffset.parseMm(sAntX),
+              let y = AntennaOffset.parseMm(sAntY),
+              let z = AntennaOffset.parseMm(sAntZ)
+        else { return }
+        let offset = AntennaOffset(known: true, xMm: x, yMm: y, zMm: z)
+        antennaDraft = false
+        loadAntennaFields(offset)
+        updateProfile { $0.antennaOffset = offset }
+        if device.isConnected, !antennaOffsetLocked { device.sendAntennaOffsetConfig(offset) }
+    }
+
     @ViewBuilder
     private var controlModeSection: some View {
         Section(header: Text("Control Mode")) {
@@ -1020,6 +1354,11 @@ struct SettingsView: View {
                 ? "PN guidance steers pitch/yaw toward the target. Roll is rate-nulled \u{2014} the profile is ignored."
                 : "The roll controller holds the airframe (null roll, or track a roll-angle profile). No guidance.")
                 .font(.caption).foregroundColor(.secondary)
+            // The picker is the profile; this is what the flight computer holds.
+            GuidanceStateLine(check: GuidanceStateCheck.evaluate(
+                profile: profile, config: device.rocketConfig,
+                isConnected: device.isConnected,
+                isBaseStation: device.isBaseStation))
         }
     }
 
@@ -1140,6 +1479,7 @@ struct SettingsView: View {
             guidanceIntroCopy
             guidanceLawFields
             guidanceSharedFields
+            guidanceTiltFields
         }
     }
 
@@ -1270,6 +1610,30 @@ struct SettingsView: View {
         }
     }
 
+    /// The tilt-limit safety latch, shared by both laws.
+    @ViewBuilder private var guidanceTiltFields: some View {
+        Group {
+            HStack {
+                Text("Tilt limit, boost")
+                Spacer()
+                TextField("15", text: $sPnTiltBoost)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidTiltBoost)
+                Text("deg").foregroundColor(.secondary)
+            }
+            HStack {
+                Text("Tilt limit, coast")
+                Spacer()
+                TextField("20", text: $sPnTiltCoast)
+                    .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 80)
+                    .focused($focusedField, equals: .guidTiltCoast)
+                Text("deg").foregroundColor(.secondary)
+            }
+            Text("Guidance switches off for the rest of the flight if the rocket tilts more than this from vertical. Boost is before burnout, coast after. 1\u{2013}60\u{00B0}.")
+                .font(.caption).foregroundColor(.secondary)
+        }
+    }
+
     @ViewBuilder
     private var rollWaypointEditor: some View {
         Text("The target roll angle ramps linearly between waypoints. Before the first waypoint the controller nulls roll rate (fins keep zero roll through boost); after the last waypoint the final angle is held. To hold an angle, give two consecutive waypoints the same angle.")
@@ -1331,26 +1695,12 @@ struct SettingsView: View {
                 Image(systemName: "power")
                     .font(.system(size: 40)).foregroundColor(.secondary)
                 Text("Rocket is off").font(.title3.bold())
-                Text("The flight computer answers every setting on this screen, and it isn't running yet. Power on the rocket to configure it.")
+                Text("Most settings live on the flight computer, which isn't powered. Power on the rocket to change them. The radio, network ID and firmware below are on the out computer and work now.")
                     .font(.subheadline).foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
-        }
-    }
-
-    private var initializingOverlay: some View {
-        ZStack {
-            Color(.systemBackground).opacity(0.9).ignoresSafeArea()
-            VStack(spacing: 16) {
-                ProgressView().scaleEffect(1.5)
-                Text("Initializing...").font(.title2.bold())
-                Text("Waiting for sensors to start up.\nSettings can be applied once ready.")
-                    .font(.subheadline).foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .padding()
         }
     }
 
@@ -1476,6 +1826,8 @@ struct SettingsView: View {
         sPnMinSpeed = formatDecimal(Double(p.pnMinSpeed))
         sPnKpPos = formatDecimal(Double(p.pnKpPos))
         sPnKdVel = formatDecimal(Double(p.pnKdVel))
+        sPnTiltBoost = formatDecimal(Double(p.pnTiltLimitBoostDeg))
+        sPnTiltCoast = formatDecimal(Double(p.pnTiltLimitCoastDeg))
         rollWaypoints = p.rollWaypoints.map {
             (time: trimFloat($0.timeSeconds), angle: trimFloat($0.angleDeg))
         }
@@ -1483,6 +1835,8 @@ struct SettingsView: View {
         sMainRate = formatInt(p.mainRateFps)
         sMainDeployAlt = formatInt(p.mainDeployAltAglFt)
         sDragK = formatDecimal(p.ballisticDragK)
+        loadAntennaFields(p.antennaOffset)
+        antennaDraft = false
         reloadPyroValueStrings()
     }
 
@@ -1544,12 +1898,14 @@ struct SettingsView: View {
 
     // MARK: - Helpers
 
+    /// `placeholder` nil shows a grey "0" ("0.0" in a decimal field).
     private func stringRow(_ label: String, text: Binding<String>, field: EditField,
-                           unit: String? = nil, decimal: Bool = false) -> some View {
+                           unit: String? = nil, decimal: Bool = false,
+                           placeholder: String? = nil) -> some View {
         HStack {
             Text(label)
             Spacer()
-            TextField(decimal ? "0.0" : "0", text: text)
+            TextField(placeholder ?? (decimal ? "0.0" : "0"), text: text)
                 .keyboardType(decimal ? .decimalPad : .numbersAndPunctuation)
                 .multilineTextAlignment(.trailing)
                 .frame(width: 80)
@@ -1725,11 +2081,16 @@ struct SettingsView: View {
         // they log on rejection.  Both laws' values are sent every time.
         let kpPos      = max(0, parseFloat(sPnKpPos,      fallback: profile.pnKpPos))
         let kdVel      = max(0, parseFloat(sPnKdVel,      fallback: profile.pnKdVel))
+        // Tilt limits: the FC takes (0, 60] and keeps its previous value for
+        // anything else, so clamp to what it will fly.
+        let tiltBoost  = min(60, max(1, parseFloat(sPnTiltBoost, fallback: profile.pnTiltLimitBoostDeg)))
+        let tiltCoast  = min(60, max(1, parseFloat(sPnTiltCoast, fallback: profile.pnTiltLimitCoastDeg)))
         updateProfile {
             $0.pnNavGain = navGain; $0.pnMaxAccel = maxAccel; $0.pnAccelToFin = accelToFin
             $0.pnMaxFinDeg = maxFin; $0.pnMinSpeed = minSpeed; $0.pnCoastDelayMs = coastDelay
             $0.pnTargetAltM = targetAlt
             $0.pnKpPos = kpPos; $0.pnKdVel = kdVel
+            $0.pnTiltLimitBoostDeg = tiltBoost; $0.pnTiltLimitCoastDeg = tiltCoast
         }
         if device.isConnected {
             device.sendGuidanceConfig(enabled: profile.guidanceEnabled,
@@ -1739,7 +2100,8 @@ struct SettingsView: View {
                                       targetE: profile.pnTargetE, targetN: profile.pnTargetN,
                                       targetAlt: targetAlt,
                                       kpPos: kpPos, kdVel: kdVel,
-                                      guidanceLaw: profile.pnGuidanceLaw)
+                                      guidanceLaw: profile.pnGuidanceLaw,
+                                      tiltLimitBoostDeg: tiltBoost, tiltLimitCoastDeg: tiltCoast)
         }
         showApplied($guidanceApplied)
     }
@@ -1803,6 +2165,40 @@ struct SettingsView: View {
             : "Single fixed channel — the default."
     }
 
+    /// The base station reported "lts", so its firmware takes the command.
+    /// Older firmware never gets it sent.
+    private var txSlotsSupported: Bool { device.rocketConfig?.loraTxSlots != nil }
+
+    private var txSlotsFooter: String {
+        if device.isConnected, device.rocketConfig != nil, !txSlotsSupported {
+            return "This base station\u{2019}s firmware doesn\u{2019}t support transmit slots. Update it to use this."
+        }
+        let when = "Slots only apply in fixed-frequency mode at SF8."
+        if txSlotsOn && linkModeHopping {
+            return "On, but not in effect while hopping. " + when
+        }
+        if txSlotsOn, let sf = device.rocketConfig?.loraSF, sf != 8 {
+            return "On, but not in effect at SF\(sf). " + when
+        }
+        return txSlotsOn
+            ? "ON \u{2014} the base station gives each rocket its own third of the 500 ms period (by rocket ID, IDs 1, 2 and 3 one each), so up to three rockets share the channel without colliding. " + when
+            : "OFF \u{2014} every rocket transmits on its own timing. Fine for one rocket; with several, packets collide. " + when
+    }
+
+    private var txSlotsBinding: Binding<Bool> {
+        Binding(
+            get: { txSlotsOn },
+            set: { newValue in
+                guard newValue != txSlotsOn else { return }
+                txSlotsOn = newValue
+                txSlotsTouchedAt = Date()   // hold off hydration (see onReceive)
+                if device.isConnected, txSlotsSupported {
+                    device.sendLoRaTxSlots(newValue)
+                }
+            }
+        )
+    }
+
     private var linkModeBinding: Binding<Bool> {
         Binding(
             get: { linkModeHopping },
@@ -1847,6 +2243,43 @@ struct SettingsView: View {
 }
 
 // MARK: - Pyro live controls
+
+/// #1629: what this flight computer holds for calibration, one row per sensor,
+/// as the board said it (never the profile). A child view, like
+/// PyroChannelTestControls below, so live device changes stay out of
+/// SettingsView's own sections. Android twin: SettingsScreen's
+/// BoardCalibrationRows.
+private struct BoardCalibrationRows: View {
+    @ObservedObject var device: BLEDevice
+
+    private func color(_ value: Bool?) -> Color {
+        switch value {
+        case true?:  return .green
+        case false?: return .orange
+        case nil:    return .secondary
+        }
+    }
+
+    private func row(_ label: String, _ value: Bool?, _ text: String) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(text).foregroundColor(color(value))
+        }
+    }
+
+    var body: some View {
+        let cal = device.calibration
+        row("Magnetometer", cal.mag, BoardCalibration.rowText(cal.mag))
+        row("Accelerometer (six faces)", cal.accel, BoardCalibration.rowText(cal.accel))
+        row("Gyro (pad calibration)", cal.gyro, BoardCalibration.rowText(cal.gyro))
+        // A refinement, not a need: never orange.
+        row("High-g alignment", cal.highGAligned == true ? true : nil,
+            BoardCalibration.highGRowText(cal.highGAligned))
+        Text("Read from this flight computer. Each board keeps its own calibration; a rocket profile does not carry it to another board.")
+            .font(.caption).foregroundColor(.secondary)
+    }
+}
 
 /// Continuity readout + Test Continuity / Test Pyro Channel for one channel,
 /// factored out of SettingsView's pyro Section so the section that holds the
@@ -1927,5 +2360,70 @@ private struct PyroChannelTestControls: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Flight computer not running
+
+/// Stands in for the flight computer's settings while its rail is on but it is
+/// not running its flight software: still starting, stuck partway through, not
+/// reporting at all, in rescue mode, or with no flight loop.  A child view for the same reason as
+/// PyroChannelTestControls: the boot line comes from live telemetry, and that
+/// churn belongs out of SettingsView's body (#361).
+///
+/// What it says matters more than usual, because the operator reading it may
+/// be looking at a rocket that will not boot.  It names what the flight
+/// computer is doing, says what still works, and points at the one way out
+/// that does not involve opening the airframe: a flight computer update, which
+/// says for itself whether the flight computer answered.
+struct FlightComputerNotRunningSection: View {
+    @ObservedObject var device: BLEDevice
+
+    var body: some View {
+        let boot = device.telemetry.fcBootProgress
+        let rescue = boot?.isRescue == true
+        let noFlightLoop = boot?.isNoFlightLoop == true
+        Section {
+            VStack(spacing: 12) {
+                Image(systemName: noFlightLoop ? "exclamationmark.triangle"
+                                  : rescue ? "lifepreserver" : "hourglass")
+                    .font(.system(size: 40))
+                    .foregroundColor(rescue || noFlightLoop ? .orange : .secondary)
+                Text(Self.title(boot)).font(.title3.bold())
+                    .multilineTextAlignment(.center)
+                if let boot, !rescue, !noFlightLoop {
+                    // The step it is on (and anything that finished degraded).
+                    // The dashboard carries the stall timing; this just names it.
+                    Text(boot.line())
+                        .font(.subheadline)
+                        .foregroundColor(boot.degradedSubsystems.isEmpty ? .secondary : .orange)
+                        .multilineTextAlignment(.center)
+                }
+                Text(Self.explanation(boot))
+                    .font(.subheadline).foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+        }
+    }
+
+    static func title(_ boot: TelemetryData.FcBootProgress?) -> String {
+        guard let boot else { return "Waiting for flight computer" }
+        if boot.isNoFlightLoop { return "Flight computer not running" }
+        return boot.isRescue ? "Flight computer in rescue mode" : "Flight computer starting"
+    }
+
+    static func explanation(_ boot: TelemetryData.FcBootProgress?) -> String {
+        guard let boot else {
+            return "The flight computer hasn't reported in yet. Its settings unlock once it is running. The radio, network ID and firmware below are on the out computer and work now."
+        }
+        if boot.isNoFlightLoop {
+            return "It finished starting, but its flight loop did not start: this firmware image leaves it too little memory. It sends no data and answers no settings, a power cycle boots the same way, and a flight computer update from the app can't reach it. Flash a different image to the flight computer over USB. The radio and network ID below are on the out computer and work now."
+        }
+        if boot.isRescue {
+            return "Its last boots did not finish, so it started only what a firmware update needs. Update the flight computer from Firmware below, or power-cycle the rocket to try a normal boot. Its settings come back once it boots normally."
+        }
+        return "The settings stored on the flight computer unlock once it finishes starting. The radio, network ID and firmware below are on the out computer and work now. If it is stuck, you can still try a flight computer update: the update tells you whether the flight computer answered."
     }
 }

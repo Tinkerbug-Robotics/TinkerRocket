@@ -38,6 +38,20 @@ struct board_pins
     // placement on a V7 that carries one has never been checked.
     static constexpr float MAG_ROT_Z_DEG_IIS2MDC = 90.0f;
 
+    // --- IMU and MMC5983MA placement (sensor -> board frame) ---
+    // A reading is multiplied by AXIS_SIGN, chip axis by chip axis, as it is
+    // read (SensorCollector::configureAxisSigns), and the converter then turns
+    // it ROT_Z_DEG, CCW about +Z. Every sign is +1 on a board whose parts sit
+    // on the front, so what is logged is what the chip read; only a part on
+    // the back has one (board_m2.h). These were config.h's, one pair for
+    // every board, until the Beetle V2 moved its IMU and magnetometer to the
+    // back.
+    // The MMC5983MA is the fallback when no IIS2MDC answers.
+    static constexpr float  ISM6HG256_ROT_Z_DEG    = -45.0f;
+    static constexpr int8_t ISM6HG256_AXIS_SIGN[3] = {1, 1, 1};
+    static constexpr float  MMC5983MA_ROT_Z_DEG    = 180.0f;
+    static constexpr int8_t MMC5983MA_AXIS_SIGN[3] = {1, 1, 1};
+
     // ### Part presence ###
     static constexpr bool USE_BMP585 = true;
     static constexpr bool USE_MMC5983MA = true;
@@ -84,6 +98,12 @@ struct board_pins
     static constexpr uint8_t PYRO3_FIRE_PIN = 34;
     static constexpr uint8_t PYRO4_CONT_PIN = 51;
     static constexpr uint8_t PYRO4_FIRE_PIN = 50;
+    // One arm for all four channels: no further arm lines (V5's per-channel
+    // arms ride PYRO_ARM_GANG_PINS). Continuity reads with the arm down, and
+    // LOW means a load is present (#264).
+    static constexpr int8_t PYRO_ARM_GANG_PINS[3] = {-1, -1, -1};
+    static constexpr int  PYRO_CONT_CLOSED_LEVEL = 0;
+    static constexpr bool PYRO_CONT_NEEDS_ARM    = false;
 
     // ### Fin servos ###
     static constexpr uint8_t SERVO_PIN_1 = 43;
@@ -96,6 +116,10 @@ struct board_pins
     static constexpr uint8_t RED_LED_PIN = 2;
     static constexpr uint8_t BLUE_LED_PIN = 29;
 
+    // No hold-up supercap sense on this board (#1409).
+    static constexpr int   SCAP_ADC_PIN       = -1;
+    static constexpr float SCAP_DIVIDER_RATIO = 1.0f;   // unused with no pin
+
     // ### I2C command/config channel to the OutComputer ###
     static constexpr uint8_t ESP_SDA_PIN = 41;
     static constexpr uint8_t ESP_SCL_PIN = 42;
@@ -106,9 +130,15 @@ struct board_pins
     static constexpr int I2S_DOUT_PIN  = 23;
     static constexpr int I2S_FSYNC_PIN = 17;
 
-    // ### Power gates (V8+ topology; -1 = rail not FC-switched) ###
+    // ### Power gates (-1 = rail not FC-switched) ###
+    // The GNSS rail is the out computer's (its GPIO33, GPS_ACT). The servo
+    // rail is ours: SERVO_ACT (GPIO22) -> R67 (1k) -> Q9, a low-side switch on
+    // the servo return J7.8, with R68 (10k) holding it off. Left at -1 until
+    // 2026-10-19, so a V7 never powered its servos; found by checking this
+    // header against a netlist export of the archived V7 schematic, which
+    // agrees with every other pin here. Driven high at boot, as on V8-V10.
     static constexpr int GPS_ACT_PIN = -1;
-    static constexpr int SERVO_ACT_PIN = -1;
+    static constexpr int SERVO_ACT_PIN = 22;   // SERVO_ACT -> Q9 (servo return)
 
     // ### Power latch (V9+ only; -1 = the FC cannot hold its own rail) ###
     static constexpr int PWR_HOLD_PIN = -1;

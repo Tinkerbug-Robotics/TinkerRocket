@@ -158,4 +158,159 @@ inline bool mayStartTx(uint32_t now_ms,
     return age <= window_end;
 }
 
+// ---------------------------------------------------------------------------
+// Multi-rocket gap gate (three-rocket support).
+//
+// mayStartTx protects ONE rocket: the focused one, whose cadence rx_cadence
+// learns (#570). With three rockets on the channel the air is busy three times
+// per 500 ms, and an uplink fired into the focused rocket's quiet stretch lands
+// on top of somebody else's frame. Slotted, the three FAST frames sit 500/3 ms
+// apart and leave a ~54 ms hole after each one (166.7 - 102 - 10 at SF8/BW250/
+// CR4-5) — enough for every short command (a 6 B heartbeat is 35 ms, the 10 B
+// slot adjust 40 ms, the 17 B cmd-10 relay 50 ms).
+//
+// So predict every fresh rocket's next frames and start an uplink only when
+// [now, now + airtime] hits none of them:
+//   * frame k of a rocket starts at (its last measured on-air start) + k * 500.
+//     The FIXED period, not the learned RxCadence: a rocket's frames are 500 ms
+//     apart by construction, and the learned value is the focused rocket's only.
+//   * every frame is assumed FAST (the longer one) — guessing FAST vs SLOW buys
+//     nothing. Name beacons are not predicted at all: one lost to an uplink
+//     now and then costs a name refresh, nothing more.
+//   * kGapMarginMs is kept clear before each predicted start for jitter, and
+//     after the end of a frame not heard yet: frames only run late against
+//     the prediction (free-running: 500 ms + loop time per period), and a TX
+//     at the predicted end clipped their tails — in a simulation of three
+//     free-running rockets that alone hit more frames than today's gate.
+//   * only rockets heard within kGapFreshMs on the CURRENT channel and SF count;
+//     a rocket on another channel or modulation is not on our air.
+//
+// A command that does not fit the holes (the 33 B channel-set push is 71 ms)
+// would wait forever, so each command carries a GapBudget: the time the gap gate
+// held it while today's focused gate would have let it go. When that reaches
+// kGapBudgetMs the command finishes its retries under the focused gate. That
+// bounds what the gate can ever add to a command at ~400 ms over today's
+// behaviour — which keeps the cmd-10 relay inside TXN_MAX_RELAY_MS and the
+// coordinated-scan pause arithmetic valid — while a short command in a slotted
+// air goes one retry per hole and is never charged at all for the time today's
+// gate would have held it too.
+// ---------------------------------------------------------------------------
+inline constexpr uint32_t kFramePeriodMs = 500;   // telemetry period, fixed
+inline constexpr uint32_t kGapMarginMs   = 10;    // clear air before each predicted start
+inline constexpr uint32_t kGapFreshMs    = 2000;  // a rocket heard this recently is on the air
+inline constexpr uint32_t kGapBudgetMs   = 400;   // per command, then the focused gate
+
+// What the gate needs to know about one tracked rocket.
+struct RocketPhase
+{
+    bool     valid          = false;  // a frame start has been measured
+    uint32_t start_ms       = 0;      // on-air start of the last frame heard
+    uint32_t heard_ms       = 0;      // when that frame was received
+    uint32_t chan_key       = 0;      // channel/modulation it was heard on (caller's key)
+    // Extra clear air before this rocket's predicted starts: its start was
+    // measured from a late clock (the UART modem has no RX stamp, so the
+    // loop time stands in, late by the link and the loop) and so is every
+    // prediction made from it.
+    uint8_t  lead_extra_ms  = 0;
+};
+
+// True when a TX of tx_airtime_ms starting at now overlaps no predicted frame of
+// this one rocket. frame_airtime_ms is the FAST frame's time on air.
+inline bool clearOfRocket(uint32_t now_ms, uint32_t tx_airtime_ms,
+                          uint32_t frame_airtime_ms, const RocketPhase& r,
+                          uint32_t period_ms = kFramePeriodMs,
+                          uint32_t margin_ms = kGapMarginMs)
+{
+    // Elapsed since the measured start; wrap-safe. A start in the future (a
+    // clock oddity) is treated as "frame on air now" — never the permissive case.
+    const uint32_t e = now_ms - r.start_ms;
+    if ((int32_t)e < 0) return false;
+    // k = 0 is the frame we heard: on air for a FAST frame's time from its
+    // start (a SLOW frame may have a beacon behind it).
+    if (e < frame_airtime_ms) return false;
+    // k >= 1 have not been heard yet, and a frame only ever runs LATE against
+    // the prediction (a free-running rocket's period is 500 ms plus its loop
+    // time; a slotted one adds send jitter). So the margin guards both ends of
+    // a predicted frame: [kP - margin, kP + F + margin). Costs nothing in the
+    // steady state — the frame is heard as it ends and becomes k = 0 — and
+    // stops a TX clipping the tail of a frame that is a few ms late.
+    // First k >= 1 whose guarded end is after now:
+    const uint32_t tail = frame_airtime_ms + margin_ms;
+    const uint32_t k = (e >= tail) ? ((e - tail) / period_ms + 1u) : 1u;
+    const uint32_t next_start = k * period_ms;   // relative to r.start_ms
+    // Blocked when that frame's guarded window starts before our TX ends (or
+    // has not yet ended: next_start <= e). Later frames start later still.
+    return next_start >= e + tx_airtime_ms + margin_ms + r.lead_extra_ms;
+}
+
+// The gap gate over every tracked rocket. A rocket counts only when it was
+// heard within fresh_ms on chan_key (the radio's channel/modulation now).
+inline bool gapClear(uint32_t now_ms, uint32_t tx_airtime_ms, uint32_t frame_airtime_ms,
+                     const RocketPhase* rockets, size_t n, uint32_t chan_key,
+                     uint32_t fresh_ms = kGapFreshMs,
+                     uint32_t period_ms = kFramePeriodMs,
+                     uint32_t margin_ms = kGapMarginMs)
+{
+    for (size_t i = 0; i < n; i++)
+    {
+        const RocketPhase& r = rockets[i];
+        if (!r.valid || r.chan_key != chan_key) continue;
+        if ((now_ms - r.heard_ms) >= fresh_ms) continue;   // stale: not on the air
+        if (!clearOfRocket(now_ms, tx_airtime_ms, frame_airtime_ms, r, period_ms, margin_ms))
+            return false;
+    }
+    return true;
+}
+
+// Per-command budget: how long the gap gate has held this command while the
+// focused gate would have sent it. Reset when a command reaches the queue head.
+struct GapBudget
+{
+    uint32_t charged_ms = 0;
+    uint32_t prev_ms    = 0;      // previous held pass; 0 = not holding
+    bool     exhausted  = false;  // the rest of this command's retries use the focused gate
+
+    void reset() { *this = GapBudget{}; }
+    // The command is not ready for reasons of its own (radio busy, a scan, a
+    // retune pending): that wait is nobody's gap, so stop the clock.
+    void pause() { prev_ms = 0; }
+};
+
+enum class GateMode : uint8_t { Gap, Focused };
+
+// Decide one pass for the head command, which is otherwise ready to transmit
+// (retry interval elapsed, radio free, no scan). gap_applicable is false where
+// the gap gate does not apply at all (the BS is following a hop: one rocket, one
+// schedule, today's gate). Returns true to transmit now; mode says which gate
+// decided it (for the stats).
+inline bool gateDecide(GapBudget& b, uint32_t now_ms, bool gap_applicable,
+                       bool gap_clear, bool focused_allows, GateMode& mode,
+                       uint32_t budget_ms = kGapBudgetMs)
+{
+    if (!gap_applicable || b.exhausted)
+    {
+        mode = GateMode::Focused;
+        b.prev_ms = 0;
+        return focused_allows;
+    }
+    mode = GateMode::Gap;
+    if (gap_clear)
+    {
+        b.prev_ms = 0;
+        return true;
+    }
+    // Held by the gap gate. Charge only what today's gate would not also have
+    // held: that is the delay this gate adds.
+    if (b.prev_ms != 0 && focused_allows) b.charged_ms += now_ms - b.prev_ms;
+    b.prev_ms = now_ms;
+    if (b.charged_ms >= budget_ms)
+    {
+        b.exhausted = true;
+        b.prev_ms   = 0;
+        mode        = GateMode::Focused;
+        return focused_allows;
+    }
+    return false;
+}
+
 }  // namespace bs_uplink_txwin

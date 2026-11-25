@@ -97,4 +97,11 @@ int EphemerisStore::satellites(int sys) const
     return n;
 }
 
+#ifdef TR_EPH_CAPACITY
+size_t EphemerisStore::builtCapacity()
+{
+    return kCapacity;
+}
+#endif
+
 }  // namespace gnss_raw

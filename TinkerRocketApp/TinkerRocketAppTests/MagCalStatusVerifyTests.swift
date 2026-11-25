@@ -94,4 +94,21 @@ final class MagCalStatusVerifyTests: XCTestCase {
                            "Missing rejectMessage for \(code)")
         }
     }
+
+    /// The verify screen's Save button: orange "Save anyway" until coverage
+    /// and samples are met, then "Save" (dark blue), whether or not the |B|
+    /// rows are green; those decide only VERIFY_DONE over FORCE_APPLY.
+    func testTheVerifySaveButtonSaysSaveOnceThereAreEnoughPoints() {
+        let early = MagCalVerifySave(enoughPoints: false, allGood: false)
+        XCTAssertEqual(early.label, "Save anyway")
+        XCTAssertEqual(early.footer, "Keep rotating until coverage and samples are green. Save anyway saves now, without the checks.")
+
+        let redB = MagCalVerifySave(enoughPoints: true, allGood: false)
+        XCTAssertEqual(redB.label, "Save")
+        XCTAssertTrue(redB.footer.hasPrefix("Enough points, but a |B| row is not green."))
+
+        let green = MagCalVerifySave(enoughPoints: true, allGood: true)
+        XCTAssertEqual(green.label, "Save")
+        XCTAssertEqual(green.footer, "All checks green — tap Save to commit the cal to flight-computer memory.")
+    }
 }

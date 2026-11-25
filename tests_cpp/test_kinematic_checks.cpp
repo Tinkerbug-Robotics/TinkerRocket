@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <limits>
 #include "TR_KinematicChecks.h"
 #include "fixtures/boost_20260517_rp54.h"
 #include "GroundRefFreeze.h"
@@ -41,6 +42,36 @@ protected:
         kc.kinematicChecks(alt, acc_mag, pos, vel, roll_rate, true, gps_alt, new_gps,
                            pitch_rad, burnout, baro_lockout, gps_vel_u, ekf_healthy, baro_healthy,
                            imu_healthy, gnss_may_vote);
+    }
+
+    // The vote by sensor (owner's design 2026-11-19).  The filter is passed
+    // as sure of apogee -- falling at 50 m/s, nose down -- to show it casts
+    // no vote; the sensors' own readings come in the InertialVote.  The
+    // barometer reads a constant 100 m: available when healthy, never passing.
+    void callSensor(float inertial_vz, float inertial_pitch, bool pitch_may_vote,
+                    bool new_gps, float gps_vel_u, bool baro_healthy,
+                    bool inertial_healthy = true) {
+        const float alt = 100.0f;
+        float pos[3] = {0, 0, alt};
+        float vel[3] = {0, 0, -50.0f};
+        TR_KinematicChecks::InertialVote iv;
+        iv.in_use = true;
+        iv.healthy = inertial_healthy;
+        iv.vz_up_mps = inertial_vz;
+        iv.height_m = alt;
+        iv.pitch_rad = inertial_pitch;
+        iv.pitch_may_vote = pitch_may_vote;
+        kc.kinematicChecks(alt, 5.0f, pos, vel, 0.0f, true, alt, new_gps,
+                           /*filter pitch*/ -1.0f, /*burnout*/ true, /*baro_lockout*/ false,
+                           gps_vel_u, /*ekf_healthy*/ true, baro_healthy, /*imu_healthy*/ true,
+                           /*gnss_may_vote*/ true, /*baro_reading_fresh*/ true, &iv);
+    }
+    void launch() {
+        for (int i = 0; i < 80; i++) {
+            setMockMillis(i * 2);
+            callFlight(0.5f * i, 25.0f, 10.0f);
+        }
+        ASSERT_TRUE(kc.launch_flag);
     }
 };
 
@@ -311,6 +342,37 @@ TEST_F(KinematicChecksTest, Launch_DeadIMU_PressureStep_NoLaunch) {
     EXPECT_FALSE(kc.launch_flag);
 }
 
+// The rate gate's step floor: a vented bay's static port passes the airflow's
+// pressure noise, 1-1.7 m rms per sample at 70-100 m/s (BARC 2026-10-24), and
+// at the BMP585's 2 ms spacing the 300 m/s rate alone trips on 0.6 m.  ±2 m
+// noise about a level altitude must be kept: the rate alone dropped every
+// sample on the far side of the first one it accepted, so the filter sat on
+// +2 m instead of averaging.
+TEST_F(KinematicChecksTest, BaroGate_StaticPortNoiseInsideTheStepFloor_IsKept) {
+    for (int i = 0; i < 2000; i++) {
+        setMockMillis(i * 2);
+        callStationary(100.0f + ((i & 1) ? -2.0f : 2.0f));
+    }
+    EXPECT_NEAR(kc.alt_est, 100.0f, 0.5f);
+}
+
+// ...while a spike past the floor, faster than the rate, is still dropped:
+// a single 6 m sample in 2 ms does not reach the filter.
+TEST_F(KinematicChecksTest, BaroGate_SpikePastTheStepFloor_IsDropped) {
+    for (int i = 0; i < 1000; i++) {
+        setMockMillis(i * 2);
+        callStationary(100.0f);
+    }
+    const float before = kc.alt_est;
+    setMockMillis(2000);
+    callStationary(106.0f);
+    EXPECT_NEAR(kc.alt_est, before, 0.05f);
+    // A real 4 m step inside the floor is taken at once.
+    setMockMillis(2002);
+    callStationary(104.0f);
+    EXPECT_GT(kc.alt_est, before + 0.05f);
+}
+
 // The gate: a working IMU that shows no boost vetoes the barometer.  Same
 // 20 m/s climb, IMU fresh at 1 g — the car-window case — must NOT launch.
 TEST_F(KinematicChecksTest, Launch_HealthyIMU_ClimbAlone_NoLaunch) {
@@ -468,15 +530,21 @@ TEST_F(KinematicChecksTest, Apogee_DeadIMUInBoost_BaroBackstopStillFires) {
     // mach lockout latches true and never releases (it clears only below
     // BARO_MACH_LOCKOUT_OFF) — which vetoed the backstop and left the vehicle
     // ballistic.  The backstop must NOT be gated on the lockout and must fire
-    // anyway.  Stays silent until > 30 m below the peak, then latches.
-    uint32_t t = 600;
+    // anyway.  Stays silent until > 30 m below the peak, then latches.  The
+    // IMU is reported unhealthy, as it is when it has died: with a healthy IMU
+    // the backstop waits for burnout and the lockout's end (the V10 pre-flight
+    // review's tests below).  The descent starts past the altitude filter's
+    // first second, as in flight, where the filter starts on the pad (#1754:
+    // the stale-IMU backstop waits out a filter that has just started).
+    uint32_t t = 1100;
     float alt = 140.0f;
     bool fired_too_high = false;
     for (int i = 0; i < 160; i++, t += 2) {
         alt -= 0.5f;
         setMockMillis(t);
         callFlight(alt, 5.0f, -10.0f, 0.0f, 0.0f, false, -0.5f,
-                   /*burnout*/false, /*baro_lockout*/true);
+                   /*burnout*/false, /*baro_lockout*/true, 0.0f,
+                   /*ekf_healthy*/false, /*baro_healthy*/true, /*imu_healthy*/false);
         if (kc.apogee_flag && (140.0f - kc.alt_est) < 28.0f) fired_too_high = true;
     }
     EXPECT_TRUE(kc.apogee_flag)
@@ -850,6 +918,256 @@ TEST_F(KinematicChecksTest, Recovery_SeededBeforeApogee_QuiescenceStillCannotLat
     EXPECT_FALSE(kc.alt_landed_flag);
 }
 
+// #1754: an FC reboot in the boost or coast restores the flight from a
+// snapshot taken just before the reset. The restore used to seed max_altitude
+// from it; the snapshot's altitude is behind the climb, so the 50 m spike
+// window refused every reading of the rest of the climb, and the barometer's
+// apogee vote and backstop -- which measure the drop from max_altitude -- came
+// on the descent, back near the snapshot's altitude. After a restore the
+// InertialVertical voters are not flying (only enterInflight launches them) and
+// the filter casts no vote, so the barometer decides, alone or with GNSS.
+namespace {
+
+struct RestoredCoast {
+    // Drag-free coast from the restore: 400 m, 80 m/s up (apogee 726.2 m at
+    // t = 8.155 s after the restore). The snapshot was taken at 300 m.
+    static constexpr float kH0 = 400.0f, kV0 = 80.0f, kG = 9.80665f;
+    static float alt(float t) { return kH0 + kV0 * t - 0.5f * kG * t * t; }
+    static float vel(float t) { return kV0 - kG * t; }
+    static float apogeeT() { return kV0 / kG; }
+    static float apogeeH() { return alt(apogeeT()); }
+};
+
+struct CallResult { bool called = false; float t = 0.0f; float alt = 0.0f; bool backstop = false; };
+// The first pass after the restore: a bad reading, or none.
+struct First { float error_m = 0.0f; bool no_reading = false; };
+
+} // namespace
+
+class KinematicRestoreTest : public KinematicChecksTest {
+protected:
+    // One pass as the flight loop makes it after a restore: the vote by
+    // sensor with the inertial voters not flying, burnout restored, the
+    // barometer healthy, GNSS (when given) at 10 Hz and admitted.
+    void pass(float t_s, bool with_gnss, float baro_error_m = 0.0f, bool new_baro = true,
+              bool imu_healthy = true) {
+        const float alt = RestoredCoast::alt(t_s);
+        float pos[3] = {0, 0, alt};
+        float vel[3] = {0, 0, RestoredCoast::vel(t_s)};
+        TR_KinematicChecks::InertialVote iv;
+        iv.in_use = true;
+        iv.healthy = false;
+        const uint32_t ms = static_cast<uint32_t>(t_s * 1000.0f + 0.5f);
+        const bool new_gps = with_gnss && (ms % 100U == 0U);
+        kc.kinematicChecks(new_baro ? alt + baro_error_m : 0.0f, 3.0f, pos, vel, 0.0f, new_baro,
+                           alt, new_gps, /*pitch*/ 1.0f, /*burnout*/ true, /*baro_lockout*/ false,
+                           RestoredCoast::vel(t_s), /*ekf_healthy*/ true, /*baro_healthy*/ true,
+                           imu_healthy, /*gnss_may_vote*/ true,
+                           /*baro_reading_fresh*/ true, &iv);
+    }
+    // `first` shapes the first pass after the restore: a bad reading, or none.
+    CallResult fly(bool with_gnss, First first = {}, bool imu_healthy = true) {
+        CallResult r;
+        for (uint32_t ms = 0; ms <= 20000U; ms += 2U) {
+            setMockMillis(5000U + ms);
+            const float t = ms / 1000.0f;
+            if (ms == 0U) pass(t, with_gnss, first.error_m, !first.no_reading, imu_healthy);
+            else          pass(t, with_gnss, 0.0f, true, imu_healthy);
+            if (kc.apogee_flag) {
+                r.called = true; r.t = t; r.alt = RestoredCoast::alt(t);
+                r.backstop = kc.apogee_backstop_flag;
+                break;
+            }
+        }
+        return r;
+    }
+};
+
+TEST_F(KinematicRestoreTest, BeforeApogee_BarometerAlone_CallsApogeeNearThePeak) {
+    kc.launch_flag = true;                                   // as the restore sets it
+    kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+    EXPECT_EQ(kc.max_altitude, 0.0f) << "not seeded before apogee";
+
+    const CallResult r = fly(/*with_gnss=*/false);
+    ASSERT_TRUE(r.called);
+    EXPECT_TRUE(r.backstop) << "the barometer alone calls by its backstop";
+    EXPECT_GT(r.t, RestoredCoast::apogeeT());
+    EXPECT_LT(r.t - RestoredCoast::apogeeT(), 3.5f) << "called " << r.t << " s, apogee "
+                                                    << RestoredCoast::apogeeT() << " s";
+    EXPECT_LT(RestoredCoast::apogeeH() - r.alt, 45.0f);
+}
+
+TEST_F(KinematicRestoreTest, BeforeApogee_BarometerAndGnss_VoteNearThePeak) {
+    kc.launch_flag = true;
+    kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+
+    const CallResult r = fly(/*with_gnss=*/true);
+    ASSERT_TRUE(r.called);
+    EXPECT_FALSE(r.backstop) << "two sensors: the vote calls";
+    EXPECT_LT(r.t - RestoredCoast::apogeeT(), 2.0f);
+    EXPECT_LT(RestoredCoast::apogeeH() - r.alt, 20.0f);
+}
+
+TEST_F(KinematicRestoreTest, BeforeApogee_ABadLowFirstReading_StillCallsNearThePeak) {
+    // The rate gate takes the first reading unchecked and then refuses the
+    // next ten good ones against it; the eleventh pulls the filter most of
+    // the way up in one step. The maximum follows the filter while it settles.
+    for (float err : {-55.0f, -80.0f, -200.0f}) {
+        kc.reset();
+        kc.launch_flag = true;
+        kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+        const CallResult r = fly(/*with_gnss=*/false, First{err, false});
+        ASSERT_TRUE(r.called) << err;
+        EXPECT_LT(r.t - RestoredCoast::apogeeT(), 3.5f) << "first reading " << err << " m";
+        EXPECT_LT(RestoredCoast::apogeeH() - r.alt, 45.0f) << "first reading " << err << " m";
+    }
+}
+
+TEST_F(KinematicRestoreTest, BeforeApogee_ABadHighFirstReading_DoesNotCallInTheClimb) {
+    // With the IMU stale after the reboot the backstop is not gated on
+    // burnout; a maximum left at a high first reading would let it fire while
+    // the filter pulls back down to the climbing rocket. Kilometres high, the
+    // filter is still falling when the follow window closes; the stale-IMU
+    // backstop then waits for the filter's first second.
+    for (float err : {40.0f, 150.0f, 10000.0f, 30000.0f}) {
+        kc.reset();
+        kc.launch_flag = true;
+        kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+        const CallResult r = fly(/*with_gnss=*/false, First{err, false}, /*imu_healthy=*/false);
+        ASSERT_TRUE(r.called) << err;
+        EXPECT_GT(r.t, RestoredCoast::apogeeT()) << "called climbing, first reading +" << err << " m";
+        EXPECT_LT(RestoredCoast::apogeeH() - r.alt, 45.0f) << "first reading +" << err << " m";
+    }
+}
+
+TEST_F(KinematicRestoreTest, BeforeApogee_AFirstPassWithNoReading_StillCallsNearThePeak) {
+    kc.launch_flag = true;
+    kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+    const CallResult r = fly(/*with_gnss=*/false, First{0.0f, /*no_reading=*/true});
+    ASSERT_TRUE(r.called);
+    EXPECT_LT(r.t - RestoredCoast::apogeeT(), 3.5f);
+    EXPECT_LT(RestoredCoast::apogeeH() - r.alt, 45.0f);
+}
+
+TEST_F(KinematicRestoreTest, TheOldSeedBeforeApogee_CalledApogeeOnTheDescent) {
+    // Why the restore must not seed before apogee: a seeded maximum is
+    // outside the follow window (that is for an unseeded start), so the 50 m
+    // window holds it at the snapshot's 300 m through the whole climb.
+    kc.launch_flag = true;
+    kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/true);
+    ASSERT_EQ(kc.max_altitude, 300.0f);
+
+    const CallResult r = fly(/*with_gnss=*/false);
+    ASSERT_TRUE(r.called);
+    EXPECT_GT(RestoredCoast::apogeeH() - r.alt, 300.0f)
+        << "the seeded maximum stalls the barometer until the descent";
+    EXPECT_LT(RestoredCoast::vel(r.t), -70.0f);
+}
+
+TEST_F(KinematicRestoreTest, PastApogee_TheRunningMaximumIsTheSnapshots) {
+    kc.launch_flag = true;
+    kc.apogee_flag = true;
+    kc.restoreFlightMaxima(800.0f, 150.0f, /*past_apogee=*/true);
+    EXPECT_EQ(kc.max_altitude, 800.0f);
+    EXPECT_EQ(kc.maxAltitudeReported(), 800.0f);
+    EXPECT_EQ(kc.max_speed, 150.0f);
+}
+
+TEST_F(KinematicRestoreTest, BeforeApogee_TheReportedMaximumKeepsTheSnapshotUntilPassed) {
+    // #1154 item 9 still holds: the flight's reported maximum never drops
+    // below the snapshot's.
+    kc.launch_flag = true;
+    kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+    EXPECT_EQ(kc.maxAltitudeReported(), 300.0f);
+    EXPECT_EQ(kc.max_speed, 120.0f);
+
+    setMockMillis(1000);
+    callFlight(250.0f, 3.0f, 10.0f);             // a first reading below it
+    EXPECT_EQ(kc.max_altitude, 250.0f);
+    EXPECT_EQ(kc.maxAltitudeReported(), 300.0f);
+
+    for (int i = 1; i <= 2000; i++) {            // climb 0.2 m a pass to 650 m
+        setMockMillis(1000 + i * 2);
+        callFlight(250.0f + 0.2f * i, 3.0f, 10.0f);
+    }
+    EXPECT_GT(kc.max_altitude, 640.0f) << "the running maximum follows the climb";
+    EXPECT_EQ(kc.maxAltitudeReported(), kc.max_altitude);
+}
+
+TEST_F(KinematicRestoreTest, ANanSnapshotIsIgnored) {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    kc.restoreFlightMaxima(nan, nan, /*past_apogee=*/true);
+    EXPECT_EQ(kc.max_altitude, 0.0f);
+    EXPECT_EQ(kc.maxAltitudeReported(), 0.0f);
+    EXPECT_EQ(kc.max_speed, 0.0f);
+}
+
+TEST_F(KinematicRestoreTest, ResetClearsTheRestoredMaximum) {
+    kc.restoreFlightMaxima(300.0f, 120.0f, /*past_apogee=*/false);
+    kc.reset();
+    EXPECT_EQ(kc.maxAltitudeReported(), 0.0f);
+}
+
+TEST_F(KinematicChecksTest, AltKF_StartsOnTheFirstRealReading) {
+    // #1754: a pass with no barometer reading used to start the filter at 0.
+    // After a reboot at 1000 m its climb back outran the 50 m window, leaving
+    // max_altitude short of the rocket.
+    kc.launch_flag = true;
+    setMockMillis(1000);
+    callStationary(/*alt=*/0.0f, 9.81f, /*new_baro=*/false);
+    EXPECT_FALSE(kc.alt_est > 0.0f);
+
+    setMockMillis(1002);
+    callStationary(1000.0f, 9.81f, /*new_baro=*/true);
+    EXPECT_FLOAT_EQ(kc.alt_est, 1000.0f) << "started on the reading, not pulled up from 0";
+    EXPECT_FLOAT_EQ(kc.max_altitude, 1000.0f);
+
+    for (int i = 1; i <= 500; i++) {             // climb 0.5 m a pass
+        setMockMillis(1002 + i * 2);
+        callStationary(1000.0f + 0.5f * i, 9.81f, true);
+    }
+    EXPECT_GT(kc.max_altitude, 1200.0f) << "and the maximum follows the climb";
+}
+
+// V10 pre-flight review: above about 10.4 km the barometer reads under its
+// 25 kPa floor and baro_healthy goes false, but it still reads.  A steady
+// drogue descent passes both quiescence IMU gates up there; only the altitude
+// test stops the count from calling LANDED in the air (and safing the main).
+namespace {
+void driftDownQuietly(TR_KinematicChecks& kc, bool baro_reading_fresh, int seconds)
+{
+    float alt = 14000.0f;
+    for (int second = 0; second < seconds; second++) {
+        for (int i = 0; i < 50; i++) {
+            setMockMillis(1000 + second * 1000 + i * 2);
+            alt -= 0.4f;                                    // 20 m/s under the drogue
+            float pos[3] = {0, 0, alt};
+            float vel[3] = {0, 0, -20.0f};
+            kc.kinematicChecks(alt, 9.80665f, pos, vel, 0.0f, true, 0.0f, false,
+                               -1.0f, true, false, 0.0f, true,
+                               /*baro_healthy*/false, /*imu_healthy*/true, true,
+                               baro_reading_fresh);
+        }
+    }
+}
+}  // namespace
+
+TEST_F(KinematicChecksTest, Quiescence_AboveTheBarometersRange_KeepsTheAltitudeTest) {
+    kc.launch_flag = true;
+    kc.apogee_flag = true;
+    driftDownQuietly(kc, /*baro_reading_fresh*/true, 90);
+    EXPECT_FALSE(kc.quiescent_flag) << "the barometer still reads the descent";
+    EXPECT_FALSE(kc.alt_landed_flag);
+}
+
+TEST_F(KinematicChecksTest, Quiescence_DeadBarometer_StillLands) {
+    // #824's case unchanged: with no reading at all the IMU decides.
+    kc.launch_flag = true;
+    kc.apogee_flag = true;
+    driftDownQuietly(kc, /*baro_reading_fresh*/false, 40);
+    EXPECT_TRUE(kc.quiescent_flag);
+}
+
 TEST_F(KinematicChecksTest, AltKF_ConvergesToMeasurement) {
     // Feed constant altitude measurements
     for (int i = 0; i < 500; i++) {
@@ -919,13 +1237,20 @@ TEST_F(KinematicChecksTest, Landing_RollRate15dps_StillPasses) {
     EXPECT_TRUE(kc.alt_landed_flag);
 }
 
-TEST_F(KinematicChecksTest, Landing_RollRate25dps_DoesNotTrigger) {
-    // 25 dps exceeds the 20 dps threshold -- still rejected by slow path.
+TEST_F(KinematicChecksTest, Landing_RollRate25dps_GyroNotQuiet) {
+    // 25 dps exceeds the 20 dps threshold: gyro_quiet stays down.  This test
+    // once asserted no landing, which held only because no apogee was ever
+    // declared -- the baro rate gate dropped its 1 m per 2 ms climb until the
+    // 5 m step floor.  The vote is N-1 of N (#113): with baro_stable and
+    // accel_1g passing, a 25 dps roll alone does not hold off the landing.
     for (int i = 0; i < 80; i++) {
         setMockMillis(i * 2);
         callFlight(float(i), 25.0f, 10.0f);
     }
     ASSERT_TRUE(kc.launch_flag);
+
+    // Landing voting is gated on apogee_flag (#166).
+    kc.apogee_flag = true;
 
     for (int second = 0; second < 7; second++) {
         uint32_t base = 1000 + second * 1000;
@@ -934,7 +1259,7 @@ TEST_F(KinematicChecksTest, Landing_RollRate25dps_DoesNotTrigger) {
             callFlight(5.0f, 9.81f, 0.0f, 25.0f);
         }
     }
-    EXPECT_FALSE(kc.alt_landed_flag);
+    EXPECT_FALSE(kc.gyro_quiet_flag);
 }
 
 // The fast-path tests below set apogee by hand.  Since #1103 the impact gate
@@ -1141,8 +1466,10 @@ TEST_F(KinematicChecksTest, Apogee_EKFUnhealthy_BaroBackstopFires) {
 
     // Descend ~0.5 m/call (inside the baro rate-gate) with the EKF UNHEALTHY
     // and baro healthy.  The backstop must stay silent until > 30 m below the
-    // peak, then latch apogee.
-    uint32_t t = 600;
+    // peak, then latch apogee.  The descent starts past the baro settle window
+    // that began at burnout (t = 0), which the backstop waits for while the IMU
+    // is healthy.
+    uint32_t t = 1100;
     float alt = 140.0f;
     bool fired_too_high = false;
     for (int i = 0; i < 160; i++, t += 2) {
@@ -1155,6 +1482,55 @@ TEST_F(KinematicChecksTest, Apogee_EKFUnhealthy_BaroBackstopFires) {
     EXPECT_TRUE(kc.apogee_flag)          << "backstop should fire once > 30 m below peak";
     EXPECT_TRUE(kc.apogee_backstop_flag) << "Layer-2 backstop should be the firing path";
     EXPECT_FALSE(fired_too_high)         << "backstop must not fire < 30 m below the peak";
+}
+
+// V10 pre-flight review (2026-11-18): the static port's error grows with the
+// dynamic pressure through the boost and jumps near Mach 1, so the indicated
+// altitude can fall well over 30 m below its peak while the rocket climbs
+// under thrust.  On the project's own port model the backstop called apogee at
+// T+0.94 s, 294 m/s up, and both pyro triggers took it.  With a healthy IMU
+// the backstop now waits for burnout, the baro settle window and the end of
+// the mach lockout, as the vote does.
+TEST_F(KinematicChecksTest, Apogee_PortDipUnderThrust_HealthyIMU_BackstopHeld) {
+    for (int i = 0; i < 80; i++) {                       // launch
+        setMockMillis(i * 2);
+        callFlight(float(i), 25.0f, 10.0f);
+    }
+    ASSERT_TRUE(kc.launch_flag);
+    uint32_t t = 160;
+    float alt = 80.0f;
+    for (int i = 0; i < 100; i++, t += 2) {              // the climb to a 130 m indicated peak
+        alt += 0.5f;
+        setMockMillis(t);
+        callFlight(alt, 300.0f, 250.0f);
+    }
+    for (int i = 0; i < 120; i++, t += 2) {              // the port's dip, motor still burning
+        alt -= 0.5f;
+        setMockMillis(t);
+        callFlight(alt, 300.0f, 250.0f, 0.0f, 0.0f, false, 1.5f, /*burnout*/false);
+    }
+    EXPECT_GT(kc.max_altitude - kc.alt_est, 30.0f) << "the dip must reach the backstop's depth";
+    EXPECT_FALSE(kc.apogee_flag)          << "no apogee under thrust from the port's dip";
+    EXPECT_FALSE(kc.apogee_backstop_flag);
+}
+
+TEST_F(KinematicChecksTest, Apogee_PortDipInMachLockoutAfterBurnout_BackstopHeld) {
+    kc.launch_flag = true;
+    uint32_t t = 0;
+    float alt = 300.0f;
+    for (int i = 0; i < 600; i++, t += 2) {              // a supersonic coast, burnout long past
+        alt += 0.5f;
+        setMockMillis(t);
+        callFlight(alt, 5.0f, 300.0f, 0.0f, 0.0f, false, 1.5f, /*burnout*/true, /*baro_lockout*/true);
+    }
+    for (int i = 0; i < 120; i++, t += 2) {              // the transonic pressure jump at the port
+        alt -= 0.5f;
+        setMockMillis(t);
+        callFlight(alt, 5.0f, 280.0f, 0.0f, 0.0f, false, 1.5f, /*burnout*/true, /*baro_lockout*/true);
+    }
+    EXPECT_GT(kc.max_altitude - kc.alt_est, 30.0f) << "the dip must reach the backstop's depth";
+    EXPECT_FALSE(kc.apogee_flag)          << "no apogee from the port inside the mach lockout";
+    EXPECT_FALSE(kc.apogee_backstop_flag);
 }
 
 // False-positive guard: the EKF flagged unhealthy DURING ascent must not fire
@@ -1493,7 +1869,7 @@ TEST_F(KinematicChecksTest, Landing_StaleImu_WithAZeroedEkfVelocityStillLands) {
 // bench measured ~260 m/s), so gps_stationary fails permanently; impact and
 // quiescent both read acc_mag and are equally dead.  Every route to
 // alt_landed_flag was therefore IMU-dependent, and the vehicle sat in INFLIGHT
-// until the 600 s MAX_FLIGHT_TIME_MS timeout -- servos driving,
+// until the 600 s flight timeout -- servos driving,
 // post_flight_lockout unset, log unfinalised, for ten minutes after touchdown.
 TEST_F(KinematicChecksTest, Landing_DeadImu_FrozenEkfVelocity_StillLands) {
     for (int i = 0; i < 80; i++) {
@@ -1584,4 +1960,160 @@ TEST_F(KinematicChecksTest, Landing_HealthyImuFlightIsUnchangedByTheBaroPath) {
     }
     EXPECT_TRUE(kc.alt_landed_flag);
     EXPECT_FALSE(kc.baro_landed_flag) << "the baro-only path fired on a healthy flight";
+}
+
+// ===================== The apogee vote by sensor (owner's design 2026-11-19) =====================
+// The voters are the four sensors -- barometer, GNSS, accelerometer, gyro --
+// and the navigation filter, which fuses GNSS and the barometer, is none of
+// them.  Pitch votes only solidly in the atmosphere.  With one sensor left it
+// may call apogee alone past a clear descent (15 m/s); two that disagree wait.
+
+TEST_F(KinematicChecksTest, BySensor_TheFilterCastsNoVote) {
+    launch();
+    // Below the barometer's range, no GNSS: the filter says apogee, the
+    // accelerometer and the gyro say climbing nose-up.
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(/*vz*/ +20.0f, /*pitch*/ 1.4f, /*pitch_may_vote*/ true,
+                   /*new_gps*/ false, 0.0f, /*baro_healthy*/ true);
+    }
+    EXPECT_FALSE(kc.vel_u_apogee_flag);
+    EXPECT_FALSE(kc.pitch_apogee_flag);
+    EXPECT_FALSE(kc.apogee_flag) << "the filter's velocity and pitch must not vote";
+}
+
+TEST_F(KinematicChecksTest, BySensor_AccelerometerAndGyro_AreTwoSensors) {
+    // Solidly in the atmosphere the gyro's pitch and the accelerometer's
+    // velocity are different sensors (owner): two of the three available.
+    launch();
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-2.0f, -0.3f, true, false, 0.0f, true);
+    }
+    EXPECT_TRUE(kc.vel_u_apogee_flag);
+    EXPECT_TRUE(kc.pitch_apogee_flag);
+    EXPECT_TRUE(kc.apogee_flag);
+    EXPECT_FALSE(kc.apogee_single_sensor_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_AboveTheBarometersRange_PitchDoesNotVote) {
+    // Thin air: the nose down says nothing.  The accelerometer is the only
+    // sensor left and has not yet read a clear descent: no call.
+    launch();
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-2.0f, -0.3f, /*pitch_may_vote*/ false, false, 0.0f, /*baro_healthy*/ false);
+    }
+    EXPECT_FALSE(kc.pitch_apogee_flag) << "held at zero above the barometer's range";
+    EXPECT_TRUE(kc.vel_u_apogee_flag);
+    EXPECT_FALSE(kc.apogee_flag) << "one sensor, short of the clear-descent bar";
+}
+
+TEST_F(KinematicChecksTest, BySensor_AboveTheBarometersRange_AccelerometerAndGnssAgree) {
+    launch();
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-2.0f, 1.4f, false, /*new_gps*/ true, /*gps_vel_u*/ -2.0f, false);
+    }
+    EXPECT_TRUE(kc.apogee_flag) << "the two sensors left agree";
+    EXPECT_FALSE(kc.apogee_single_sensor_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_AboveTheBarometersRange_TwoThatDisagree_Wait) {
+    // The accelerometer reads a clear descent, GNSS (fresh, admitted) a
+    // climb: one is wrong and nothing can say which, so no call.
+    launch();
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-30.0f, 1.4f, false, true, /*gps_vel_u*/ +5.0f, false);
+    }
+    EXPECT_FALSE(kc.apogee_flag);
+    EXPECT_FALSE(kc.apogee_single_sensor_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_GnssLost_TheAccelerometerCallsAlone) {
+    launch();
+    for (int i = 0; i < 30; i++) {          // descending, short of 15 m/s
+        setMockMillis(200 + i * 2);
+        callSensor(-10.0f, 1.4f, false, false, 0.0f, false);
+    }
+    ASSERT_FALSE(kc.apogee_flag);
+    for (int i = 0; i < 30; i++) {          // past it
+        setMockMillis(260 + i * 2);
+        callSensor(-16.0f, 1.4f, false, false, 0.0f, false);
+    }
+    EXPECT_TRUE(kc.apogee_flag);
+    EXPECT_TRUE(kc.apogee_single_sensor_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_ImuDown_GnssCallsAlone) {
+    launch();
+    for (int i = 0; i < 30; i++) {          // the normal voter passes, but alone
+        setMockMillis(200 + i * 2);
+        callSensor(0.0f, 1.4f, false, true, -10.0f, false, /*inertial_healthy*/ false);
+    }
+    EXPECT_TRUE(kc.gps_apogee_flag);
+    ASSERT_FALSE(kc.apogee_flag);
+    for (int i = 0; i < 30; i++) {
+        setMockMillis(260 + i * 2);
+        callSensor(0.0f, 1.4f, false, true, -16.0f, false, false);
+    }
+    EXPECT_TRUE(kc.apogee_flag);
+    EXPECT_TRUE(kc.apogee_single_sensor_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_PitchNeverCallsAlone) {
+    // Below the range with the accelerometer down there is no gyro either
+    // (one InertialVertical); with only the barometer, the backstop decides.
+    launch();
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-30.0f, -1.0f, true, false, 0.0f, /*baro_healthy*/ true, /*inertial*/ false);
+    }
+    EXPECT_FALSE(kc.pitch_apogee_flag);
+    EXPECT_FALSE(kc.apogee_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_InThePresenceOfASecondSensor_NoSingleCall) {
+    // Below the range, accelerometer and gyro available: a clear descent on
+    // the accelerometer with the gyro nose-up is one of two, not a lone call.
+    launch();
+    for (int i = 0; i < 60; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-30.0f, 1.4f, true, false, 0.0f, /*baro_healthy*/ false);
+    }
+    EXPECT_FALSE(kc.apogee_flag);
+}
+
+TEST_F(KinematicChecksTest, BySensor_ResetClearsTheSingleSensorCall) {
+    launch();
+    for (int i = 0; i < 30; i++) {
+        setMockMillis(200 + i * 2);
+        callSensor(-16.0f, 1.4f, false, false, 0.0f, false);
+    }
+    ASSERT_TRUE(kc.apogee_single_sensor_flag);
+    kc.reset();
+    EXPECT_FALSE(kc.apogee_single_sensor_flag);
+    EXPECT_FALSE(kc.apogee_flag);
+}
+
+TEST_F(KinematicChecksTest, GpsApogeeCountHi_TwoOfTheBoardsFixes) {
+    // The gnss-sdr-dev board's fix comes once a second: two descending fixes
+    // make the GPS voter, not four (the owner's 2 s bar, above the
+    // barometer's range where GNSS is one of two sensors left).
+    kc.setGpsApogeeFreshMs(1500);
+    kc.setGpsApogeeCountHi(2);
+    launch();
+    uint32_t t = 200;
+    for (int fix = 0; fix < 2; fix++) {
+        for (int i = 0; i < 500; i++, t += 2) {
+            setMockMillis(t);
+            callSensor(-2.0f, 1.4f, false, /*new_gps*/ i == 0, -2.0f, false);
+        }
+        if (fix == 0) {
+            EXPECT_FALSE(kc.gps_apogee_flag) << "one fix is not enough";
+        }
+    }
+    EXPECT_TRUE(kc.gps_apogee_flag);
+    EXPECT_TRUE(kc.apogee_flag) << "the accelerometer and GNSS agree above the barometer's range";
 }
