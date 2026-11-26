@@ -114,8 +114,9 @@
 #if TR_RAW_NAV_SDR || TR_RAW_NAV_PX1105R
 #include "raw_iono_rule.h"        // the mosaic's rule, for the receiver's ionosphere and the app's
 #endif
+#include "nav_start_policy.h"     // #1762: the start without GNSS on every receiver, and a late fix's take-over (host-tested)
 #if TR_RAW_NAV_SDR
-#include "sdr_nav_start_policy.h" // the start without the board, and a late board's take-over (host-tested)
+#include "sdr_nav_start_policy.h" // the board's boot check, and its names for the start rule (host-tested)
 #endif
 #if TR_RAW_NAV_P4
 #include <esp_memory_utils.h>     // esp_ptr_external_ram: where the filter's blocks went
@@ -542,6 +543,14 @@ static bool gnss_started = false;
 static constexpr uint32_t GNSS_ABSENT_INIT_DWELL_MS = 5000U;
 static bool     gnss_absent_mode    = false;
 static bool     gnss_absent_flight  = false;
+// #1756, #1762 (nav_start_policy.h receiverWait): millis() of the receiver's
+// last fix the normal start would take (0: none), whether the filter is flying
+// on fixes, and millis() of that filter's last re-init (0: none) -- so a
+// re-init on the pad waits for the next fix instead of starting degraded
+// between two of them
+static uint32_t nav_last_usable_fix_ms = 0;
+static bool     nav_filter_on_fixes    = false;
+static uint32_t nav_reinit_ms          = 0;
 static uint32_t gnss_absent_dwell_ms = 0;
 static bool ground_pressure_found = false;
 static GroundRefFreeze::State ground_ref_freeze;   // #1108
@@ -3684,21 +3693,13 @@ static RawNavDrain::State raw_nav_drain;
 // the receiver for its navigation blocks again (raw_nav_policy.h)
 static volatile bool raw_nav_on_pad = false;
 #endif
-#if TR_RAW_NAV_SDR
-// The gnss-sdr-dev image's degraded start (sdr_nav_start_policy.h), set by
+// A degraded start (nav_start_policy.h, #1762 on every raw receiver), set by
 // the loop each pass: while it stands the GNSS task hands the filter none of
-// the board's epochs (the filter's 0 N 0 E is no place to build them at), and
-// counts them
-static volatile bool raw_sdr_gnss_held = false;
-static uint32_t raw_sdr_gnss_held_n = 0;
-// #1756 (sdr_nav_start_policy.h boardWait): millis() of the board's last fix
-// the normal start would take (0: none), whether the filter is flying on the
-// board's fixes, and millis() of that filter's last re-init (0: none) -- so a
-// re-init on the pad waits for the board's next fix instead of starting
-// degraded between two of them
-static uint32_t sdr_last_usable_fix_ms = 0;
-static bool     sdr_filter_on_board = false;
-static uint32_t sdr_reinit_ms = 0;
+// the receiver's epochs (the filter's 0 N 0 E is no place to build them at),
+// and counts them
+static volatile bool raw_gnss_held = false;
+static uint32_t raw_gnss_held_n = 0;
+#if TR_RAW_NAV_SDR
 // when the sensors started (setup_fc), for the boot's verdict on the board
 static uint32_t sdr_sensors_started_ms = 0;
 #endif
@@ -3934,13 +3935,11 @@ static void rawGnssMeasTask(void*)
         while (sensor_collector.getGNSSRawEpoch(epoch))
         {
             seen = true;
-#if TR_RAW_NAV_SDR
-            if (RAW_NAV_AND(RAW_IS_SDR) raw_sdr_gnss_held)
+            if (raw_gnss_held)
             {
-                raw_sdr_gnss_held_n++;   // the degraded start stands: none to the filter
+                raw_gnss_held_n++;   // a degraded start stands (#1762): none to the filter
                 continue;
             }
-#endif
 #if TR_RAW_NAV_MOSAIC
             if (RAW_NAV_AND(RAW_IS_MOSAIC) RawNavDrain::noteWeek(raw_nav_drain, epoch.gps_week))
             {
@@ -4748,8 +4747,8 @@ static void rawShadowTask(void*)
                          (unsigned long)st.dv_latch_releases, (unsigned long)st.dv_held_rr,
                          sh.running() ? (double)sh.filter().hdgObsScale() : 1.0, (double)st.rot_max_sigma_mps,
                          (unsigned)(raw_flight_task ? uxTaskGetStackHighWaterMark(raw_flight_task) : 0),
-                         (unsigned)sensor_collector_hw.gnssPollStackFree(), (unsigned long)raw_sdr_gnss_held_n,
-                         raw_sdr_gnss_held ? " (NOW: the filter started without the board)" : "");
+                         (unsigned)sensor_collector_hw.gnssPollStackFree(), (unsigned long)raw_gnss_held_n,
+                         raw_gnss_held ? " (NOW: the filter started without the board)" : "");
             }
 #endif
 #ifdef TR_BENCH_DV_CHECK
@@ -9753,13 +9752,11 @@ static void resetFlightStateForSim(const char* edge)
     // sim's ~100 ms first fix reaches the normal init path before any fallback.
     gnss_absent_flight   = false;
     gnss_absent_dwell_ms = millis() + GNSS_ABSENT_INIT_DWELL_MS;
-#if TR_RAW_NAV_SDR
-    // #1756: the sim's fixes are another vehicle's; its start waits on the
-    // settle above, not on the board's
-    sdr_last_usable_fix_ms = 0;
-    sdr_filter_on_board    = false;
-    sdr_reinit_ms          = 0;
-#endif
+    // #1756, #1762: the sim's fixes are another vehicle's; its start waits on
+    // the settle above, not on the receiver's
+    nav_last_usable_fix_ms = 0;
+    nav_filter_on_fixes    = false;
+    nav_reinit_ms          = 0;
     guidance.reset();
     control_mixer.reset();
     roll_rate_pid_standalone.reset();
@@ -9852,18 +9849,16 @@ static void magCalEndSession(const char* why)
 static void magCalBackToReady()
 {
     rocket_state = READY;
-#if TR_RAW_NAV_SDR
-    // #1756: a session's exit is a re-init on the pad: the board's grace runs
-    // from here when the filter flew on its fixes before (or was waiting to
-    // after an earlier re-init: a re-snap just before the session started).
-    // The rocket was being turned, so its fixes may have failed the init gate
-    // for the whole session.
-    if (sdr_filter_on_board || sdr_reinit_ms != 0)
+    // #1756, #1762: a session's exit is a re-init on the pad: the receiver's
+    // grace runs from here when the filter flew on its fixes before (or was
+    // waiting to after an earlier re-init: a re-snap just before the session
+    // started). The rocket was being turned, so its fixes may have failed the
+    // init gate for the whole session.
+    if (nav_filter_on_fixes || nav_reinit_ms != 0)
     {
         const uint32_t m = millis();
-        sdr_reinit_ms = m ? m : 1u;
+        nav_reinit_ms = m ? m : 1u;
     }
-#endif
     if (ekf_initialized)
     {
         ekf_initialized = false;
@@ -11691,6 +11686,11 @@ static void loop_fc()
 
                 // Running average of GNSS fixes for launch-site reference.
                 // Only accumulate fixes that pass the stricter init gate (Gate 3).
+                // #1762 (nav_start_policy.h, every receiver): a degraded start
+                // armed or flying keeps the pad-relative 0 N 0 E it started
+                // from, so the pad average takes none of the receiver's fixes
+                // either; on the pad the fix that restarts it below is taken
+                const bool degraded_armed = gnss_absent_flight && rocket_state != READY;
 #if TR_RAW_GNSS_PRIMARY
                 // #1600: the navigation filter's own pad, once its raw epochs
                 // lead (the average started over then), and only its own from
@@ -11712,19 +11712,9 @@ static void loop_fc()
                              (unsigned)config::MAIN_DEPLOY_REF_MIN_FIXES);
 #endif
                 }
-#if TR_RAW_NAV_SDR
-                // the gnss-sdr-dev image's degraded start, armed or flying: its
-                // datum stays the pad-relative 0 N 0 E it started from, and
-                // the pad average takes none of the board's fixes either
-                // (sdr_nav_start_policy.h); on the pad the fix that restarts
-                // it below is taken
-                const bool sdr_degraded_armed = RAW_NAV_AND(RAW_IS_SDR) gnss_absent_flight && rocket_state != READY;
-                const bool ref_take = (!ref_from_nav || ref_nav_now) && !sdr_degraded_armed;
+                const bool ref_take = (!ref_from_nav || ref_nav_now) && !degraded_armed;
 #else
-                const bool ref_take = !ref_from_nav || ref_nav_now;
-#endif
-#else
-                const bool ref_take = true;
+                const bool ref_take = !degraded_armed;
 #endif
                 if (!ref_pos_frozen && gnss_gate3_init && ref_take) {
                     double ref_add[3] = {ekf_gnss.lat_rad, ekf_gnss.lon_rad, ekf_gnss.alt_m};
@@ -11754,11 +11744,7 @@ static void loop_fc()
                 // #1600 phase 5: the pad average (see "Pad calibration"), the
                 // same fixes until launch, never a sim's -- but the rig
                 // replay's fixes are the receiver's own.
-#if TR_RAW_NAV_SDR
-                if (gnss_gate3_init && !sdr_degraded_armed &&
-#else
-                if (gnss_gate3_init &&
-#endif
+                if (gnss_gate3_init && !degraded_armed &&
                     (sensor_collector.isReplay() ||
                      (!sensor_collector.isSimActive() && !sim_flight_latched))) {
                     padAverageAdd(ekf_gnss.lat_rad, ekf_gnss.lon_rad, ekf_gnss.alt_m, now_ms);
@@ -11832,30 +11818,30 @@ static void loop_fc()
             // which clears ekf_initialized. The two conditions are now
             // separate: MAG_CALIBRATION inhibits the estimator ENTIRELY, as the
             // architecture doc says it does.
-#if TR_RAW_NAV_SDR
-            // #1756: a fix the normal start would take arrives on one pass in a
-            // hundred or more; remember when, for the degraded start's wait
-            // (here, after the pad average above may have set have_ref_pos on
-            // this very fix)
+            // #1756, #1762: a fix the normal start would take arrives on one
+            // pass in a hundred or more; remember when, for the degraded
+            // start's wait (here, after the pad average above may have set
+            // have_ref_pos on this very fix)
             if (have_ref_pos && gnss_gate3_init)
             {
                 const uint32_t m = millis();
-                sdr_last_usable_fix_ms = m ? m : 1u;
+                nav_last_usable_fix_ms = m ? m : 1u;
             }
-            // The gnss-sdr-dev image (sdr_nav_start_policy.h): a degraded
-            // start gives way to the board's first usable fix while the rocket
-            // is on the pad, unarmed -- the normal start below, a new start
+            // nav_start_policy.h (#1762, every receiver): a degraded start
+            // gives way to the receiver's first usable fix while the rocket is
+            // on the pad, unarmed -- the normal start below, a new start
             // generation for the raw filter. Once armed or flying it stands.
-            if (RAW_NAV_AND(RAW_IS_SDR) ekf_initialized && gnss_absent_flight &&
-                sdr_nav_start::restartOnFix(true, have_ref_pos && gnss_gate3_init, rocket_state))
+            if (ekf_initialized && gnss_absent_flight &&
+                nav_start::restartOnFix(true, have_ref_pos && gnss_gate3_init, rocket_state))
             {
                 ekf_initialized = false;
                 gnss_absent_flight = false;
-                ESP_LOGW(TAG, "[RAWGNSS] the gnss-sdr-dev board's first usable fix (%u satellites): the navigation "
-                              "filter starts over on it (%lu of its epochs were held out of the degraded start)",
-                         (unsigned)gnss_latest_si.num_sats, (unsigned long)raw_sdr_gnss_held_n);
+                ESP_LOGW(TAG, "[EKF] the receiver's first usable fix (%u satellites): the navigation filter starts "
+                              "over on it, out of its degraded start",
+                         (unsigned)gnss_latest_si.num_sats);
             }
-            raw_sdr_gnss_held = gnss_absent_flight;
+#if TR_RAW_GNSS_SHADOW
+            raw_gnss_held = gnss_absent_flight;
 #endif
             if (rocket_state == MAG_CALIBRATION)
             {
@@ -11877,39 +11863,27 @@ static void loop_fc()
                 // path if a real/sim fix ever arrives), and on a short settle so an
                 // injected sim fix wins first.
                 const bool normal_init = have_ref_pos && gnss_gate3_init;
-#if TR_RAW_NAV_SDR
-                // #1756: the first pass after a filter flying on the board's
-                // fixes was cleared (a mag-cal exit, an orientation re-snap or
-                // setting change): the start of the board's grace
-                if (sdr_filter_on_board)
+                // #1756: the first pass after a filter flying on fixes was
+                // cleared (a mag-cal exit, an orientation re-snap or setting
+                // change): the start of the receiver's grace
+                if (nav_filter_on_fixes)
                 {
-                    sdr_filter_on_board = false;
+                    nav_filter_on_fixes = false;
                     const uint32_t m = millis();
-                    sdr_reinit_ms = m ? m : 1u;
+                    nav_reinit_ms = m ? m : 1u;
                 }
-                // The gnss-sdr-dev image never knows the board absent at boot
-                // (its driver listens whether or not one is there): the
-                // degraded start once no usable fix has come 2 min after boot
-                // on the pad, or at once when armed (sdr_nav_start_policy.h)
-                const bool degraded_init =
-#if TR_RAW_NAV_AUTO
-                    // the one image: the board's rule with the board, the
-                    // auto image's with any other receiver
-                    !RAW_IS_SDR ? (!normal_init && gnss_absent_mode && !gnss_started && (initGyroN >= 8) &&
-                                   ((int32_t)(millis() - gnss_absent_dwell_ms) >= 0)) :
-#endif
-                    // #1756: "no usable fix" is none for a while, not none on
-                    // this pass (boardWait)
-                    sdr_nav_start::degradedStartDue(
-                        normal_init || sdr_nav_start::boardWait(sdr_last_usable_fix_ms, sdr_reinit_ms, millis()),
-                        initGyroN >= 8, (int32_t)(millis() - gnss_absent_dwell_ms) >= 0, millis(),
-                        rocket_state);
-#else
-                const bool degraded_init =
-                    !normal_init && gnss_absent_mode && !gnss_started &&
-                    (initGyroN >= 8) &&
-                    ((int32_t)(millis() - gnss_absent_dwell_ms) >= 0);
-#endif
+                // #1762 (nav_start_policy.h): a receiver that failed its
+                // bring-up starts degraded at once, as GNSS-absent mode always
+                // has; one that answers but gives no usable fix, once none has
+                // come 2 min after boot on the pad or at once when armed. It
+                // used to be GNSS-absent mode alone, so an answering receiver
+                // that never fixed left the filter unstarted for the flight.
+                // "No usable fix" is none for a while, not none on this pass
+                // (#1756, receiverWait).
+                const bool degraded_init = nav_start::degradedStartDue(
+                    normal_init || nav_start::receiverWait(nav_last_usable_fix_ms, nav_reinit_ms, millis()),
+                    initGyroN >= 8, (int32_t)(millis() - gnss_absent_dwell_ms) >= 0, millis(),
+                    rocket_state, gnss_absent_mode);
                 if (normal_init || degraded_init) {
                     EkfGNSSDataLLA init_gnss = ekf_gnss;
                     if (degraded_init) {
@@ -12039,11 +12013,9 @@ static void loop_fc()
                         }
                     }
                     ekf_initialized = true;
-#if TR_RAW_NAV_SDR
-                    // #1756: a filter flying on the board's fixes; its re-init
-                    // will wait for the board
-                    sdr_filter_on_board = RAW_NAV_AND(RAW_IS_SDR) !degraded_init;
-#endif
+                    // #1756: a filter flying on fixes; its re-init will wait
+                    // for the receiver
+                    nav_filter_on_fixes = !degraded_init;
                     if (degraded_init) {
                         // #557: mark the session degraded so the SH_GNSS_ABSENT
                         // telemetry flag and the launch-time guidance force-off
@@ -12055,10 +12027,19 @@ static void loop_fc()
                         ESP_LOGW(TAG, "[EKF] GNSS-absent degraded init: baro+IMU "
                                       "only, position pad-relative, guidance off "
                                       "(roll control unaffected)");
+                        // #1762: the receiver answers but gave no usable fix
+                        if (!gnss_absent_mode)
+                            ESP_LOGW(TAG, "[EKF] no usable fix from the receiver (%lu s after boot%s): %s",
+                                     (unsigned long)(millis() / 1000u),
+                                     gnss_started ? ", it had a 3-D fix" : "",
+                                     rocket_state == READY ? "a fix while on the pad unarmed starts it over"
+                                                           : "armed: GNSS stays out of the filter for the flight");
+#if TR_RAW_GNSS_SHADOW
+                        raw_gnss_held = true;
+#endif
 #if TR_RAW_NAV_SDR
                         RAW_NAV_WHEN(RAW_IS_SDR)
                         {
-                        raw_sdr_gnss_held = true;
                         ESP_LOGW(TAG, "[RAWGNSS] no usable fix from the gnss-sdr-dev board (%s, %lu s after boot): the "
                                       "navigation filter starts on the IMU and the barometer; %s",
                                  sensor_collector_hw.gnssBoardHeard() ? "it streams" : "NOTHING HEARD from it",
@@ -12108,7 +12089,14 @@ static void loop_fc()
                 RAW_NAV_WHEN(RAW_ON)
                 ekf.setMagCalibration(magHardIronApplied(), sensor_collector.isSimActive());
 #endif
-                ekf.update(use_ahrs_acc, ekf_imu, ekf_gnss, ekf_mag);
+                // #1762: a degraded start's filter takes no fix from a
+                // receiver that answers (its 0 N 0 E is no place to fuse one
+                // at): it is handed a fix with time 0, which it skips as it
+                // skips the degraded seed's. A receiver that failed its
+                // bring-up gives none anyway. (The raw filter takes epochs,
+                // not fixes; raw_gnss_held holds those.)
+                static const EkfGNSSDataLLA kNoGnssFix{};
+                ekf.update(use_ahrs_acc, ekf_imu, gnss_absent_flight ? kNoGnssFix : ekf_gnss, ekf_mag);
 #if ((defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)) && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
                 // The gnss-sdr-dev board's attitude and rests: this update's
                 // input and state (sdrAidStep sends them)

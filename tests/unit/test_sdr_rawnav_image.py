@@ -160,37 +160,14 @@ def fn_body(src, head):
 
 
 def test_a_silent_or_late_board_still_starts_the_filter():
-    # sdr_nav_start_policy.h (host-tested in tests_cpp/test_sdr_nav_start_policy.cpp) wired into the loop: the
-    # degraded start without a usable fix 2 min after boot on the pad or at once when armed, the restart on a late
-    # usable fix on the pad unarmed, the board's epochs held out while the degraded start stands
+    # The board's start rule is now every receiver's (#1762, nav_start_policy.h; its wiring is pinned in
+    # test_nav_start_wiring.py): here only what stays the board's -- its header, and its own log while it stands
     src = read(MAIN_CPP)
     assert '#if TR_RAW_NAV_SDR\n#include "sdr_nav_start_policy.h"' in src
-    i = src.index("const bool normal_init = have_ref_pos && gnss_gate3_init;")
-    init = src[i:src.index("#else", i)]   # the board's branch (the one image's rule for other receivers inside it)
-    assert "#if TR_RAW_NAV_SDR" in init
-    # #1756: "no usable fix" is none for a while (boardWait), not none on this pass
-    assert ("sdr_nav_start::degradedStartDue(\n"
-            "                        normal_init || sdr_nav_start::boardWait(sdr_last_usable_fix_ms, sdr_reinit_ms, millis()),\n"
-            "                        initGyroN >= 8, (int32_t)(millis() - gnss_absent_dwell_ms) >= 0, millis(),\n"
-            "                        rocket_state);") in init
-    # the restart comes before MAG_CALIBRATION's check and the init chain, and hands the next pass the normal start
-    r = src.index("sdr_nav_start::restartOnFix(true, have_ref_pos && gnss_gate3_init, rocket_state)")
-    restart = src[r:src.index("#endif", r)]
-    assert "ekf_initialized = false;" in restart and "gnss_absent_flight = false;" in restart
-    assert "raw_sdr_gnss_held = gnss_absent_flight;" in restart
-    assert r < src.index("if (rocket_state == MAG_CALIBRATION)", r) < i
-    # (RAW_NAV_AND: with the board alone in the one image, nothing in every other)
-    assert src.index("if (RAW_NAV_AND(RAW_IS_SDR) ekf_initialized && gnss_absent_flight &&") < r
-    # held out of the filter in the GNSS task while it stands
-    task = fn_body(src, "static void rawGnssMeasTask(void*)")
-    h = task.index("#if TR_RAW_NAV_SDR\n            if (RAW_NAV_AND(RAW_IS_SDR) raw_sdr_gnss_held)")
-    held = task[h:task.index("#endif", h)]
-    assert "raw_sdr_gnss_held_n++;" in held and "continue;" in held
-    assert task.index("while (sensor_collector.getGNSSRawEpoch(epoch))") < h
-    # armed or flying, the board's fixes set no pad datum (nor its average) under a degraded start
-    assert "const bool sdr_degraded_armed = RAW_NAV_AND(RAW_IS_SDR) gnss_absent_flight && rocket_state != READY;" in src
-    assert "const bool ref_take = (!ref_from_nav || ref_nav_now) && !sdr_degraded_armed;" in src
-    assert "#if TR_RAW_NAV_SDR\n                if (gnss_gate3_init && !sdr_degraded_armed &&" in src
+    i = src.index("raw_gnss_held = true;")
+    blk = src[i:src.index("#endif", src.index("RAW_NAV_WHEN(RAW_IS_SDR)", i))]
+    assert "#if TR_RAW_NAV_SDR" in blk
+    assert "no usable fix from the gnss-sdr-dev board" in src
 
 
 def test_the_boot_says_when_the_board_is_silent():

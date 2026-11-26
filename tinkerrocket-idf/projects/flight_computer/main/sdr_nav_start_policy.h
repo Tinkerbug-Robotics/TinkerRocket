@@ -4,6 +4,8 @@
 
 #include <RocketComputerTypes.h>   // RocketState
 
+#include "nav_start_policy.h"   // #1762: the start rule, now every receiver's
+
 // The V10's gnss-sdr-dev image (TR_RAW_NAV_SDR): when its one navigation
 // filter starts without the board, and when a late board takes it over.
 //
@@ -45,49 +47,31 @@
 //     gets the degraded start, at most kReinitGraceMs later; and one whose
 //     usable fixes do not come back within the grace after a re-init armed
 //     still stands degraded for the flight, as before.
+// #1762: the rule above now covers every receiver (nav_start_policy.h); this
+// header keeps what is the board's alone (its boot check) and its own names
+// for the shared rule, the board being a receiver that never fails bring-up.
 // Pure, host-tested (tests_cpp/test_sdr_nav_start_policy.cpp).
 namespace sdr_nav_start
 {
 
-static constexpr uint32_t kNoFixMs = 120000u;   // no usable fix 2 min after boot: start without the board
-static constexpr uint32_t kHeardMs = 3000u;     // the boot waits this long for the board's first frame
-static constexpr uint32_t kUsableFixMs   = 3000u;   // a usable fix this recent: the next one starts the filter
-static constexpr uint32_t kReinitGraceMs = 5000u;   // after a re-init of a filter started on the board's fixes
+static constexpr uint32_t kNoFixMs       = nav_start::kNoFixMs;
+static constexpr uint32_t kHeardMs       = 3000u;   // the boot waits this long for the board's first frame
+static constexpr uint32_t kUsableFixMs   = nav_start::kUsableFixMs;
+static constexpr uint32_t kReinitGraceMs = nav_start::kReinitGraceMs;
 
-// The degraded start waits for the board (#1756): a usable fix (one the
-// normal start would take: the init gate with the pad datum) came within
-// kUsableFixMs, or a filter that had started on the board's fixes was
-// re-initialized within kReinitGraceMs.  last_usable_ms / reinit_ms: millis()
-// of each, 0 for never.  Ages in unsigned arithmetic, across the wrap.
 inline bool boardWait(uint32_t last_usable_ms, uint32_t reinit_ms, uint32_t now_ms)
 {
-    if (last_usable_ms != 0 && (uint32_t)(now_ms - last_usable_ms) < kUsableFixMs)
-        return true;
-    return reinit_ms != 0 && (uint32_t)(now_ms - reinit_ms) < kReinitGraceMs;
+    return nav_start::receiverWait(last_usable_ms, reinit_ms, now_ms);
 }
 
-// The degraded start is due: no usable fix to start on now and none to wait
-// for (normal_ready: a normal start due this pass, or boardWait()),
-// the gyro's bias averaged (gyro_ready), the GNSS-absent settle over
-// (settled: main.cpp's gnss_absent_dwell_ms, 5 s after boot and after a sim's
-// reset, so a sim's first fix starts it normally), and either kNoFixMs since
-// boot on the pad or the rocket armed.
 inline bool degradedStartDue(bool normal_ready, bool gyro_ready, bool settled, uint32_t since_boot_ms,
                              RocketState state)
 {
-    if (normal_ready || !gyro_ready || !settled)
-        return false;
-    if (state == PRELAUNCH)
-        return true;
-    return state == READY && since_boot_ms >= kNoFixMs;
+    return nav_start::degradedStartDue(normal_ready, gyro_ready, settled, since_boot_ms, state,
+                                       /*receiver_absent=*/false);
 }
 
-// A degraded start gives way to the board's first usable fix: only on the pad,
-// unarmed.
-inline bool restartOnFix(bool degraded_started, bool normal_ready, RocketState state)
-{
-    return degraded_started && normal_ready && state == READY;
-}
+using nav_start::restartOnFix;
 
 // The boot's verdict on the board: silent once kHeardMs passed with no frame.
 inline bool boardSilent(bool heard, uint32_t since_sensors_ms)
