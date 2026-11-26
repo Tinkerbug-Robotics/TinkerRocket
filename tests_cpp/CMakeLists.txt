@@ -1501,6 +1501,19 @@ target_include_directories(test_pyro_restore_policy PRIVATE
 target_link_libraries(test_pyro_restore_policy pyro_timing_fc GTest::gtest_main)
 gtest_discover_tests(test_pyro_restore_policy)
 
+# ---------- test_nav_start_policy (#1762) ----------
+# The navigation filter's start without GNSS on every receiver: a receiver that
+# failed bring-up starts degraded at once, one that answers but never fixes
+# 2 min after boot or when armed; the review's three routes; the old rule.
+add_executable(test_nav_start_policy test_nav_start_policy.cpp)
+target_include_directories(test_nav_start_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_nav_start_policy GTest::gtest_main)
+gtest_discover_tests(test_nav_start_policy)
+
 # ---------- test_flush_iter_ledger (#510) ----------
 # Host-side test for the flush-task per-iteration accounting: section sums,
 # clamped unaccounted/drain-other arithmetic, and the WARN/INFO classification

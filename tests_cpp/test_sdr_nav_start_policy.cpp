@@ -75,7 +75,7 @@ namespace {
 // main.cpp's pass order for the gnss-sdr-dev board's filter start, at 1 kHz.
 // `fix`: the board's fix passed the init gate this pass. It is usable (what
 // the normal start takes) with the pad datum, which the pad average sets on
-// such a fix unless a degraded start stands armed (sdr_degraded_armed).  Then
+// such a fix unless a degraded start stands armed (degraded_armed).  Then
 // the stamp of the last usable fix; the late board's restart (the only clear
 // of gnss_absent_flight, `degraded`, besides a sim's reset); MAG_CALIBRATION
 // does nothing; an unstarted filter stamps a re-init of a filter that flew on
