@@ -8,6 +8,9 @@
 > the via-in-pad heat-path rationale, the blind module joints, the one-reflow-cycle limit and the
 > witness-pad scheme.
 >
+> **V2 was ordered on 2026-11-25 from `tinker-beetle-v2.0.0` (d24524e8) with these notes.** The board
+> in work is V3: re-check every number here, and block A on Dwgs.User, before the V3 order.
+>
 > Standing rule: **never send this file to a fab house or an assembler with a `<TBD>` in it.**
 > The `README` warns that stale fab notes are the kind of error that reaches a fab house, and that
 > warning applies to this file first. After any layout change, re-check the numbers here against

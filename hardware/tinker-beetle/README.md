@@ -567,6 +567,11 @@ Three stale items were listed here; **all three are now resolved** (2026-09-03):
 
 ### The revision
 
+**2026-11-25: V2 ordered, V3 in work.** V2 went to JLCPCB (bare boards and stencils) as
+`tinker-beetle-v2.0.0` on d24524e8 (#1815), plotted from that tag; the package README is kept
+with the local plot in `gerbers/tinker-beetle-v2.0.0/`. The title blocks now read `V3`, so the
+back silkscreen (`Beetle\n${REVISION}`) says V3 for the next order. The V1 text below is history.
+
 **This board is `V1`.** The title block carries `(rev "V1")` and the back
 silkscreen renders `TR-Mini\n${REVISION}` from it, so the revision reaches the
 board from one place and cannot drift from the documentation.
@@ -591,6 +596,11 @@ working plot, never the release — the stale 2026-08-31 archive that used to si
 there is gone.
 
 ## Status
+
+**2026-11-25: V2 ordered, V3 in work.** V2 went to JLCPCB (bare boards and stencils) as
+`tinker-beetle-v2.0.0` on d24524e8 (#1815), plotted from that tag; the package README is kept
+with the local plot in `gerbers/tinker-beetle-v2.0.0/`. The title blocks now read `V3`, so the
+back silkscreen (`Beetle\n${REVISION}`) says V3 for the next order. The V1 text below is history.
 
 **Fabricated.** `V1` went out as `rocket-computer-mini-v1.0.1` on 2026-09-05,
 after its own review
