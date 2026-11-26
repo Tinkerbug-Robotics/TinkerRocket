@@ -294,6 +294,7 @@ struct board_pins
     // owns its enable.
     static constexpr int GPS_ACT_PIN = -1;
     static constexpr int SERVO_ACT_PIN = -1;
+    static constexpr bool SERVO_ACT_SWITCHES_SUPPLY = false;   // #1768: no switch
 
     // ======================================================================
     // Power hold latch (#848) -- the V1's GPIO17, and why it is there

@@ -175,6 +175,7 @@ struct board_pins
     // ### Power gates (V8+ topology; -1 = rail not FC-switched) ###
     static constexpr int GPS_ACT_PIN = -1;
     static constexpr int SERVO_ACT_PIN = -1;
+    static constexpr bool SERVO_ACT_SWITCHES_SUPPLY = false;   // #1768: no switch
 
     // ### Power latch (V9+ only; -1 = the FC cannot hold its own rail) ###
     static constexpr int PWR_HOLD_PIN = -1;

@@ -221,6 +221,9 @@ struct board_pins
                                               // driven high at boot for now,
                                               // pad-relax integration is a
                                               // follow-up)
+    // #1768: which side the MOSFET switches is not confirmed against a
+    // netlist here, so the rail is never cut in flight, as on the V7.
+    static constexpr bool SERVO_ACT_SWITCHES_SUPPLY = false;
 
     // ### Power latch (V9+ only; -1 = the FC cannot hold its own rail) ###
     static constexpr int PWR_HOLD_PIN = -1;

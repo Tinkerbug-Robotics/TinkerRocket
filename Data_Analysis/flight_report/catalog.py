@@ -1780,9 +1780,16 @@ _P(
 _P(
     "Snapshot.servo_enabled", "Servo output enabled",
     kind=KIND_BOOL,
-    note="Whether the fin servos were live when the frame was built.",
+    note="Whether servo control was on when the frame was built (bit 0 of the byte).",
     caution="Carried in no other stream — this is the only record of the servo enable through a "
             "flight.",
+)
+_P(
+    "Snapshot.snap_fins_cut", "Fins cut at the eject (snapshot)",
+    kind=KIND_BOOL,
+    note="#1768: the eject had cut the fins' pulses and servo rail when the frame was built (bit 1 of "
+         "servo_enabled). A restore keeps the cut for the flight.",
+    caution="False on logs from before #1768, whatever happened at the eject.",
 )
 _P(
     "Snapshot.ekf_lat", "EKF latitude",

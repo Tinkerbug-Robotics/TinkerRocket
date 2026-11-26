@@ -49,7 +49,8 @@ constexpr uint8_t GF_EKF        = 1u << 4;  // filter never initialised, or not 
 constexpr uint8_t GF_NO_ORIGIN  = 1u << 5;  // no position frame: no datum, or no launch origin
 constexpr uint8_t GF_NO_HEADING = 1u << 6;  // heading not trusted at launch (for the flight)
 constexpr uint8_t GF_HELD       = 1u << 7;  // fins held neutral: roll delay, speed gate,
-                                            // reboot settle or stale IMU
+                                            // reboot settle or stale IMU; or past the
+                                            // eject, their power cut (#1768)
 
 constexpr uint8_t GF_REASONS = GF_TILT | GF_SLOW | GF_EKF | GF_NO_ORIGIN |
                                GF_NO_HEADING | GF_HELD;

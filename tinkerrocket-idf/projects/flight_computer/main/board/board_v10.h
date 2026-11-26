@@ -269,6 +269,9 @@ struct board_pins
     // active-high enables with a 100 k pull-down (R82/R87).
     static constexpr int GPS_ACT_PIN = 15;    // GPS_ACT — GNSS rail enable
     static constexpr int SERVO_ACT_PIN = 8;   // SERVO_ACT — servo rail enable
+    // #1768: U28 switches the servo supply (high side), so the FC may cut the
+    // rail in flight with the signal lines held low.
+    static constexpr bool SERVO_ACT_SWITCHES_SUPPLY = true;
 
     // ### Power latch ###
     // As on V9: GPIO5 = P4_EN_HOLD, one anode of D9 (BAV170M); the other anode

@@ -18,6 +18,7 @@
 #include <cmath>
 #include <limits>
 #include <Arduino.h>  // host shim: setMockMicros()
+#include <driver/ledc.h>
 #include "TR_ServoControl_ledc_mult.h"
 
 namespace {
@@ -55,6 +56,83 @@ protected:
         setMockMicros(now_us_);
     }
 };
+
+// ---------- #1768: no roll command while stowed or relaxed ----------
+// getRollCmdDeg() is what the FC logs as roll_cmd.  It used to keep the last
+// control pass's value through a stow or a relax -- after the apogee call,
+// a standing deflection in the log for the whole descent with the fins at
+// neutral or limp.
+
+TEST_F(ServoControlTest, StowControlZeroesTheReportedRollCommand) {
+    tick();
+    servo.control(-20.0f);   // P-only: +20 deg/s of error -> 20 deg
+    ASSERT_NEAR(servo.getRollCmdDeg(), 20.0f, 1e-4f);
+    servo.stowControl();
+    EXPECT_EQ(servo.getRollCmdDeg(), 0.0f);
+}
+
+TEST_F(ServoControlTest, IdleZeroesTheReportedRollCommand) {
+    tick();
+    servo.control(-20.0f);
+    ASSERT_NEAR(servo.getRollCmdDeg(), 20.0f, 1e-4f);
+    servo.idle();
+    EXPECT_EQ(servo.getRollCmdDeg(), 0.0f);
+    servo.idle();   // idempotent once relaxed
+    EXPECT_EQ(servo.getRollCmdDeg(), 0.0f);
+}
+
+// ---------- #1768: locked outputs drive nothing ----------
+// Once the eject has cut the servo rail the FC locks the outputs: no command
+// path may put a pulse on a signal line into the unpowered servos.
+
+TEST_F(ServoControlTest, LockedOutputsWriteNoDutyOnAnyPath) {
+    tick();
+    servo.control(-20.0f);
+    servo.beginWiggle(0);        // a sweep under way when the lock lands
+    servo.idle();
+    servo.lockOutputs(true);
+    ASSERT_TRUE(servo.outputsLocked());
+    const int duty_calls = hostLedcLog().set_duty_calls;
+    const float angles[4] = {5.0f, -5.0f, 5.0f, -5.0f};
+    tick(); servo.control(-20.0f);
+    tick(); servo.controlWithGainSchedule(-20.0f, 30.0f);
+    tick(); servo.controlAngle(10.0f, 0.0f, 0.0f, 30.0f, 1.0f, 60.0f);
+    servo.setServoAngles(angles);
+    servo.stowControl();
+    servo.beginNeutralSettle(1000);
+    EXPECT_FALSE(servo.isNeutralSettling()) << "no settle starts into a cut rail";
+    servo.serviceNeutralSettle(5000);
+    for (uint32_t t = 0; t < 2 * TR_ServoControl::kWiggleDurationMs; t += 50) servo.serviceWiggle(t);
+    servo.beginWiggle(1000);     // and one asked for after it
+    EXPECT_FALSE(servo.isWiggling()) << "no sweep starts into a cut rail";
+    for (uint32_t t = 1000; t < 1000 + 2 * TR_ServoControl::kWiggleDurationMs; t += 50) servo.serviceWiggle(t);
+    EXPECT_EQ(hostLedcLog().set_duty_calls, duty_calls);
+    EXPECT_TRUE(servo.isIdle());
+    EXPECT_FALSE(servo.isNeutralSettling());
+    EXPECT_FALSE(servo.isWiggling());
+    for (int i = 0; i < 4; ++i) EXPECT_EQ(hostLedcLog().duty[i], 0u) << "channel " << i;
+}
+
+// A servo-timing change re-expresses each driven channel's pulse: locked, it
+// writes nothing, idled or not.
+TEST_F(ServoControlTest, LockedOutputsIgnoreATimingChange) {
+    const float angles[4] = {5.0f, 5.0f, 5.0f, 5.0f};
+    servo.setServoAngles(angles);
+    servo.lockOutputs(true);
+    const int duty_calls = hostLedcLog().set_duty_calls;
+    ASSERT_TRUE(servo.setServoTiming(100, 1000, 2000));
+    EXPECT_EQ(hostLedcLog().set_duty_calls, duty_calls);
+}
+
+TEST_F(ServoControlTest, UnlockedOutputsDriveAgain) {
+    servo.idle();
+    servo.lockOutputs(true);
+    servo.lockOutputs(false);
+    const float angles[4] = {5.0f, 5.0f, 5.0f, 5.0f};
+    servo.setServoAngles(angles);
+    EXPECT_FALSE(servo.isIdle());
+    EXPECT_NE(hostLedcLog().duty[0], 0u);
+}
 
 // ---------- controlAngle cascade behavior (unchanged by #372 fix) ----------
 
