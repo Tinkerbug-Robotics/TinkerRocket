@@ -352,9 +352,11 @@ PCB caught up with the schematic on 2026-10-30; see *PCB* below.
       pad 2, the output caps, VOS and the pull-up ends of `R58` and `R59`.
       V_SWITCH takes in PVIN, AVIN, EN, the input caps, `U22`'s outputs
       and `R44`.
-    - **Ground:** the exposed pad has one via to In1, under JLC's exception
-      to the no-via-in-pad rule for QFN ground pads. PGND, FB, AGND and DEF
-      tie to the pad on F.Cu.
+    - **Ground:** PGND, FB, AGND and DEF tie to the exposed pad on F.Cu.
+      Since 2026-11-26 the pad has no via (no via in any pad on this board,
+      owner's rule): two GND vias to In1 sit just outside the package
+      instead, off pin 5 at (48.6, 167.8) and off pin 16 at (53.25, 168.2),
+      0.26 mm and 0.31 mm from the nearest pad.
     - **FSW** has its own via to the In2 `+3V3` plane, 0.145 mm clear of
       In2's VCC trace along the left edge. That trace is why the block sits
       0.5 mm right of the old `U9`.
