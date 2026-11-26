@@ -28,7 +28,7 @@ that cannot include it — the hash changes when you commit. Tags avoid that.
 
 ```
 tinker-mantis-v<semver>                      v10.0.0 ordered; V11 in work. Earlier: rocket-computer-v9.0.0
-tinker-beetle-v<semver>                      V2 in work. Earlier: rocket-computer-mini-v1.0.1
+tinker-beetle-v<semver>                      v2.0.0 ordered 2026-11-25 (d24524e8, #1815); V3 in work. Earlier: rocket-computer-mini-v1.0.1
 tinker-base-v<semver>                        never fabricated, no tag yet
 lora-daughterboard-v<semver>                 v4.0.0 ordered (4a7904c3) and built; V5 in work. Earlier: v3.0.0
 gnss-sam10m8-18mm-hv-v3.0.0

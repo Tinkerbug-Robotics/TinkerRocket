@@ -7,7 +7,7 @@
 	(title_block
 		(title "tinker-beetle: GNSS receiver")
 		(date "2026-11-16")
-		(rev "V2")
+		(rev "V3")
 		(company "TinkerRocket")
 	)
 	(lib_symbols
