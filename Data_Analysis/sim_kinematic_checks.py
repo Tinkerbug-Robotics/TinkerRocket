@@ -96,6 +96,18 @@ QUIESCENT_COUNT_HI       = 30      # ~30 s of net quiet
 QUIESCENT_COUNT_MAX      = 45
 
 
+# #1763: main.cpp counts a GNSS record as new GPS for the apogee and landing
+# votes only with a usable fix (flight_computer/main/gnss_fix_policy.h): a 3-D
+# fix (fix_mode 3 or more) with at least GNSS_MIN_SATS satellites.  Most drivers
+# publish every epoch, fix or not; a no-fix record would keep the GPS voter
+# fresh with a velocity that never reads a descent.
+GNSS_MIN_SATS = 4
+
+
+def gnss_fix_usable(fix_mode: int, num_sats: int, min_sats: int = GNSS_MIN_SATS) -> bool:
+    return fix_mode >= 3 and num_sats >= min_sats
+
+
 def _constrain(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 

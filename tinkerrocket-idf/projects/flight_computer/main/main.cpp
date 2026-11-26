@@ -115,6 +115,7 @@
 #include "raw_iono_rule.h"        // the mosaic's rule, for the receiver's ionosphere and the app's
 #endif
 #include "nav_start_policy.h"     // #1762: the start without GNSS on every receiver, and a late fix's take-over (host-tested)
+#include "gnss_fix_policy.h"      // #1763: only a record with a usable fix is new GPS for the apogee and landing votes (host-tested)
 #if TR_RAW_NAV_SDR
 #include "sdr_nav_start_policy.h" // the board's boot check, and its names for the start rule (host-tested)
 #endif
@@ -990,7 +991,7 @@ static void refreshImuRateLimit()
 }
 
 static bool mach_locked_out = false;    // promoted from baro block for apogee voting
-static bool gps_new_for_kc = false;     // new GPS sample available for kinematic checks
+static bool gps_new_for_kc = false;     // the latest GNSS record is a new usable fix for kinematic checks (#1763)
 static bool guidance_active = false;
 // Tilt-limit safety latch: set true once the off-vertical tilt exceeds the
 // phase limit (pn_tilt_limit_boost/coast); guidance then stays roll-only
@@ -11058,7 +11059,16 @@ static void loop_fc()
         dbg_gnss_reads++;
         sensor_converter.convertGNSSData(gnss_data, gnss_latest_si);
         have_gnss_si = true;
-        gps_new_for_kc = true;
+        // #1763: new GPS for the apogee and landing votes only with a usable
+        // fix (gnss_fix_policy.h), the bar GnssAscentGate admits GNSS on.  Three
+        // of the four drivers publish every epoch, fix or not; counted, a
+        // no-fix record kept the GPS voter fresh with a velocity that never
+        // reads a descent, and above the barometer's range that blocked both
+        // the quorum and the accelerometer's lone call.  Set from the latest
+        // record, whose velocity the checks read, so a no-fix record clears
+        // a fix the checks have not read yet.
+        gps_new_for_kc = gnss_fix::usable(gnss_latest_si.fix_mode, gnss_latest_si.num_sats,
+                                          config::GNSS_MIN_SATS);
 
         memcpy(gnss_data_buffer,
                &gnss_data,
@@ -15016,9 +15026,12 @@ static void loop_fc()
                 ga.in_flight      = (rocket_state == INFLIGHT);
                 ga.burnout        = burnout_detected;
                 ga.apogee         = kinematics.apogee_flag || pyro_apogee_detected;
+                // #1763: the same test the apogee and landing votes count a
+                // record on (gnss_fix_policy.h), so GNSS is admitted and votes
+                // on the same bar.
                 ga.gnss_fix_ok    = have_gnss_si &&
-                                    gnss_latest_si.fix_mode >= 3U &&
-                                    gnss_latest_si.num_sats >= config::GNSS_MIN_SATS &&
+                                    gnss_fix::usable(gnss_latest_si.fix_mode, gnss_latest_si.num_sats,
+                                                     config::GNSS_MIN_SATS) &&
                                     (uint32_t)(time_us() - gnss_latest_si.time_us) <
                                         GNSS_ADMIT_STALE_US;
                 // The receiver's own fix time names a fix (the loop re-reads the

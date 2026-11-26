@@ -223,6 +223,21 @@ target_include_directories(test_kinematic_checks PRIVATE
 target_link_libraries(test_kinematic_checks GTest::gtest_main)
 gtest_discover_tests(test_kinematic_checks)
 
+# ---------- test_gnss_fix_policy ----------
+# #1763: a receiver that loses its fix but keeps sending records drops out of
+# the apogee vote as a silent one does (flight_computer/main/gnss_fix_policy.h,
+# against the real TR_KinematicChecks above the barometer's range).
+add_executable(test_gnss_fix_policy test_gnss_fix_policy.cpp
+    ${LIB_DIR}/TR_KinematicChecks/TR_KinematicChecks.cpp
+)
+target_include_directories(test_gnss_fix_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_KinematicChecks
+    ${LIB_DIR}/../projects/flight_computer/main   # gnss_fix_policy.h only
+)
+target_link_libraries(test_gnss_fix_policy GTest::gtest_main)
+gtest_discover_tests(test_gnss_fix_policy)
+
 # ---------- test_iis2mdc_poll_gate ----------
 # The IIS2MDC attempt gate (#1111): a failed read advances the gate like a
 # successful one, five in a row stall it into a 1->32 s back-off probe, and

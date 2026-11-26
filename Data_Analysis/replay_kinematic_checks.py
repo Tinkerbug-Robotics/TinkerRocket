@@ -18,7 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from plot_flight_data_mini import firmware_accel_norm, parse_binary_file
-from sim_kinematic_checks import KinematicChecks
+from sim_kinematic_checks import KinematicChecks, gnss_fix_usable
 
 
 NSF_BURNOUT = 1 << 4
@@ -161,10 +161,12 @@ def replay(binary_path: str) -> dict:
         if kind == "gnss":
             latest_gps_alt = float(r["alt_m"])
             latest_gps_vel_u = float(r["vel_u"])
-            new_gps = True
+            # #1763: new GPS only with a usable fix, as main.cpp (the latest record decides)
+            new_gps = gnss_fix_usable(r["fix_mode"], r["num_sats"])
             # Record GPS pass-state at GPS sample time (separate axis since
             # GPS is much slower than IMU and shouldn't be smeared along it).
-            gps_pass_t.append((t_us - t0_us) / 1e6)
+            if new_gps:
+                gps_pass_t.append((t_us - t0_us) / 1e6)
             continue
 
         if kind == "ns":
