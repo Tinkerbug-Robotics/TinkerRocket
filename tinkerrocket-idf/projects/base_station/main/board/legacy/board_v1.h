@@ -56,6 +56,9 @@ struct board_pins
     static constexpr bool EXPECT_MAX17303 = false;
     // #835 item 2: this board HAS a gauge; board_v3 does not.
     static constexpr bool HAS_FUEL_GAUGE = true;
+    // No INA230 on the cell; the Tinker-Base V2 (board_v5.h) is the one board
+    // that has it.
+    static constexpr bool HAS_CELL_INA230 = false;
 
     // #835 item 2: no own-battery divider on this board — the gauge reads the
     // cell directly. Declared so the shared ADC path in main.cpp compiles on

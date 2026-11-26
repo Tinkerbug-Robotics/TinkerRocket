@@ -44,6 +44,7 @@
 #include "bs_tx_slots.h"          // base-station-run transmit slots (three-rocket support)
 #include "bs_collision_watch.h"   // release rockets heard colliding (three-rocket support)
 #include "bs_battery_soc.h"       // voltage-based SoC fallback (#501)
+#include "bs_cell_current.h"      // Tinker-Base V2 INA230 -> cell volts / mA, charge positive
 #include "bs_pack_sense_policy.h"  // flight-pack dividers -> pack / cells (#714)
 #include "bs_download_policy.h"   // nextChunk()/mayEmitChunk() pacing (#380)
 #include "bs_storage_policy.h"    // NAND bring-up retry / demotion policy (#761)
@@ -61,12 +62,24 @@
 #include <TR_MAX17303.h>
 #include <TR_MP2672.h>
 #include <TR_BQ27Z746.h>
+#include <TR_INA230.h>            // Tinker-Base V2 cell-current monitor (U24, board_v5.h)
 #include <RocketComputerTypes.h>
 #include <JsonEscape.h>           // #1155 item 4: unit name in the identity readback
 // #1155 item 11: the queue's packet bound and the rocket's receive buffer are
 // the same number, or a command the queue accepts is one the rocket drops.
 static_assert(bs_uplink_queue::kMaxPacket == LORA_UPLINK_MAX_PACKET,
               "bs_uplink_queue::kMaxPacket must equal LORA_UPLINK_MAX_PACKET");
+
+// The Tinker-Base V2 (TR_BS_BOARD=5) boots from the 4 MB inside its
+// ESP32-S3FH4R2. Declaring more is the fatal direction: the bootloader finds
+// less flash than the header claims and stops before any firmware runs, and a
+// 16 MB table would put spiffs at an address that wraps onto the app. The
+// project CMakeLists applies sdkconfig.defaults.flash4mb for board 5; a build
+// dir configured before that (or with another board's flag) keeps its old
+// declaration, because IDF does not re-apply defaults to an existing sdkconfig.
+#if defined(ESP_PLATFORM) && TR_BS_BOARD == 5 && !defined(CONFIG_ESPTOOLPY_FLASHSIZE_4MB)
+#error "Stale sdkconfig: a Tinker-Base V2 (TR_BS_BOARD=5) image must declare 4 MB of flash (CONFIG_ESPTOOLPY_FLASHSIZE_4MB, from sdkconfig.defaults.flash4mb). rm build_v5/sdkconfig && idf.py -B build_v5 -DTR_BS_BOARD=5 build"
+#endif
 
 static const char* TAG = "BS";
 
@@ -183,6 +196,14 @@ static uint32_t last_battery_ms = 0;
 static i2c_master_bus_handle_t i2c_bus = nullptr;
 static TR_MAX17205G fuel_gauge(config::MAX17205_ADDR);
 static TR_BQ27Z746  bq_gauge(config::BQ27Z746_ADDR);
+// Tinker-Base V2 (HAS_CELL_INA230): the INA230 on the cell. Present = it
+// answered and took its configuration at boot. Until its first averaging
+// window completes its registers still hold the power-on zeros, so the
+// divider stands in until the conversion-ready flag has been seen once.
+static TR_INA230 cell_ina(config::CELL_INA230_ADDR);
+static bool      cell_ina_present   = false;
+static bool      cell_ina_converted = false;
+static bool      bs_current_from_ina = false;   // this poll's numbers came from the INA230
 
 // ==========================================================================
 // SECTION: Peripheral objects and board hardware
@@ -1223,6 +1244,83 @@ static void initSenseAdc()
 // Returns the cell terminal voltage, or NaN if it cannot be measured.
 static float readBatteryVolts() { return readAdcSense(batt_sense); }
 
+// ── Cell current via the INA230 (Tinker-Base V2, board_v5.h) ─────────
+//
+// Averaging: 1024 samples of a 1.1 ms shunt conversion and a 1.1 ms bus
+// conversion is one result every 2.25 s, just longer than the 2 s battery
+// poll, so every poll reads the mean over the whole interval rather than
+// whichever LoRa transmit burst a short window happened to catch. The current
+// the operator wants is the mean one, the one that empties the cell.
+static constexpr INA230_Avg      CELL_INA230_AVG = INA230_Avg::AVG_1024;
+static constexpr INA230_ConvTime CELL_INA230_CT  = INA230_ConvTime::CT_1100us;
+static constexpr uint16_t INA230_MASK_CVRF = 1u << 3;   // Mask/Enable: conversion ready
+
+// Bring the INA230 up on the bus main.cpp just created. Any failure leaves
+// cell_ina_present false, and updateBattery() reads the divider instead.
+static void initCellIna230()
+{
+    if (i2c_master_probe(i2c_bus, config::CELL_INA230_ADDR, 50 /* ms */) != ESP_OK)
+    {
+        ESP_LOGW(TAG, "[BATT] No INA230 at 0x%02X on the cell — voltage from the Volt_Read divider, no current",
+                 config::CELL_INA230_ADDR);
+        return;
+    }
+
+    uint16_t cal_read = 0;
+    const bool ok =
+        cell_ina.begin(i2c_bus, config::I2C_FREQ_HZ) == TR_INA230_OK &&
+        cell_ina.reset() == TR_INA230_OK &&
+        cell_ina.setConfiguration(CELL_INA230_AVG, CELL_INA230_CT, CELL_INA230_CT,
+                                  INA230_Mode::SHUNT_BUS_CONTINUOUS) == TR_INA230_OK &&
+        cell_ina.calibrate(config::CELL_INA230_SHUNT_OHM,
+                           config::CELL_INA230_CURRENT_LSB_A) == TR_INA230_OK &&
+        cell_ina.readRegister(INA230_Reg::CALIBRATION, &cal_read) == TR_INA230_OK;
+
+    // calibrate() returns OK on the write; read it back, because a CAL that
+    // did not land reads as a confident 0 mA rather than as a fault.
+    uint16_t cal_want = 0;
+    (void)tr_ina230::computeCalibration(config::CELL_INA230_SHUNT_OHM,
+                                        config::CELL_INA230_CURRENT_LSB_A, cal_want);
+    if (!ok || cal_read != cal_want)
+    {
+        ESP_LOGW(TAG, "[BATT] INA230 at 0x%02X answered but did not configure (CAL 0x%04X, want 0x%04X) — "
+                      "voltage from the Volt_Read divider, no current",
+                 config::CELL_INA230_ADDR, cal_read, cal_want);
+        return;
+    }
+
+    cell_ina_present = true;
+    ESP_LOGI(TAG, "[BATT] INA230 on the cell at 0x%02X: %.0f mOhm shunt, %.3f mA/bit, CAL %u, "
+                  "one result per %.2f s; current reads + charging / - discharging",
+             config::CELL_INA230_ADDR, (double)(config::CELL_INA230_SHUNT_OHM * 1000.0f),
+             (double)(config::CELL_INA230_CURRENT_LSB_A * 1000.0f), (unsigned)cal_read,
+             1024.0 * 2.0 * 1.1e-3);
+}
+
+enum class CellInaRead { Ok, NotReady, Failed };
+
+// One reading, in the base station's convention (bs_cell_current.h): the
+// cell's own terminal volts and its current in mA, positive when charging.
+static CellInaRead readCellIna230(float& cell_v, float& current_ma)
+{
+    if (!cell_ina_converted)
+    {
+        uint16_t me = 0;
+        if (cell_ina.readMaskEnable(&me) != TR_INA230_OK) return CellInaRead::Failed;
+        if (!(me & INA230_MASK_CVRF)) return CellInaRead::NotReady;   // still the power-on zeros
+        cell_ina_converted = true;
+    }
+    float bus_v = NAN, shunt_mv = NAN, current_a = NAN;
+    if (cell_ina.readBusVoltage_V(&bus_v)        != TR_INA230_OK ||
+        cell_ina.readShuntVoltage_mV(&shunt_mv)  != TR_INA230_OK ||
+        cell_ina.readCurrent_A(&current_a)       != TR_INA230_OK)
+        return CellInaRead::Failed;
+    const bs_cell_current::Reading r = bs_cell_current::fromIna230(bus_v, shunt_mv, current_a);
+    cell_v     = r.cell_v;
+    current_ma = r.current_ma;
+    return CellInaRead::Ok;
+}
+
 // #714: the external 2S flight pack on J4 — PosADC for the whole pack, MidADC
 // for cell 1. What the two pins mean (presence floor, the cell split, a mid
 // tap that is not a cell) is bs_pack_sense, host-tested; this reads them and
@@ -1259,16 +1357,49 @@ static void updateBattery()
     // run the ADC path on the gauged boards too.
     if constexpr (!config::HAS_FUEL_GAUGE)
     {
-        // No gauge on this board — the divider is the only source (#835 item 2).
-        bs_voltage = readBatteryVolts();
+        // No gauge on this board. The Tinker-Base V2 has an INA230 on the cell
+        // and reads it first; when it is absent, has not finished its first
+        // averaging window, or stops answering, the divider is the source, as
+        // it is on every other gauge-less board (#835 item 2).
+        CellInaRead ina = CellInaRead::Failed;
+        float ina_v = NAN, ina_ma = NAN;
+        if (cell_ina_present) ina = readCellIna230(ina_v, ina_ma);
+
+        bs_current_from_ina = (ina == CellInaRead::Ok);
+        if (bs_current_from_ina) {
+            bs_voltage = ina_v;
+            bs_current = ina_ma;
+        } else {
+            bs_voltage = readBatteryVolts();
+            bs_current = NAN;   // the divider has no current
+        }
+
+        // Say it when the INA230 drops out or comes back, not every poll. The
+        // wait for its first window is not a fault and says nothing.
+        if (cell_ina_present && ina != CellInaRead::NotReady) {
+            static int last_ok = -1;
+            const int now_ok = bs_current_from_ina ? 1 : 0;
+            if (now_ok != last_ok) {
+                if (now_ok)
+                    ESP_LOGI(TAG, "[BATT] cell from the INA230: %.3f V, %+.0f mA",
+                             (double)bs_voltage, (double)bs_current);
+                else
+                    ESP_LOGW(TAG, "[BATT] INA230 read failed — voltage from the Volt_Read divider, no current");
+                last_ok = now_ok;
+            }
+        }
+
         if (isnan(bs_voltage)) {
             bs_soc           = NAN;
             bs_soc_estimated = false;
         } else {
             // 1S: BT2 is a single 18650 on a BQ21040 linear charger, so the
-            // estimator's per-cell curve applies directly. No current sense
-            // on this path, so no IR compensation — pass 0.
-            bs_soc           = bq_soc_estimator.update(bs_voltage, 1, 0.0f, 0.0f);
+            // estimator's per-cell curve applies directly. The current is
+            // passed in the estimator's own convention (+ = charging), but
+            // BATTERY_INTERNAL_R_OHM is 0, so it does not compensate yet.
+            bs_soc           = bq_soc_estimator.update(bs_voltage, 1,
+                                                       isnan(bs_current) ? 0.0f : bs_current,
+                                                       config::BATTERY_INTERNAL_R_OHM);
             bs_soc_estimated = true;
         }
         return;
@@ -2531,6 +2662,13 @@ static void printStats()
                  (double)bs_voltage, (double)bs_soc,
                  bs_soc_estimated ? "est from voltage" : "gauge",
                  (double)bs_current, (double)bs_temperature);
+    }
+    else if (config::HAS_CELL_INA230)
+    {
+        // Tinker-Base V2: + is charging, - is the base station running on the cell.
+        ESP_LOGI(TAG, "[BATT] %.3f V | %.0f%% SoC (est from voltage) | %+.0f mA | from %s",
+                 (double)bs_voltage, (double)bs_soc, (double)bs_current,
+                 bs_current_from_ina ? "INA230" : "Volt_Read divider");
     }
 
     // Hop diagnostics (#105).  hop_active=Y/N is the live link state; the
@@ -4726,9 +4864,12 @@ static void setup_bs()
 
     // Configure I2C and auto-detect the fuel gauge (one firmware, both PCBs):
     // probe the new-PCB BQ27Z746 (0x55) first, then the original MAX17205 (0x36).
-    // A board with no I2C bus at all (the Tinker-Base, board_v4.h) declares -1
+    // A board with no I2C bus at all (the Tinker-Base V1, board_v4.h) declares -1
     // pins: skip the bring-up rather than hand the driver an invalid pin and log
     // "battery readings unavailable" on a board that reads its cell by ADC.
+    // The Tinker-Base V2 (board_v5.h) has a bus whose only device is the
+    // INA230 on the cell at 0x40: probe that and nothing else, so a gauge-less
+    // board does not log "No fuel gauge found".
     if constexpr (config::I2C_SDA_PIN < 0 || config::I2C_SCL_PIN < 0)
     {
         ESP_LOGI(TAG, "No I2C bus on this board (no fuel gauge, no pack charger)");
@@ -4747,6 +4888,10 @@ static void setup_bs()
         if (err != ESP_OK)
         {
             ESP_LOGW(TAG, "I2C bus init failed (%d) — battery readings unavailable", (int)err);
+        }
+        else if (config::HAS_CELL_INA230)
+        {
+            initCellIna230();   // on failure the divider below stands in
         }
         else if (i2c_master_probe(i2c_bus, config::BQ27Z746_ADDR, pdMS_TO_TICKS(50)) == ESP_OK)
         {

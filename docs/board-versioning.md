@@ -174,7 +174,7 @@ one `out_computer` uses for V9 PSRAM:
 |---|---|---|
 | `flight_computer` | 8 MB | `sdkconfig.defaults.v9` (`-DTR_BOARD_V9=1`, and V10) — comments only since #916; the flash size stays the base 8 MB. M2 takes its ESP32-S3 overlay, `sdkconfig.defaults.m2` (the Beetle V1's `sdkconfig.defaults.m1` until the V1 was retired), and then `sdkconfig.defaults.flash4mb` → 4 MB + `partitions_4mb.csv` |
 | `out_computer` | 8 MB | `sdkconfig.defaults.v9` (`-DTR_BOARD_V9=1`, V10 and M2) — PSRAM only since #916; the flash size stays the base 8 MB. M2 adds `sdkconfig.defaults.flash4mb` → 4 MB + `partitions_4mb.csv` |
-| `base_station` | 8 MB + `partitions.csv` | `sdkconfig.defaults.v3` → 16 MB + `partitions_v3.csv` (`-DTR_BS_BOARD=3`, and `=4` for the Tinker-Base) |
+| `base_station` | 8 MB + `partitions.csv` | `sdkconfig.defaults.v3` → 16 MB + `partitions_v3.csv` (`-DTR_BS_BOARD=3`, and `=4` for the Tinker-Base); `sdkconfig.defaults.flash4mb` → 4 MB + `partitions_4mb.csv` (`-DTR_BS_BOARD=5`, the Tinker-Base V2's in-package flash) |
 | `radio_board` | 4 MB | none — table ends at 3.13 MB, and 4 MB is safe on both the 8 MB as-built and the 16 MB artwork |
 
 The base value is deliberately the safe one, so a forgotten or unsupported flag

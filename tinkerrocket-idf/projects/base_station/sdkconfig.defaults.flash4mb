@@ -1,0 +1,30 @@
+# sdkconfig overlay applied ONLY to -DTR_BS_BOARD=5 builds (the Tinker-Base
+# V2), on top of sdkconfig.defaults. Selected by the project CMakeLists, not by
+# the build-dir name.
+#
+# It sets the one thing sdkconfig.defaults cannot share with this board: the
+# boot flash. The V2's U3 is an ESP32-S3FH4R2, which boots from the 4 MB of
+# flash in its package; V1's 16 MB WLCSP boot NOR (U1) is gone. The base
+# declares 8 MB with partitions.csv, which ends at 8 MB, and sdkconfig.defaults.v3
+# declares 16 MB. On a 4 MB part both are the FATAL direction: the bootloader
+# finds less flash than the image header claims, and a spiffs partition above
+# 4 MB wraps onto the app it would then format.
+#
+# So this board gets a table that fits, partitions_4mb.csv, and the declaration
+# that covers it, as out_computer's sdkconfig.defaults.flash4mb does for the
+# Tinker-Beetle V2 (same part). Still the #916 policy: the smallest standard
+# size that fits the build's own partition table, which
+# tinkerrocket-idf/tools/check_flash_declarations.py checks for this build too.
+# The two lines go together. Either one alone fails the build: gen_esp32part.py
+# refuses partitions.csv in 4 MB, and the checker refuses 8 MB for a table that
+# ends at 4 MB.
+#
+# Flash mode and clock stay the base's (DIO, 80 MHz), which the in-package
+# quad flash runs. PSRAM stays off, as on every base station.
+#
+# TRAP, the same one as everywhere else: IDF does not re-apply sdkconfig
+# defaults to an sdkconfig that already exists. main.cpp refuses to compile a
+# board-5 image without CONFIG_ESPTOOLPY_FLASHSIZE_4MB; delete build_v5/sdkconfig
+# and build again when it does.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"

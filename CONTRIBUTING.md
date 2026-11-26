@@ -186,7 +186,14 @@ idf.py -B build_v4 -DTR_BS_BOARD=4 build
 ```
 
 Its map, `board_v4.h`, is netlist-verified but has not run — no Tinker-Base exists yet.
-The full base station it forked from (`hardware/legacy/base-station/`, silkscreen **V6**) is
+The Tinker-Base V2 (silkscreen V2, what `hardware/tinker-base/` holds now) is board **5**,
+with a 4 MB partition table for its in-package flash:
+
+```bash
+idf.py -B build_v5 -DTR_BS_BOARD=5 build
+```
+
+The full base station the Tinker-Base forked from (`hardware/legacy/base-station/`, silkscreen **V6**) is
 board **3**, and its image fills the release's Tinker-Base slot until V4 is proven:
 
 ```bash

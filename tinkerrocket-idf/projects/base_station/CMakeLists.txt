@@ -36,7 +36,7 @@ string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
 # board" to the manifest, so the app's catalog could not tell them apart and
 # would offer a V3 base station the V2 image as its default.
 #
-# TR_BS_BOARD is 1, 2, 3 or 4 (4 = the Tinker-Base) and defaults to 2 in
+# TR_BS_BOARD is 1, 2, 3, 4 or 5 (4 = the Tinker-Base, 5 = its V2) and defaults to 2 in
 # main/config.h; the default is
 # repeated here rather than inferred, because a CMake variable that is simply
 # unset must stamp the same thing the compiler will build.
@@ -87,6 +87,14 @@ add_compile_definitions(TR_BOARD_OTA_SUFFIX="${TR_BOARD_SUFFIX}")
 if(TR_BS_BOARD EQUAL 3 OR TR_BS_BOARD EQUAL 4)
     set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.v3")
     message(STATUS "base_station: sdkconfig overlay sdkconfig.defaults.v3 (16 MB boot NOR, partitions_v3.csv)")
+# The Tinker-Base V2 (5) has no boot NOR: its ESP32-S3FH4R2 boots from the
+# 4 MB in its package. The base's 8 MB is the fatal direction on that part, so
+# it takes the 4 MB overlay and partitions_4mb.csv instead (board_v5.h), the
+# out computer's pattern for the Tinker-Beetle V2. main.cpp refuses a board-5
+# image whose sdkconfig does not declare 4 MB.
+elseif(TR_BS_BOARD EQUAL 5)
+    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.defaults.flash4mb")
+    message(STATUS "base_station: sdkconfig overlay sdkconfig.defaults.flash4mb (4 MB boot flash in the package, partitions_4mb.csv)")
 endif()
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
 

@@ -15,6 +15,7 @@ idf_component_register(
         TR_MAX17303
         TR_MP2672
         TR_BQ27Z746
+        TR_INA230            # Tinker-Base V2: the cell-current monitor (board_v5.h)
         TR_OTA
         app_update
         driver
@@ -31,10 +32,10 @@ idf_component_register(
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format)
 
-# Board revision selection (OC #411 pattern): `idf.py -DTR_BS_BOARD=<1|2|3|4>
-# build` compiles the matching pin map — main/board/board_v4.h (the
-# Tinker-Base), board_v3.h, or main/board/legacy/board_v{1,2}.h for the
-# superseded revisions; default is V2.
+# Board revision selection (OC #411 pattern): `idf.py -DTR_BS_BOARD=<1|2|3|4|5>
+# build` compiles the matching pin map — main/board/board_v5.h (the
+# Tinker-Base V2), board_v4.h (its V1), board_v3.h, or
+# main/board/legacy/board_v{1,2}.h for the superseded revisions; default is V2.
 # Use a separate build dir per variant (e.g. -B build_v3) — the flag is
 # cached by CMake.
 #
@@ -47,6 +48,6 @@ if(TR_BS_BOARD)
     message(STATUS "base_station: building for board V${TR_BS_BOARD} (TR_BS_BOARD=${TR_BS_BOARD})")
 else()
     message(WARNING "base_station: TR_BS_BOARD not set — defaulting to V2. "
-                    "For another board pass -DTR_BS_BOARD=<1|3|4> (the build-dir "
+                    "For another board pass -DTR_BS_BOARD=<1|3|4|5> (the build-dir "
                     "name alone does NOT select the board).")
 endif()

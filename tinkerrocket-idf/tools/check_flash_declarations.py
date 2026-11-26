@@ -64,6 +64,10 @@ BUILDS = [
     ("base_station V1/V2", "base_station", ["sdkconfig.defaults"]),
     ("base_station V3", "base_station", ["sdkconfig.defaults", "sdkconfig.defaults.v3"]),
     ("base_station V4 (Tinker-Base)", "base_station", ["sdkconfig.defaults", "sdkconfig.defaults.v3"]),
+    # The Tinker-Base V2: an ESP32-S3FH4R2 booting from the 4 MB in its
+    # package, with a partition table cut to fit it.
+    ("base_station V5 (Tinker-Base V2)", "base_station",
+     ["sdkconfig.defaults", "sdkconfig.defaults.flash4mb"]),
     ("radio_board", "radio_board", ["sdkconfig.defaults"]),
 ]
 

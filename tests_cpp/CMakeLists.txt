@@ -829,6 +829,19 @@ target_include_directories(test_bs_battery_soc PRIVATE
 target_link_libraries(test_bs_battery_soc GTest::gtest_main)
 gtest_discover_tests(test_bs_battery_soc)
 
+# ---------- test_bs_cell_current ----------
+# The Tinker-Base V2's INA230 reads discharge positive; the base station
+# reports charge positive. bs_cell_current.h flips it once and adds the shunt
+# drop back onto the bus voltage; pinned here because a sign error reads as a
+# plausible number.
+add_executable(test_bs_cell_current test_bs_cell_current.cpp)
+target_include_directories(test_bs_cell_current PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
+)
+target_link_libraries(test_bs_cell_current GTest::gtest_main)
+gtest_discover_tests(test_bs_cell_current)
+
 # ---------- test_bs_pack_sense_policy ----------
 # Host-side test for the base-station flight-pack sense (#714): the two
 # dividers on the charger jack (PosADC whole pack, MidADC cell 1) into pack
@@ -925,18 +938,19 @@ target_include_directories(test_bs_download_policy PRIVATE
 target_link_libraries(test_bs_download_policy GTest::gtest_main)
 gtest_discover_tests(test_bs_download_policy)
 
-# ---------- test_bs_board_map (x3) ----------
+# ---------- test_bs_board_map (x5) ----------
 # #835 items 1/2/4: board_v3.h claimed an external NAND, a fuel gauge and no
 # LoRa power gate — none of which match the netlist. Nothing asserted the board
 # headers against anything, so all three claims stood. Built once per board so a
-# claim has to survive being stated on every board (4 = the Tinker-Base);
-# TR_BS_BOARD picks the header exactly as the firmware build does.
-foreach(BSREV 1 2 3 4)
+# claim has to survive being stated on every board (4 = the Tinker-Base, 5 =
+# its V2); TR_BS_BOARD picks the header exactly as the firmware build does.
+foreach(BSREV 1 2 3 4 5)
     add_executable(test_bs_board_map_v${BSREV} test_bs_board_map.cpp)
     target_compile_definitions(test_bs_board_map_v${BSREV} PRIVATE TR_BS_BOARD=${BSREV})
     target_include_directories(test_bs_board_map_v${BSREV} PRIVATE
         ${SHIM_DIR}
         ${LIB_DIR}/TR_RocketComputerTypes
+        ${LIB_DIR}/TR_INA230   # TR_INA230_Cal.h: the V5 CAL check
         ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/base_station/main
     )
     target_link_libraries(test_bs_board_map_v${BSREV} GTest::gtest_main)
