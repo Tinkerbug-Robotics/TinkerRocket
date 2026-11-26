@@ -2073,6 +2073,8 @@ def parse_binary_file(filepath):
                         "gnss_admission":       (SNAPSHOT_GNSS_ADMISSION.get(gnss_code & 0x0F, "unknown")
                                                  if gnss_code else None),
                         "gnss_baro_stuck":      (bool(gnss_code & 0x80) if gnss_code else None),
+                        # #1764: judged stuck at any time this flight: no apogee vote
+                        "gnss_baro_stuck_seen": (bool(gnss_code & 0x40) if gnss_code else None),
                         "flight_elapsed_ms":    f[5],
                         "apogee_elapsed_ms":    f[6],
                         "burnout_elapsed_ms":   f[7],

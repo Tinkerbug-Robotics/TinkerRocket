@@ -65,7 +65,14 @@ public:
                          bool  baro_reading_fresh = false,
                          // The vote by sensor (InertialVote above); null
                          // keeps the vote by filter.
-                         const InertialVote* inertial = nullptr);
+                         const InertialVote* inertial = nullptr,
+                         // GnssAscentGate::baroVotes (#1764): false once the
+                         // barometer has been judged stuck this flight.  It
+                         // then casts no apogee vote, as an unhealthy one;
+                         // its landing tests and the Layer-2 backstop still
+                         // read baro_healthy.  Default keeps every caller
+                         // that predates it unchanged.
+                         bool  baro_may_vote = true);
 
     // How old a GNSS fix may be and still count the GPS apogee voter as
     // available: 500 ms by default, longer for a receiver whose fix comes

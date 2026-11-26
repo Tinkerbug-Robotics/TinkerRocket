@@ -4899,10 +4899,12 @@ struct __attribute__((packed)) FlightSnapshotData
     // 3 admitted (altitude agreed with the barometer), 4 admitted (agreed
     // with the EKF's own altitude: the barometer could not vouch), 5 admitted
     // (the barometer was judged stuck); bit 7 set while the barometer is
-    // judged stuck and not fused.  Size- and offset-neutral, and 0 — what
-    // every older writer left here — reads "not recorded", which a restore
-    // treats as "not admitted": GNSS must qualify again.  Fail-safe, so no
-    // VERSION bump.  Codes: GnssAscentGate.h.
+    // judged stuck and not fused; bit 6 set once it has been judged stuck this
+    // flight, so it casts no apogee vote (#1764; never set by an older writer,
+    // whose restore falls back on code 5 and bit 7).  Size- and offset-neutral,
+    // and 0 — what every older writer left here — reads "not recorded", which
+    // a restore treats as "not admitted": GNSS must qualify again.  Fail-safe,
+    // so no VERSION bump.  Codes: GnssAscentGate.h.
     uint8_t  gnss_admission;
 
     // --- Flight timestamps (relative to launch) ---

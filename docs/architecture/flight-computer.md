@@ -204,7 +204,9 @@ Three gates are worth knowing:
   25–125 kPa, or in the transonic lockout — the filter does not fuse it either, and GNSS
   is judged against the filter's own IMU-carried altitude instead. A barometer that stays
   flat after burnout while GNSS climbs is judged stuck (a sealed port): it stops being
-  fused and GNSS is admitted at once. Until admission GNSS also has **no apogee vote**.
+  fused and GNSS is admitted at once. Once judged stuck it also has **no apogee vote** for
+  the rest of the flight (#1764): its flat reading never passes, and with the IMU's voters
+  out it held the vote at one of two. Until admission GNSS also has **no apogee vote**.
   The state rides the flight snapshot (`gnss_admission`), so the log shows when and why
   the GNSS vertical came back.
 - **GNSS acceptance** requires a 3D fix, a minimum satellite count, a horizontal-accuracy
