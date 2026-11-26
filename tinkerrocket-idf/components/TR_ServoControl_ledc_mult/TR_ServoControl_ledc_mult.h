@@ -79,6 +79,15 @@ public:
     void idle();
     // True while the pulse train is stopped via idle().
     bool isIdle() const { return is_idle_; }
+    // #1768: hold the outputs off.  While locked every drive -- control*,
+    // setServoAngles, setPulseChannel, stowControl, the neutral settle, the
+    // wiggle, a servo-timing change -- writes nothing, so a relaxed channel
+    // stays at 0% duty (the signal line low).  The FC locks them with idle()
+    // when the eject cuts the servo rail, and unlocks them only after it
+    // raises the rail again: no pulse is ever driven into an unpowered servo,
+    // whatever command arrives in between.  idle() still works when locked.
+    void lockOutputs(bool locked) { outputs_locked_ = locked; }
+    bool outputsLocked() const { return outputs_locked_; }
     // set each servo to an individual angle (degrees), bypassing PID
     void setServoAngles(const float angles[4]);
 
@@ -335,6 +344,7 @@ private:
     // (setServoAngles/setPulseChannel), which re-asserts a real duty and so
     // resumes PWM without an explicit wake step.
     bool is_idle_ = false;
+    bool outputs_locked_ = false;   // #1768: lockOutputs()
 
     // Per channel: a pulse duty is live on the pin (set by writePulseDuty,
     // cleared by idle()).  Not the same as !is_idle_ -- the boot wiggle wakes

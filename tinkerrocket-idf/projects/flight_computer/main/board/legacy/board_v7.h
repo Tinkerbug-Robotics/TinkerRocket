@@ -139,6 +139,9 @@ struct board_pins
     // agrees with every other pin here. Driven high at boot, as on V8-V10.
     static constexpr int GPS_ACT_PIN = -1;
     static constexpr int SERVO_ACT_PIN = 22;   // SERVO_ACT -> Q9 (servo return)
+    // #1768: Q9 switches the servo return (low side): the rail is never cut in
+    // flight, or the servos' ground would float above signal lines held low.
+    static constexpr bool SERVO_ACT_SWITCHES_SUPPLY = false;
 
     // ### Power latch (V9+ only; -1 = the FC cannot hold its own rail) ###
     static constexpr int PWR_HOLD_PIN = -1;

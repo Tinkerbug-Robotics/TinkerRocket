@@ -1282,7 +1282,7 @@ GUID_FLAG_REASONS = {
     "ekf_not_ok":   (1 << 4),   # filter never initialised, or not healthy
     "no_origin":    (1 << 5),   # no datum, or no launch origin (e.g. after a reboot)
     "no_heading":   (1 << 6),   # magnetometer not healthy at launch (for the flight)
-    "fins_held":    (1 << 7),   # roll delay, speed gate, reboot settle or stale IMU
+    "fins_held":    (1 << 7),   # roll delay, speed gate, reboot settle, stale IMU, or past the eject
 }
 
 SYNC = b'\xAA\x55\xAA\x55'
@@ -2107,7 +2107,9 @@ def parse_binary_file(filepath):
                         "snap_nav_without_gnss": bool(f[20] & 0x01) and bool(f[20] & 0x02),
                         "snap_guidance_enabled": bool(f[21]),
                         "snap_burnout_detected": bool(f[22]),
-                        "servo_enabled":        bool(f[23]),
+                        "servo_enabled":        bool(f[23] & 0x01),
+                        # #1768: bit 1, the eject had cut the fins' pulses and rail
+                        "snap_fins_cut":        bool(f[23] & 0x02),
                         "ekf_lat":              math.degrees(f[24]),
                         "ekf_lon":              math.degrees(f[25]),
                         "ekf_alt_m":            f[26],

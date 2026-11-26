@@ -4975,6 +4975,10 @@ struct __attribute__((packed)) FlightSnapshotData
     uint8_t  ekf_initialized;
     uint8_t  guidance_enabled;
     uint8_t  burnout_detected;
+    // servo_enabled: bit 0 (SNAP_SERVO_ENABLED) servo control on; #1768, bit 1
+    // (SNAP_SERVO_FINS_CUT) the eject has cut the fins' pulses and rail, which
+    // a restore keeps for the flight. Every older writer wrote 0 or 1, which
+    // reads as before. Size- and offset-neutral, no VERSION bump.
     uint8_t  servo_enabled;
 
     // --- EKF state (covariance reduced to diagonal) ---
@@ -5034,6 +5038,9 @@ static constexpr uint8_t SNAP_B2R_AXIS_MASK  = 0x70u;   // 1-6 = +X, -X, +Y, -Y,
 // FlightSnapshotData.ekf_initialized (#1762)
 static constexpr uint8_t SNAP_EKF_STARTED      = 0x01u;
 static constexpr uint8_t SNAP_EKF_WITHOUT_GNSS = 0x02u;
+// FlightSnapshotData.servo_enabled (#1768)
+static constexpr uint8_t SNAP_SERVO_ENABLED  = 0x01u;
+static constexpr uint8_t SNAP_SERVO_FINS_CUT = 0x02u;
 
 static constexpr size_t SIZE_OF_GNSS_DATA = sizeof(GNSSData);
 static constexpr size_t SIZE_OF_BMP585_DATA     = sizeof(BMP585Data);

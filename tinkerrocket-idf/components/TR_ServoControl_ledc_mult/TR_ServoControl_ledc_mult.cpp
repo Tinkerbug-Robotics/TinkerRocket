@@ -182,6 +182,7 @@ static_assert(TR_ServoControl::kWiggleDurationMs == 4u * 3u * 350u,
               "wiggle duration must match 4 servos x 3 positions x step dwell");
 
 void TR_ServoControl::beginWiggle(uint32_t now_ms) {
+    if (outputs_locked_) return;   // #1768: no sweep into a cut rail
     wiggle_active_ = true;
     wiggle_step_   = 0;
     wiggle_at_ms_  = now_ms;   // first step is commanded on the next service call
@@ -237,6 +238,13 @@ void TR_ServoControl::stowControl() {
     // #1141 item 2: an unserviced settle must not outlive the stow that
     // superseded it, or serviceNeutralSettle() would later re-drive the fins.
     neutral_settle_active_ = false;
+
+    // #1768: no roll command while stowed.  getRollCmdDeg() is what the FC
+    // logs as roll_cmd; left at the last control pass's value it read as a
+    // standing deflection for as long as the fins were stowed or relaxed (a
+    // hold, LANDED, or the descent once the eject has cut their power).
+    // Zeroed even while the outputs are locked, when the stow drives nothing.
+    roll_cmd_deg = 0.0f;
 }
 
 void TR_ServoControl::idle() {
@@ -244,6 +252,7 @@ void TR_ServoControl::idle() {
     // Leaving the flag set would let a later serviceNeutralSettle() re-energise
     // fins that were deliberately relaxed.
     neutral_settle_active_ = false;
+    roll_cmd_deg = 0.0f;   // #1768: no roll command while relaxed (see stowControl)
     // Already relaxed — don't re-issue the duty writes every loop tick.
     if (is_idle_) return;
     // 0% duty holds the GPIO low for the whole period: no rising edge, so the
@@ -261,6 +270,7 @@ void TR_ServoControl::idle() {
 }
 
 void TR_ServoControl::setServoAngles(const float angles[4]) {
+    if (outputs_locked_) return;   // #1768: held off (lockOutputs)
     is_idle_ = false;  // commanding a pulse resumes PWM after idle()
     for (int i = 0; i < LEDC_CHANNEL_COUNT; ++i) {
         // Clamp the commanded fin angle to the physical fin-calibration range
@@ -290,6 +300,7 @@ void TR_ServoControl::writePulseDuty(int channel, int pulse_us) {
     // is marked driven either: begin() leaves every channel at duty 0,
     // relaxed, whatever was commanded before it ran.
     if (!begun_) return;
+    if (outputs_locked_) return;   // #1768: held off (lockOutputs)
     uint32_t max_duty = (1u << LEDC_RESOLUTION) - 1;
     uint32_t duty = (static_cast<uint32_t>(pulse_us)
                     * static_cast<uint32_t>(servo_hz)
@@ -300,6 +311,7 @@ void TR_ServoControl::writePulseDuty(int channel, int pulse_us) {
 }
 
 void TR_ServoControl::beginNeutralSettle(uint32_t now_ms) {
+    if (outputs_locked_) return;   // #1768: no settle into a cut rail
     // Phase 1: drive a few degrees past neutral on every channel (a higher
     // pulse — usFromFinDeg is monotonic — so all four load their gear mesh from
     // the same side).  setServoAngles clamps to the fin-cal range, so a narrow
@@ -343,6 +355,7 @@ void TR_ServoControl::setPulseChannel(int channel, int base_pulse_us) {
     // meaning “centre” (servo_mid_us_, which already carries the bias); any
     // other value gets the per-servo bias added here.
     if (channel < 0 || channel >= LEDC_CHANNEL_COUNT) return;
+    if (outputs_locked_) return;   // #1768: held off (lockOutputs)
     is_idle_ = false;  // commanding a pulse resumes PWM after idle()
 
     int pulse_us = (base_pulse_us == 0) ? servo_mid_us_[channel]

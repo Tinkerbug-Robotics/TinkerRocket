@@ -116,6 +116,7 @@
 #endif
 #include "nav_start_policy.h"     // #1762: the start without GNSS on every receiver, and a late fix's take-over (host-tested)
 #include "gnss_fix_policy.h"      // #1763: only a record with a usable fix is new GPS for the apogee and landing votes (host-tested)
+#include "fin_eject_policy.h"     // #1768: once the eject occurs the fins' pulses and rail are cut for the flight (host-tested)
 #if TR_RAW_NAV_SDR
 #include "sdr_nav_start_policy.h" // the board's boot check, and its names for the start rule (host-tested)
 #endif
@@ -811,9 +812,28 @@ static float roll_min_speed_mps = config::ROLL_CONTROL_MIN_SPEED_MPS;
 // Per-flight latch: set the first tick the speed gate is satisfied, and never
 // cleared until the next launch/sim.  Without the latch the gate would re-close
 // as the vehicle slows toward apogee, stowing the fins and resetting the PID
-// mid-flight — and then re-opening on the descent, which is the one place roll
-// control is neither wanted nor trustworthy.
+// mid-flight.  The latch does not end control on the descent: #1768's
+// fin_eject below does, at the eject.
 static bool roll_speed_gate_open = false;
+// #1768: the fins once the eject has occurred -- the pulse train cut and the
+// servo rail off for the rest of the flight, no roll law, no guidance
+// (fin_eject_policy.h).  Reset at launch, at a sim's reset and at a restore.
+static FinEjectPolicy::State fin_eject;
+// #1768: the snapshot said the eject had cut the fins before a reboot (the
+// SNAP_SERVO_FINS_CUT bit): an eject for this boot's first INFLIGHT pass, so a
+// detector-only eject (no FC charge) is not lost to a reboot under the chute.
+static bool fin_cut_restored = false;
+// The servo rail (SERVO_ACT, the #345 servo-power MOSFET): up from boot, off
+// from the eject to the end of the flight (#1768), back up at the next launch
+// or sim reset.  -1 = not FC-switched (the Beetle V2).  Cut only where SERVO_ACT
+// switches the servo supply (the V9 and V10 boards' U28): a low-side switch on
+// the servo return (the V7) would float the servos' ground above signal lines
+// held low.  Raising is always safe.
+static void servoRailSet(bool on)
+{
+    if (config::SERVO_ACT_PIN >= 0 && (on || config::SERVO_ACT_SWITCHES_SUPPLY))
+        gpio_set_level((gpio_num_t)config::SERVO_ACT_PIN, on ? 1 : 0);
+}
 // One-shot diagnostic: whether the "gate still shut" warning has been logged
 // for this flight.  Cleared with the latch.
 static bool roll_speed_gate_warned = false;
@@ -1104,6 +1124,11 @@ static uint32_t      pyro_apogee_time_ms  = 0;
 // after-fire hold (flight_timeout_policy.h). Flight task only.
 static bool          pyro_fired_this_flight = false;
 static uint32_t      pyro_last_fire_ms      = 0;
+// #1768: a deployment charge has started its fire this flight (a dry fire in a
+// sim included): an eject, for the fins' power cut (fin_eject).  Set on the
+// pulse's first pass, not its end as pyro_fired_this_flight is; a restore sets
+// it from the spent channels.  Flight task only.
+static bool          pyro_charge_fired      = false;
 
 // PRELAUNCH-edge continuity check: on the new PCB the CONT divider is fed
 // from VPP (always on) and is independent of the shared ARM rail, so we
@@ -1232,7 +1257,9 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     snap.ekf_initialized = nav_start::snapshotFilterByte(ekf_initialized, gnss_absent_flight);
     snap.guidance_enabled = guidance_enabled ? 1 : 0;
     snap.burnout_detected = burnout_detected ? 1 : 0;
-    snap.servo_enabled    = servo_enabled    ? 1 : 0;
+    // #1768: bit 1, the eject has cut the fins (SNAP_SERVO_FINS_CUT)
+    snap.servo_enabled    = (uint8_t)((servo_enabled ? SNAP_SERVO_ENABLED : 0u) |
+                                      (FinEjectPolicy::cut(fin_eject) ? SNAP_SERVO_FINS_CUT : 0u));
 
     // Board→rocket orientation latched at launch (v3) — the EKF state
     // below is only meaningful in this rocket frame.
@@ -1332,6 +1359,10 @@ static const char* resetReasonStr(esp_reset_reason_t r)
 // ==========================================================================
 // SECTION: Servo control and config-frame reads
 // ==========================================================================
+// #1768: the rail waits out the pulse under way when the eject cuts them --
+// at least two PWM periods at the slowest servo rate a config may set.
+static_assert(config::SERVO_RAIL_CUT_DELAY_MS * (uint32_t)TR_ServoControl::kMinServoHz >= 2u * 1000u,
+              "SERVO_RAIL_CUT_DELAY_MS must cover two PWM periods at the slowest servo rate");
 static TR_ServoControl servo_control(config::SERVO_PIN_1,
                                      config::SERVO_PIN_2,
                                      config::SERVO_PIN_3,
@@ -2055,6 +2086,7 @@ static void servicePyroChannels(uint32_t now_ms)
 
     for (int i = 0; i < 4; ++i) {
         if (just_fired[i]) {
+            pyro_charge_fired = true;   // #1768: the eject, for the fins' power cut
             // #834 item 4: record WHICH source authorised the deploy. On the
             // GNSS backstop pressure_alt_m is a free-running estimate and is
             // meaningless, so print the GNSS AGL that actually decided it.
@@ -7923,8 +7955,9 @@ static void setup_fc()
     // Power gates (#411): on V8 the FC switches the GNSS + servo rails.
     // Raised before any dependent init (the GNSS boot probe and the servo
     // boot wiggle both need their rails up); -1 = rail not FC-switched.
-    // SERVO_ACT is the #345 servo-power MOSFET — held on for now;
-    // integrating it with SERVO_RELAX_ON_PAD is a follow-up.
+    // SERVO_ACT is the #345 servo-power MOSFET — held on, except from a
+    // flight's eject to its end (#1768, servoRailSet); integrating it with
+    // SERVO_RELAX_ON_PAD is a follow-up.
     // #700: this is the safe order and must stay that way — rail UP before the
     // GNSS UART is configured, so the host never drives an unpowered module.
     // GPS_ACT is raised once here and never lowered, which is why the GNSS
@@ -9318,12 +9351,17 @@ static void setup_fc()
             // The control-authority speed gate is NOT in the snapshot, so it
             // starts shut and has to re-satisfy after a mid-flight reboot.
             // That is deliberate rather than an omission: reboot_recovery
-            // already stows the fins through the settle, a boost/coast reboot
-            // re-opens the gate on the first tick (the vehicle is fast), and a
-            // descent reboot leaves the fins neutral — which is where roll
-            // control is neither wanted nor trustworthy anyway.  Keeping it out
-            // of FlightSnapshotData avoids a snapshot version bump that would
-            // make every v4 snapshot on the boards unreadable.
+            // already stows the fins through the settle, and a boost/coast
+            // reboot re-opens the gate on the first tick (the vehicle is fast;
+            // with the default gate of 0, whatever the speed).  What ends
+            // control on the descent is #1768's fin_eject: a reboot after the
+            // eject cuts the fins' pulses and rail on its first INFLIGHT pass
+            // (fin_cut_restored, from the snapshot's servo byte; and
+            // pyro_charge_fired, from the spent channels below, for a reset
+            // inside the 100 ms before the cut reached a snapshot).  Keeping
+            // the gate out of FlightSnapshotData avoids a snapshot version
+            // bump that would make every v4 snapshot on the boards unreadable.
+            FinEjectPolicy::reset(fin_eject);
             if (snap.pyro_apogee_detected) {
                 pyro_apogee_detected = true;
                 pyro_apogee_time_ms = launch_time_millis + snap.apogee_elapsed_ms;
@@ -9361,6 +9399,10 @@ static void setup_fc()
             // under a late main is not declared LANDED in the air.
             pyro_fired_this_flight = spent[0] || spent[1] || spent[2] || spent[3];
             pyro_last_fire_ms      = now_ms;
+            // #1768: and the eject, so the first INFLIGHT pass cuts the fins'
+            // pulses and rail again (the boot raised the rail).  A channel
+            // restored as spent had started: fired, or in its arm settle.
+            pyro_charge_fired      = pyro_fired_this_flight;
 
             // #834 item 4: the sensor stack has just come up cold while the
             // snapshot restored a mid-flight apogee, so the main-deploy gate
@@ -9479,7 +9521,12 @@ static void setup_fc()
             // guidance_heading_trusted keep their boot values -- invalid,
             // untrusted -- and a guided flight that reboots finishes
             // roll-only, its status frames saying GF_NO_ORIGIN.
-            servo_enabled    = snap.servo_enabled;
+            servo_enabled    = (snap.servo_enabled & SNAP_SERVO_ENABLED) != 0;
+            // #1768: an eject before the reboot cuts the fins again on the
+            // first INFLIGHT pass, whatever detected it.
+            fin_cut_restored = (snap.servo_enabled & SNAP_SERVO_FINS_CUT) != 0;
+            if (fin_cut_restored)
+                ESP_LOGW(TAG, "[RECOVERY] past the eject: the fins' pulses and rail stay cut (#1768)");
             landed_actions_done = false;
             end_flight_sent = false;
 
@@ -9843,6 +9890,9 @@ static void resetFlightStateForSim(const char* edge)
     guidance_inhibit_flags = 0;
     roll_speed_gate_open = false;      // re-arm the control-authority speed gate
     roll_speed_gate_warned = false;
+    FinEjectPolicy::reset(fin_eject);  // #1768: a sim's eject cut the rail; up again,
+    servoRailSet(true);                //   then the outputs free to drive it
+    servo_control.lockOutputs(false);
     reboot_recovery = false;
     reboot_recovery_telem = false;
     // #1176: a sim start/stop is the sim's equivalent of a reboot, so the
@@ -10159,11 +10209,16 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     guidance_inhibit_flags = 0;
     roll_speed_gate_open = false;      // re-arm the control-authority speed gate
     roll_speed_gate_warned = false;
+    FinEjectPolicy::reset(fin_eject);  // #1768: no eject yet; the rail up for the flight,
+    servoRailSet(true);                //   then the outputs free to drive it
+    servo_control.lockOutputs(false);
     // Reset pyro channels on launch. ARM stays LOW until a
     // channel's trigger fires (per-fire arming on new PCB).
     pyro_apogee_detected = false;
     pyro_apogee_time_ms  = 0;
     pyro_fired_this_flight = false;   // #1753: the timeout's after-fire hold is per flight
+    pyro_charge_fired = false;        // #1768: no eject yet
+    fin_cut_restored = false;
     pyro_edge_snapshot_owed = false;  // #1760: a frame owed to a previous flight is not this one's
     pyro_last_fire_ms      = 0;
     // #382: re-arm the per-flight settings snapshot (#165) —
@@ -12852,7 +12907,8 @@ static void loop_fc()
                     // next idle() strips the pulse train, so the operator never
                     // sees the fin move.  Skipped while a test/replay owns the
                     // servos (they suppress idle already and drive their own
-                    // angles) and while INFLIGHT (never relax in flight).
+                    // angles) and while INFLIGHT (in flight only the eject
+                    // relaxes them, and cuts their rail, #1768).
                     if (servo_enabled && rocket_state != INFLIGHT &&
                         !servo_test_active && !ground_test_active && !servo_replay_active)
                     {
@@ -16024,7 +16080,10 @@ static void loop_fc()
                 // Servo settling after reboot recovery — hold neutral until EKF stabilizes
                 if (reboot_recovery && now_ms >= servo_settle_end_ms) {
                     reboot_recovery = false;  // keep PSF_REBOOT_RECOVERY flag in telemetry
-                    ESP_LOGI(TAG, "[RECOVERY] Servo settle complete, control resumed");
+                    ESP_LOGI(TAG, "[RECOVERY] Servo settle complete, %s",
+                             FinEjectPolicy::cut(fin_eject)
+                                 ? "past the eject: the fins' power stays cut (#1768)"
+                                 : "control resumed");
                 }
 
                 // --- Burnout detection — runs independently of servo/roll
@@ -16075,6 +16134,43 @@ static void loop_fc()
                     burnout_time_ms = now_ms;
                     ESP_LOGI(TAG, "[GUID] Burnout detected at T+%lu ms",
                                   (unsigned long)t_since_launch_ms);
+                }
+
+                // #1768: once the eject has occurred the fins' pulse train is
+                // cut and their outputs locked, then, SERVO_RAIL_CUT_DELAY_MS
+                // later, the servo rail switched off, for the rest of the
+                // flight; the servos disconnect at the drogue's eject on a
+                // nominal flight.  Roll control and guidance run as before
+                // until then.  The eject:
+                //   - the deployment detected, once the FC has called apogee: a
+                //     false detection in the boost or coast (a transonic
+                //     barometer jump, a filtered-rate excursion) must not end
+                //     control;
+                //   - a deployment charge starting its fire (every trigger is
+                //     after apogee);
+                //   - a cut restored from the snapshot.
+                // Outside `if (servo_enabled)`: the rail is cut with servo
+                // control off too.
+                const bool ejected = (deployment_detected && pyro_apogee_detected) ||
+                                     pyro_charge_fired || fin_cut_restored;
+                const FinEjectPolicy::Fins fins =
+                    FinEjectPolicy::step(fin_eject, ejected, now_ms, config::SERVO_RAIL_CUT_DELAY_MS);
+                FinEjectPolicy::drive(fins, servo_control, servoRailSet);
+                if (fins == FinEjectPolicy::Fins::CutBegin)
+                {
+                    ESP_LOGI(TAG, "[CTRL] Eject (%s) at T+%lu ms - fins' pulses cut, roll "
+                                  "control and guidance off for the flight",
+                             pyro_charge_fired ? "a deployment charge"
+                             : fin_cut_restored ? "restored from the snapshot"
+                                                : "deployment detected",
+                             (unsigned long)t_since_launch_ms);
+                }
+                else if (fins == FinEjectPolicy::Fins::RailOff)
+                {
+                    ESP_LOGI(TAG, "[CTRL] Servo rail %s",
+                             config::SERVO_ACT_PIN < 0 ? "not FC-switched on this board"
+                             : config::SERVO_ACT_SWITCHES_SUPPLY ? "off (SERVO_ACT)"
+                                                                 : "kept up (this board switches the servo return)");
                 }
 
                 if (servo_enabled)
@@ -16139,7 +16235,15 @@ static void loop_fc()
                     // #1755: an AUTO frame the thrust axis disproved has no
                     // roll axis to control (gyro_x is a pitch or yaw rate):
                     // fins neutral and guidance held for the rest of it.
-                    if (reboot_recovery || t_since_launch_ms < roll_delay_ms ||
+                    //
+                    // #1768: past the eject the fins have no power: no roll law,
+                    // guidance held (fin_eject's drive above keeps the pulses cut).
+                    if (FinEjectPolicy::cut(fin_eject))
+                    {
+                        guidance_active = false;
+                        guidance_inhibit_flags = GuidanceGatePolicy::GF_HELD;
+                    }
+                    else if (reboot_recovery || t_since_launch_ms < roll_delay_ms ||
                         !roll_speed_gate_open || orient_frame_disproved)
                     {
                         // Hold fins neutral until delay/settle elapses and the
@@ -16540,8 +16644,10 @@ static void loop_fc()
                     {
                         // Relax post-flight to stop the idle holding current
                         // (the MOSFET-less interim of the pad relax); otherwise
-                        // hold centre as before.
-                        if (config::SERVO_RELAX_ON_PAD)
+                        // hold center as before.  #1768: never re-drive fins
+                        // whose rail the eject cut (their outputs are locked,
+                        // so a stow would write nothing anyway).
+                        if (config::SERVO_RELAX_ON_PAD || FinEjectPolicy::cut(fin_eject))
                             servo_control.idle();
                         else
                             servo_control.stowControl();

@@ -1074,6 +1074,13 @@ struct config : board_pins
     // stops adjusting.  Only spent while actively trimming on the bench.
     static constexpr uint32_t SERVO_PAD_TRIM_WAKE_MS = 6000;
 
+    // #1768: once the eject has occurred the fins' pulses are cut at once and
+    // the servo rail (SERVO_ACT) this long after.  The LEDC latches a duty
+    // change at the next PWM period, so the pulse under way runs to its end;
+    // 50 ms is two periods at the slowest servo rate (40 Hz), and no signal
+    // line is high when the rail goes.  main.cpp static_asserts the bound.
+    static constexpr uint32_t SERVO_RAIL_CUT_DELAY_MS = 50;
+
     // EKF pad heading: compass heading of board Z+ (deg, 0=North, 90=East).
     // #1578: only the seed — a calibrated magnetometer sets the heading on the
     // pad (see PAD_HEADING_SIGMA_DEG); without one it stays at this value.

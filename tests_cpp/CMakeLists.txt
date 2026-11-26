@@ -59,6 +59,25 @@ target_include_directories(test_servo_control PRIVATE
 target_link_libraries(test_servo_control GTest::gtest_main)
 gtest_discover_tests(test_servo_control)
 
+# ---------- test_fin_eject_policy ----------
+# #1768: once the eject occurs (the deployment detected, or a deployment charge
+# fired) the fins' pulse train is cut, then the servo rail, for the rest of the
+# flight (flight_computer/main/fin_eject_policy.h); flown with the real
+# TR_ServoControl (LEDC duty recorded by the host shim).
+add_executable(test_fin_eject_policy test_fin_eject_policy.cpp
+    ${LIB_DIR}/TR_ServoControl_ledc_mult/TR_ServoControl_ledc_mult.cpp
+    ${LIB_DIR}/TR_PID/TR_PID.cpp
+)
+target_include_directories(test_fin_eject_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/TR_ServoControl_ledc_mult
+    ${LIB_DIR}/TR_PID
+    ${LIB_DIR}/../projects/flight_computer/main   # fin_eject_policy.h only
+)
+target_link_libraries(test_fin_eject_policy GTest::gtest_main)
+gtest_discover_tests(test_fin_eject_policy)
+
 # ---------- test_roll_path_parity ----------
 # The FC mixes roll-only control in two places — the ground test via
 # TR_ControlMixer, the flight via TR_ServoControl — so this links both and
