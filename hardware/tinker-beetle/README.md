@@ -135,6 +135,13 @@ for the swap: `power-budget.md` (LC86G figures), the fab notes, `bom.csv`, and
 the M1 firmware, which drives the LC86G; the PX100 talks SkyTraq binary, like
 the PX1105R.
 
+**C130 now stands upright** (2026-11-25, owner call; production review item 4). The can stands
+on its own two holes, 2.0 mm over the parts round them, in a printed TPU support staked with RTV
+to the board and the can. It no longer lies on the shield, so the shield cover comes off with C130
+fitted. The footprint, its holes and its courtyard are unchanged; only the board's C130 3D model
+now shows the can standing in its support. Print file, fit check and fitting steps:
+[`c130-support/`](c130-support/README.md). The paragraph below is the 2026-11-16 history.
+
 **V2 takes the Tinker-Mantis's supercap, still lying down** (2026-11-16, owner
 call). `C130` is now the CDA (Zhifengwei) CXHP2R7205R-TW, 2.0 F, 2.7 V, 8 x 12 mm
 (up to 9 x 13.5) on a 3.5 mm pitch, in place of V1's Eaton HV1020-2R7505-R
