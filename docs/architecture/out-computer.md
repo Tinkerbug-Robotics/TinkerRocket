@@ -233,7 +233,9 @@ reboots.** Post-flight ground handling can re-trip the FC's launch detect, and w
 the lockout that opens a junk session full of ground data that only closes at power-off
 (#317). The gate covers both automatic session opens: the `PRELAUNCH` pre-create and
 the `NSF_LAUNCH` auto-start. Only a demonstrable simulator re-arm clears it — a frame
-carrying `NSF_SIM_ACTIVE`, or the end of a `LANDED` that was itself a sim flight. The
+that is not `LANDED` and carries `NSF_SIM_ACTIVE` (a sim started), or the end of a `LANDED`
+that was itself a sim flight (since #1766 a flown-out sim's held `LANDED` carries the flag
+until its Stop). The
 FC leaving `LANDED` on its own is not enough: its `post_flight_lockout` is plain RAM, so
 an FC-only reset walks it back to `PRELAUNCH` with the OC still up, and the OC holds the
 lockout through that (#1235).

@@ -1596,7 +1596,8 @@ struct HealthCardView: View {
         switch telemetry.flightReadiness {
         case .ready:    return .green
         case .caution:  return .orange
-        case .notReady: return .red
+        case .notReady, .landed, .landedSim: return .red
+        case .inFlight: return .gray
         case .unknown:  return .gray
         }
     }
@@ -1605,7 +1606,8 @@ struct HealthCardView: View {
         switch telemetry.flightReadiness {
         case .ready:    return "checkmark.seal.fill"
         case .caution:  return "exclamationmark.triangle.fill"
-        case .notReady: return "xmark.octagon.fill"
+        case .notReady, .landed, .landedSim: return "xmark.octagon.fill"
+        case .inFlight: return "airplane"
         case .unknown:  return "hourglass"
         }
     }

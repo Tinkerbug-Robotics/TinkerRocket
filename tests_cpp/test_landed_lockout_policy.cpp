@@ -16,6 +16,7 @@
 // and the operator's sim Stop resets it to READY with the flag still down.
 
 #include <gtest/gtest.h>
+#include <vector>
 
 #include "landed_lockout_policy.h"
 
@@ -147,6 +148,42 @@ TEST(LandedLockoutPolicy, AnFcResetAfterASimLandingClearsIt)
     State s;
     feed(s, {{READY, true}, {INFLIGHT, true}, {LANDED, true}, {LANDED, false}});
     EXPECT_FALSE(feed(s, {{INITIALIZATION, false}}));
+}
+
+// #1766: the FC now reports the flag through the whole of a flown-out sim's
+// held LANDED (sim_flight::reportsSim) and drops it at the Stop's reset.
+// The stream the OC sees then: every LANDED frame flagged, the READY after
+// the Stop not.  Leaving that LANDED clears the lockout, and the real flight
+// that follows is logged and its own landing held.
+TEST(LandedLockoutPolicy, AFlownOutSimWhoseHeldLandedCarriesTheFlagThenStopClearsIt)
+{
+    State s;
+    std::vector<Frame> held;
+    for (int i = 0; i < 500; i++) held.push_back({LANDED, true});
+    EXPECT_FALSE(feed(s, {{READY, true}, {PRELAUNCH, true}, {INFLIGHT, true}}));
+    for (const Frame& f : held) EXPECT_TRUE(LandedLockout::step(s, f.state, f.sim));
+    EXPECT_TRUE(s.landed_was_sim);
+    EXPECT_FALSE(feed(s, {{READY, false}}));                          // the Stop: FC resets
+    EXPECT_FALSE(feed(s, {{PRELAUNCH, false}, {INFLIGHT, false}}));   // the real flight logs
+    EXPECT_TRUE(feed(s, {{LANDED, false}}));                          // and its landing holds
+    EXPECT_TRUE(feed(s, {{INITIALIZATION, false}, {READY, false}}));  // through an FC reset
+}
+
+// #1766: what the flag in the held LANDED newly fixes on the OC. An OC that
+// rebooted during a flown-out sim's held LANDED never saw its INFLIGHT frames:
+// it sees only the flagged LANDED frames, then the Stop's READY. That now
+// clears the lockout, so the real flight after it is logged; with the flag
+// down in the hold (before), it held, and that flight went unlogged.
+TEST(LandedLockoutPolicy, AnOcRebootedDuringASimsHeldLandedIsClearedByItsStop)
+{
+    State s;   // fresh: the OC's boot
+    for (int i = 0; i < 200; i++) EXPECT_TRUE(step(s, LANDED, true));
+    EXPECT_FALSE(feed(s, {{READY, false}}));                          // the Stop: FC resets
+    EXPECT_FALSE(feed(s, {{PRELAUNCH, false}, {INFLIGHT, false}}));   // the real flight logs
+    // the same boot with the old stream (flag down in the hold) held it
+    State old;
+    for (int i = 0; i < 200; i++) step(old, LANDED, false);
+    EXPECT_TRUE(feed(old, {{READY, false}}));
 }
 
 TEST(LandedLockoutPolicy, AFlownOutSimWithNoFlaggedLandedFrameThenStopClearsIt)

@@ -16850,7 +16850,13 @@ static void loop_fc()
         if (arm_now) non_sensor_data.flags |= NSF_PYRO_ARMED;
         // #393: report sim-active so the app's Stop-sim control survives BLE
         // reconnects (its local latch dies with the recreated BLEDevice).
-        if (sensor_collector.isSimActive()) non_sensor_data.flags |= NSF_SIM_ACTIVE;
+        // #1766: for the whole of a sim's flight state, not only while it
+        // runs -- a flown-out sim ends at LANDED and the FC holds LANDED
+        // (#317) until the operator's Stop, which only that banner offers.
+        // With the flag down there, a reconnect or a switch to the relay
+        // lost the banner, and nothing told a held sim LANDED from a pad.
+        if (sim_flight::reportsSim(sim_flight_latched, sensor_collector.isSimActive()))
+            non_sensor_data.flags |= NSF_SIM_ACTIVE;
         non_sensor_data.rocket_state = (uint8_t)rocket_state;
         // 4-channel pyro status byte: bit pairs (cont, fired) per channel.
         // CONT bits reflect the last known reading (set during a CONT test

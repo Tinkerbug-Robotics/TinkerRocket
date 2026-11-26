@@ -63,6 +63,26 @@ constexpr bool simulated(bool sim_flight_latched, bool sim_active)
     return sim_flight_latched || sim_active;
 }
 
+/// #1766: does the FC report NSF_SIM_ACTIVE?  For the whole of a sim's flight
+/// state (simulated()), not only while isSimActive(): a flown-out sim ends at
+/// LANDED and the FC holds it (#317) until the operator's Stop, the one way
+/// to re-arm without a reboot, which the apps offer only on their SIM banner.
+/// With the flag down for that hold, a phone reconnect or a switch to the
+/// base-station relay lost the banner, and a held sim LANDED looked like a
+/// rocket to fly.  The flag drops with the latch, at the reset the Stop
+/// (or the next Start) makes; an FC reset clears the latch (RAM), so a real
+/// flight's LANDED never carries it (the bench-only TR_BENCH_RESTORE_SIM
+/// restore sets it again for a restored sim flight, as it should).  The OC's
+/// readers keep their meaning: its landed lockout clears on leaving a LANDED
+/// that carried the flag (the sim's); arm consent and the stray-Stop gate read
+/// it only in INFLIGHT.  There the flag is now also up on the sim's give-up
+/// pass and through a bench-restored sim flight: the stray-Stop gate lets a
+/// Stop through then, and arm consent stays low while the FC dry-fires.
+constexpr bool reportsSim(bool sim_flight_latched, bool sim_active)
+{
+    return simulated(sim_flight_latched, sim_active);
+}
+
 /// #1113: does a SIM_STOP_CMD have a sim flight to act on?  The Stop handler
 /// resets the whole flight state to READY and clears the #317 post-flight
 /// lockout — it is the one command that deliberately re-arms — and it has no

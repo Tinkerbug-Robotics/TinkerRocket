@@ -362,6 +362,39 @@ class TelemetryDataTest {
         assertEquals(TelemetryData.FlightReadiness.UNKNOWN, t.flightReadiness)
     }
 
+    /**
+     * #1766: readiness is judged on the sensors only on the pad (READY,
+     * PRELAUNCH, or no state received yet). LANDED says how to re-arm (a
+     * sim's: its Stop; a real flight's: a power-cycle), INFLIGHT is "In
+     * flight", and anything else -- a state the firmware could not name
+     * included -- is "Do not fly", whatever the sensors say.
+     */
+    @Test
+    fun `readiness off the pad is do not fly`() {
+        val allOk = pack(baro = SH.OK, imu = SH.OK, ekf = SH.OK, mag = SH.OK, gnss = SH.OK, batt = SH.OK)
+        fun at(st: String, h: Int = allOk, fs: Int = 0) = decodeOk("""{"h":$h,"st":"$st","fs":$fs}""")
+        assertEquals(TelemetryData.FlightReadiness.READY, at("READY").flightReadiness)
+        assertEquals(TelemetryData.FlightReadiness.READY, at("PRELAUNCH").flightReadiness)
+        assertEquals(TelemetryData.FlightReadiness.READY, decodeHealth(allOk).flightReadiness)   // no state received
+        assertEquals(TelemetryData.FlightReadiness.NOT_READY, at("UNKNOWN").flightReadiness)     // received: not named
+        val landed = at("LANDED").flightReadiness
+        assertEquals(TelemetryData.FlightReadiness.LANDED, landed)
+        assertTrue(landed.label.startsWith("Do not fly") && landed.label.contains("power-cycle"))
+        val sim = at("LANDED", fs = 0x100).flightReadiness                                     // NSF_SIM_ACTIVE
+        assertEquals(TelemetryData.FlightReadiness.LANDED_SIM, sim)
+        assertTrue(sim.label.startsWith("Do not fly") && sim.label.contains("Stop"))
+        assertEquals(TelemetryData.FlightReadiness.IN_FLIGHT, at("INFLIGHT").flightReadiness)
+        for (st in listOf("INITIALIZATION", "INIT", "MAG_CAL", "SOMETHING_NEW")) {
+            assertEquals(TelemetryData.FlightReadiness.NOT_READY, at(st).flightReadiness, st)
+        }
+        // the state is read before the sensors: LANDED with a hard fault is LANDED
+        val bad = pack(baro = SH.BAD, imu = SH.OK, ekf = SH.OK, gnss = SH.OK, batt = SH.OK)
+        assertEquals(TelemetryData.FlightReadiness.LANDED, at("LANDED", h = bad).flightReadiness)
+        // a hard fault on the pad is still red, and no scorecard still waits
+        assertEquals(TelemetryData.FlightReadiness.NOT_READY, at("READY", h = bad).flightReadiness)
+        assertEquals(TelemetryData.FlightReadiness.UNKNOWN, decodeOk("""{"st":"LANDED"}""").flightReadiness)
+    }
+
     @Test
     fun `readiness all OK is ready`() {
         val t = decodeHealth(pack(baro = SH.OK, imu = SH.OK, ekf = SH.OK, mag = SH.OK, gnss = SH.OK, batt = SH.OK))

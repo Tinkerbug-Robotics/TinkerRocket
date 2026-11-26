@@ -45,7 +45,8 @@ note === #1104: watch the sim fly out; the FC must not be left INFLIGHT ===
 mark
 wait_tlm 180 st==LANDED
 expect_tlm 180 st==LANDED
-expect_tlm 30 fs.SIM_ACTIVE==0
+# #1766: the held LANDED of a flown-out sim keeps the sim flag up until the Stop
+expect_tlm 30 fs.SIM_ACTIVE==1
 
 note === #1159 regression: after landing the SAME tap must work ===
 mark
@@ -56,4 +57,5 @@ note === #1113 part B: Stop after a flown-out sim must re-arm to READY ===
 mark
 send 7
 expect_tlm 30 st==READY
+expect_tlm 30 fs.SIM_ACTIVE==0
 note === done ===

@@ -59,6 +59,10 @@ struct TelemetryData: Codable {
     /// one (Eagle Claw flew at 0 m on 14+ satellites).
     var gnss_h_acc_m: Int? = nil      // "hacc"
     var state: String = "UNKNOWN"     // Rocket state
+    /// #1766: "st" was in the frame. Absent, "UNKNOWN" means no state yet;
+    /// present, it is the firmware not naming the state (a newer FC's state
+    /// through an older OC or base station, a corrupt byte).
+    var state_received: Bool = false
     var active_file: String = ""
     var rx_kbs: Float?                // I2C RX rate kB/s
     var wr_kbs: Float?                // Flash write rate kB/s
@@ -485,16 +489,34 @@ struct TelemetryData: Codable {
     // guard in the boost.  N/A (a manual code, off the pad, older firmware or
     // BS) is ignored.
     // Amber = anything in between.
-    enum FlightReadiness { case unknown, ready, caution, notReady
+    // #1766: and only on the pad. A launch is armed in READY and PRELAUNCH; in
+    // any other state the sensors say nothing about flying. LANDED above all:
+    // the flight computer holds it (#317) until a power-cycle, or a flown-out
+    // sim's (sim_active, NSF_SIM_ACTIVE) until its Stop, and a rocket launched
+    // from it never enters INFLIGHT -- no deployment, no flight log. Its card
+    // said "Ready to fly". INFLIGHT reads "In flight" (grey, no alarm); any
+    // other state, a state the firmware could not name ("UNKNOWN" received)
+    // included, reads "Do not fly". No state received yet: the sensors alone.
+    enum FlightReadiness { case unknown, ready, caution, notReady, landed, landedSim, inFlight
         var label: String {
-            switch self { case .unknown:  return "Waiting for telemetry…"
-                          case .ready:    return "Ready to fly"
-                          case .caution:  return "Not ready — check sensors"
-                          case .notReady: return "Do not fly" }
+            switch self { case .unknown:   return "Waiting for telemetry…"
+                          case .ready:     return "Ready to fly"
+                          case .caution:   return "Not ready — check sensors"
+                          case .notReady:  return "Do not fly"
+                          case .landed:    return "Do not fly — LANDED: power-cycle to re-arm"
+                          case .landedSim: return "Do not fly — the sim's LANDED: press Stop on the SIM banner to re-arm"
+                          case .inFlight:  return "In flight" }
         }
     }
     var flightReadiness: FlightReadiness {
         guard hasSensorHealth else { return .unknown }
+        switch state {
+        case "READY", "PRELAUNCH":             break
+        case "LANDED":                         return sim_active ? .landedSim : .landed
+        case "INFLIGHT":                       return .inFlight
+        case "UNKNOWN" where !state_received:  break   // no state yet: the sensors alone
+        default:                               return .notReady
+        }
         let hardFault = [baroHealth, imuHealth, battHealth, storageHealth].contains(.bad)
             || (1...4).contains { pyroHealth(channel: $0) == .bad }
         if hardFault { return .notReady }
@@ -772,6 +794,7 @@ struct TelemetryData: Codable {
         // number or a string, like every other numeric key here.
         gnss_h_acc_m = flexInt(.gnss_h_acc_m)
         state = try c.decodeIfPresent(String.self, forKey: .state) ?? "UNKNOWN"
+        state_received = c.contains(.state)
         active_file = try c.decodeIfPresent(String.self, forKey: .active_file) ?? ""
         rx_kbs = try c.decodeIfPresent(Float.self, forKey: .rx_kbs)
         wr_kbs = try c.decodeIfPresent(Float.self, forKey: .wr_kbs)
