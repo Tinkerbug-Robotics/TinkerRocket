@@ -4960,6 +4960,12 @@ struct __attribute__((packed)) FlightSnapshotData
     double   ref_alt_m;
 
     // --- Control state flags ---
+    // ekf_initialized, #1762: bit 0 (SNAP_EKF_STARTED) the navigation filter
+    // started, bit 1 (SNAP_EKF_WITHOUT_GNSS) on a degraded start (the IMU and
+    // the barometer, GNSS held out), which a restore keeps for the flight.
+    // Every older writer wrote 0 or 1, which reads as before (started on
+    // fixes); any non-zero value is a started filter. Size- and
+    // offset-neutral, no VERSION bump. flight_computer/main/nav_start_policy.h.
     uint8_t  ekf_initialized;
     uint8_t  guidance_enabled;
     uint8_t  burnout_detected;
@@ -5019,6 +5025,9 @@ static constexpr uint8_t SNAP_B2R_MODE_MASK  = 0x0Fu;
 static constexpr uint8_t SNAP_B2R_DISPROVED  = 0x80u;
 static constexpr uint8_t SNAP_B2R_AXIS_SHIFT = 4;
 static constexpr uint8_t SNAP_B2R_AXIS_MASK  = 0x70u;   // 1-6 = +X, -X, +Y, -Y, +Z, -Z
+// FlightSnapshotData.ekf_initialized (#1762)
+static constexpr uint8_t SNAP_EKF_STARTED      = 0x01u;
+static constexpr uint8_t SNAP_EKF_WITHOUT_GNSS = 0x02u;
 
 static constexpr size_t SIZE_OF_GNSS_DATA = sizeof(GNSSData);
 static constexpr size_t SIZE_OF_BMP585_DATA     = sizeof(BMP585Data);

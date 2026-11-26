@@ -164,7 +164,7 @@ def test_a_silent_or_late_board_still_starts_the_filter():
     # test_nav_start_wiring.py): here only what stays the board's -- its header, and its own log while it stands
     src = read(MAIN_CPP)
     assert '#if TR_RAW_NAV_SDR\n#include "sdr_nav_start_policy.h"' in src
-    i = src.index("raw_gnss_held = true;")
+    i = src.index("raw_gnss_held = degraded_init;")
     blk = src[i:src.index("#endif", src.index("RAW_NAV_WHEN(RAW_IS_SDR)", i))]
     assert "#if TR_RAW_NAV_SDR" in blk
     assert "no usable fix from the gnss-sdr-dev board" in src

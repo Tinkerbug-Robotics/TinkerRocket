@@ -19,15 +19,17 @@
 // starts GNSS-absent beside a board it only logs. So:
 //   - the degraded start (the raw filter on the IMU and the barometer from a
 //     pad-relative 0 N 0 E, as the GNSS-absent images start) once no usable
-//     fix has come kNoFixMs after boot on the pad (READY), and at once when the
-//     rocket is armed (PRELAUNCH) -- never in flight, where the accelerometer
-//     is no measure of the tilt;
-//   - a usable fix that comes later, while the rocket is still READY (on the
-//     pad, unarmed), starts the filter over on it (the normal start: a new
-//     start generation restarts the raw filter from the board's position);
-//     once armed or flying, the degraded start stands for the flight;
+//     fix has come kNoFixMs after boot on the pad (READY), and at once in
+//     PRELAUNCH -- never in flight, where the accelerometer is no measure of
+//     the tilt;
+//   - a usable fix that comes later, while the rocket is still on the pad
+//     (READY or PRELAUNCH) and has been at rest for 1 s, starts the filter
+//     over on it (the normal start: a
+//     new start generation restarts the raw filter from the board's
+//     position); once it flies, the degraded start stands for the flight;
 //   - while it stands, the board's epochs are held out of the filter (its
-//     position is no place to build them at) and its fixes set no pad datum;
+//     position is no place to build them at); its fixes go on building the
+//     pad datum on the pad, which the restart needs, and none once it flies;
 //   - the boot says FCB_DEG_GNSS when no frame of the board's 4001 was heard
 //     kHeardMs after the sensors started (its status comes once a second from
 //     its receiver's start);
@@ -35,18 +37,19 @@
 //     (#1756): the board gives a fix 1-10 times a second and the loop runs at
 //     1 kHz, so a usable fix arrives on one pass in a hundred or more.  Any
 //     re-init of a filter already flying on the board's fixes (a mag-cal exit,
-//     an orientation re-snap or setting change, all allowed armed on the pad)
-//     used to start degraded on the next pass between two fixes, and armed
-//     that stood for the flight: the board's epochs held out, the datum
-//     frozen, guidance off at launch.  The degraded start now waits while a
+//     an orientation re-snap or setting change, all allowed in PRELAUNCH)
+//     used to start degraded on the next pass between two fixes, and in
+//     PRELAUNCH that stood for the flight: the board's epochs held out, the
+//     datum frozen, guidance off at launch.  The degraded start now waits while a
 //     usable fix came in the last kUsableFixMs (the next one starts the
 //     filter normally), and for kReinitGraceMs after such a re-init (a mag
 //     cal tumbles the rocket, whose fixes then fail the init gate's low
 //     velocity until it is set down; the session's exit restarts the grace)
 //     -- boardWait().  A board that never gave a fix, or went silent, still
 //     gets the degraded start, at most kReinitGraceMs later; and one whose
-//     usable fixes do not come back within the grace after a re-init armed
-//     still stands degraded for the flight, as before.
+//     usable fixes do not come back within the grace after a re-init stands
+//     degraded until they do, and for the flight if they come only after
+//     launch.
 // #1762: the rule above now covers every receiver (nav_start_policy.h); this
 // header keeps what is the board's alone (its boot check) and its own names
 // for the shared rule, the board being a receiver that never fails bring-up.
@@ -72,6 +75,7 @@ inline bool degradedStartDue(bool normal_ready, bool gyro_ready, bool settled, u
 }
 
 using nav_start::restartOnFix;
+using nav_start::fixesHeldOut;
 
 // The boot's verdict on the board: silent once kHeardMs passed with no frame.
 inline bool boardSilent(bool heard, uint32_t since_sensors_ms)

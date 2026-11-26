@@ -1227,7 +1227,8 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     snap.ref_datum_converged =
         (ref_pos_count >= config::MAIN_DEPLOY_REF_MIN_FIXES) ? 1 : 0;
 
-    snap.ekf_initialized = ekf_initialized  ? 1 : 0;
+    // #1762: and whether on a degraded start, which a reboot keeps
+    snap.ekf_initialized = nav_start::snapshotFilterByte(ekf_initialized, gnss_absent_flight);
     snap.guidance_enabled = guidance_enabled ? 1 : 0;
     snap.burnout_detected = burnout_detected ? 1 : 0;
     snap.servo_enabled    = servo_enabled    ? 1 : 0;
@@ -9407,7 +9408,19 @@ static void setup_fc()
                      (double)max_speed_mps);
 
             // Restore control state
-            ekf_initialized  = snap.ekf_initialized;
+            ekf_initialized  = snap.ekf_initialized != 0;
+            // #1762: a degraded start stands through a reboot in flight. The
+            // restored filter's position is the degraded start's (0 N 0 E
+            // without a pad datum), no place for the receiver's fixes or raw
+            // epochs; before, a receiver that answered after the reboot was
+            // fused into it.
+            gnss_absent_flight = nav_start::restoredWithoutGnss(snap.ekf_initialized);
+#if TR_RAW_GNSS_SHADOW
+            raw_gnss_held = gnss_absent_flight;
+#endif
+            if (gnss_absent_flight)
+                ESP_LOGW(TAG, "[RECOVERY] the navigation filter's degraded start stands: GNSS stays out of it "
+                              "for the flight");
             guidance_enabled = snap.guidance_enabled;
             // The launch origin and heading trust are not in the snapshot
             // (it is at the frame ceiling), so guidance_origin and
@@ -10680,7 +10693,7 @@ static void sdrAidNoteUpdate(const EkfIMUData& imu)
     for (int k = 0; k < 4; k++)
         s.q_nb[k] = (double)q[k];
     sdr_aid_fc::rateOf(g, bias_rps, s.w);
-    s.fix_place = !gnss_absent_flight;   // a GNSS-absent start's position is a pad-relative 0 N 0 E
+    s.fix_place = !gnss_absent_flight;   // a degraded start's position is pad-relative (the pad datum, or 0 N 0 E)
     s.lat = lla[0];
     s.lon = lla[1];
     for (int k = 0; k < 9; k++)
@@ -11568,7 +11581,11 @@ static void loop_fc()
             static double initGyroRing[3][kInitGyroWin] = {};
             static int initGyroHead = 0;
             static int initGyroN = 0;
-            if (!ekf_initialized)
+            // #1762: and while a degraded start stands on the pad, whose
+            // restart on a usable fix (below) seeds from it too -- once the
+            // rocket has been at rest for a second, so these samples are
+            // ones at rest, not the window before the degraded start
+            if (!ekf_initialized || (gnss_absent_flight && nav_start::onThePad(rocket_state)))
             {
                 initGyroRing[0][initGyroHead] = ekf_imu.gyro_x;
                 initGyroRing[1][initGyroHead] = ekf_imu.gyro_y;
@@ -11576,6 +11593,11 @@ static void loop_fc()
                 initGyroHead = (initGyroHead + 1) % kInitGyroWin;
                 if (initGyroN < kInitGyroWin) initGyroN++;
             }
+            // #1762 (nav_start_policy.h RestWatch): whether the rocket is at
+            // rest, for the restart of a degraded start; every pass
+            static nav_start::RestWatch nav_rest;
+            nav_rest.feed(millis(), ekf_imu.acc_x, ekf_imu.acc_y, ekf_imu.acc_z,
+                          ekf_imu.gyro_x, ekf_imu.gyro_y, ekf_imu.gyro_z);
 
             // ── Build EKF input: Magnetometer in FRD body frame ──
             // Prefer IIS2MDC (new PCB) when its samples are flowing, fall
@@ -11687,10 +11709,12 @@ static void loop_fc()
                 // Running average of GNSS fixes for launch-site reference.
                 // Only accumulate fixes that pass the stricter init gate (Gate 3).
                 // #1762 (nav_start_policy.h, every receiver): a degraded start
-                // armed or flying keeps the pad-relative 0 N 0 E it started
-                // from, so the pad average takes none of the receiver's fixes
-                // either; on the pad the fix that restarts it below is taken
-                const bool degraded_armed = gnss_absent_flight && rocket_state != READY;
+                // that flies keeps the position it started from, so the pad
+                // datum and the pad average take none of the receiver's fixes
+                // either. On the pad (READY or PRELAUNCH, which the FC enters
+                // on its own) they are taken: the datum is what the fix that
+                // restarts it below needs.
+                const bool degraded_flying = nav_start::fixesHeldOut(gnss_absent_flight, rocket_state);
 #if TR_RAW_GNSS_PRIMARY
                 // #1600: the navigation filter's own pad, once its raw epochs
                 // lead (the average started over then), and only its own from
@@ -11712,9 +11736,9 @@ static void loop_fc()
                              (unsigned)config::MAIN_DEPLOY_REF_MIN_FIXES);
 #endif
                 }
-                const bool ref_take = (!ref_from_nav || ref_nav_now) && !degraded_armed;
+                const bool ref_take = (!ref_from_nav || ref_nav_now) && !degraded_flying;
 #else
-                const bool ref_take = !degraded_armed;
+                const bool ref_take = !degraded_flying;
 #endif
                 if (!ref_pos_frozen && gnss_gate3_init && ref_take) {
                     double ref_add[3] = {ekf_gnss.lat_rad, ekf_gnss.lon_rad, ekf_gnss.alt_m};
@@ -11744,7 +11768,7 @@ static void loop_fc()
                 // #1600 phase 5: the pad average (see "Pad calibration"), the
                 // same fixes until launch, never a sim's -- but the rig
                 // replay's fixes are the receiver's own.
-                if (gnss_gate3_init && !degraded_armed &&
+                if (gnss_gate3_init && !degraded_flying &&
                     (sensor_collector.isReplay() ||
                      (!sensor_collector.isSimActive() && !sim_flight_latched))) {
                     padAverageAdd(ekf_gnss.lat_rad, ekf_gnss.lon_rad, ekf_gnss.alt_m, now_ms);
@@ -11829,13 +11853,36 @@ static void loop_fc()
             }
             // nav_start_policy.h (#1762, every receiver): a degraded start
             // gives way to the receiver's first usable fix while the rocket is
-            // on the pad, unarmed -- the normal start below, a new start
-            // generation for the raw filter. Once armed or flying it stands.
+            // on the pad (READY or PRELAUNCH) and has been at rest for a
+            // second (not carried, no motor's thrust showing) -- the normal
+            // start below, a new start generation for the raw filter. Once it
+            // flies it stands.
             if (ekf_initialized && gnss_absent_flight &&
-                nav_start::restartOnFix(true, have_ref_pos && gnss_gate3_init, rocket_state))
+                nav_start::restartOnFix(true, have_ref_pos && gnss_gate3_init, rocket_state, true) &&
+                !nav_rest.atRest())
+            {
+                // a usable fix waits for the rocket to come to rest: said
+                // once a minute while it does
+                static uint32_t rest_wait_log_ms = 0;
+                const uint32_t m = millis();
+                if (rest_wait_log_ms == 0 || m - rest_wait_log_ms >= 60000u)
+                {
+                    rest_wait_log_ms = m ? m : 1u;
+                    ESP_LOGW(TAG, "[EKF] a usable fix (%u satellites): the degraded start's restart waits for the "
+                                  "rocket to be at rest for %u ms",
+                             (unsigned)gnss_latest_si.num_sats, (unsigned)nav_start::kRestartStillMs);
+                }
+            }
+            if (ekf_initialized && gnss_absent_flight &&
+                nav_start::restartOnFix(true, have_ref_pos && gnss_gate3_init, rocket_state, nav_rest.atRest()))
             {
                 ekf_initialized = false;
                 gnss_absent_flight = false;
+#if TR_RAW_GNSS_SHADOW
+                // the raw filter's new start seed on the next EKF tick, not
+                // up to a second later: in PRELAUNCH launch may come any time
+                raw_shadow_seed_ms = 0;
+#endif
                 ESP_LOGW(TAG, "[EKF] the receiver's first usable fix (%u satellites): the navigation filter starts "
                               "over on it, out of its degraded start",
                          (unsigned)gnss_latest_si.num_sats);
@@ -11892,14 +11939,19 @@ static void loop_fc()
                         // is height above the pad), zero velocity, and a stale GNSS
                         // time so the EKF never runs a GNSS measurement update
                         // against this fake origin.  Baro then bounds the vertical
-                        // channel and accel+mag bound attitude.  (Degraded init is
-                        // gated on never having started GNSS, so the feed holds no
-                        // fix and keeps handing the EKF time_us 0 — equal to this
-                        // seed's — which the filter skips, #1107.)
+                        // channel and accel+mag bound attitude.  (While the start
+                        // stands the update below hands the EKF a fix with
+                        // time_us 0 — equal to this seed's — which the filter
+                        // skips, #1107, #1762.)
+                        // #1762: at the pad datum when there is one (a receiver
+                        // whose usable fixes stopped): the barometer is fused as
+                        // pressure_altitude_m + ref_alt_m (below), so the seed
+                        // takes the same height, and the datum is where the
+                        // rocket is.
                         init_gnss.time_us   = 0;
-                        init_gnss.lat_rad   = 0.0;
-                        init_gnss.lon_rad   = 0.0;
-                        init_gnss.alt_m     = pressure_altitude_m;
+                        init_gnss.lat_rad   = have_ref_pos ? ref_lat_rad : 0.0;
+                        init_gnss.lon_rad   = have_ref_pos ? ref_lon_rad : 0.0;
+                        init_gnss.alt_m     = (double)pressure_altitude_m + ref_alt_m;
                         init_gnss.vel_n_mps = 0.0f;
                         init_gnss.vel_e_mps = 0.0f;
                         init_gnss.vel_d_mps = 0.0f;
@@ -11954,12 +12006,15 @@ static void loop_fc()
                     // Magnetic declination → true-north heading.  Computed once
                     // here (off the flight-loop hot path) from the averaged pad
                     // position + GPS date via WMM2025; falls back to the config
-                    // constant if the GNSS date is implausible.
+                    // constant if the GNSS date is implausible.  #1762: or
+                    // with no pad datum (a degraded start before any usable
+                    // fix), whose position is 0 N 0 E; a receiver that answers
+                    // may still give the date.
                     {
                         float decl_deg = config::MAGNETIC_DECLINATION_DEG;
                         double decimal_year_for_wmm = (double)TR_GeoMag::WMM_EPOCH;
                         const uint16_t yr = gnss_latest_si.year;
-                        if (yr >= 2020 && yr <= 2035) {
+                        if (have_ref_pos && yr >= 2020 && yr <= 2035) {
                             static const int mdays[12] =
                                 {31,28,31,30,31,30,31,31,30,31,30,31};
                             int doy = gnss_latest_si.day;
@@ -11996,6 +12051,10 @@ static void loop_fc()
                         // and accepted one whose field direction was 17° wrong.
                         // Until this lands the filter keeps the legacy window,
                         // so a session that never gets a fix is unchanged.
+                        // (A degraded start without a pad datum still takes
+                        // the field at 0 N 0 E here, as it always has: both
+                        // filters then refuse most of the magnetometer's
+                        // samples, the raw filter having no other window.)
                         {
                             const double dy = (yr >= 2020 && yr <= 2035)
                                 ? decimal_year_for_wmm : (double)TR_GeoMag::WMM_EPOCH;
@@ -12016,27 +12075,30 @@ static void loop_fc()
                     // #1756: a filter flying on fixes; its re-init will wait
                     // for the receiver
                     nav_filter_on_fixes = !degraded_init;
+                    // #557: mark the session degraded so the SH_GNSS_ABSENT
+                    // telemetry flag and the launch-time guidance force-off
+                    // (enterInflight) fire.  Roll control is unaffected
+                    // (raw-gyro rate-null path).  #1762: set on every start,
+                    // so a normal start clears it: a degraded start's filter
+                    // cleared on the pad (a mag-cal exit, an orientation
+                    // re-snap or setting change) that starts again on a fix
+                    // flies on fixes. Left set, the update below handed that
+                    // filter the time-0 fix, which a filter started on a fix
+                    // (its time not 0) fuses: a fix at 0 N 0 E.
+                    gnss_absent_flight = degraded_init;
+#if TR_RAW_GNSS_SHADOW
+                    raw_gnss_held = degraded_init;
+#endif
                     if (degraded_init) {
-                        // #557: mark the session degraded so the SH_GNSS_ABSENT
-                        // telemetry flag and the launch-time guidance force-off
-                        // (enterInflight) fire.  Guidance also physically can't
-                        // engage without a position frame — have_ref_pos stays
-                        // false, so coast_guidance_active is false regardless.
-                        // Roll control is unaffected (raw-gyro rate-null path).
-                        gnss_absent_flight = true;
                         ESP_LOGW(TAG, "[EKF] GNSS-absent degraded init: baro+IMU "
                                       "only, position pad-relative, guidance off "
                                       "(roll control unaffected)");
                         // #1762: the receiver answers but gave no usable fix
                         if (!gnss_absent_mode)
-                            ESP_LOGW(TAG, "[EKF] no usable fix from the receiver (%lu s after boot%s): %s",
+                            ESP_LOGW(TAG, "[EKF] no usable fix from the receiver (%lu s after boot%s): a usable fix "
+                                          "before launch, the rocket still, starts it over",
                                      (unsigned long)(millis() / 1000u),
-                                     gnss_started ? ", it had a 3-D fix" : "",
-                                     rocket_state == READY ? "a fix while on the pad unarmed starts it over"
-                                                           : "armed: GNSS stays out of the filter for the flight");
-#if TR_RAW_GNSS_SHADOW
-                        raw_gnss_held = true;
-#endif
+                                     gnss_started ? ", it had a 3-D fix" : "");
 #if TR_RAW_NAV_SDR
                         RAW_NAV_WHEN(RAW_IS_SDR)
                         {
@@ -12044,8 +12106,9 @@ static void loop_fc()
                                       "navigation filter starts on the IMU and the barometer; %s",
                                  sensor_collector_hw.gnssBoardHeard() ? "it streams" : "NOTHING HEARD from it",
                                  (unsigned long)(millis() / 1000u),
-                                 rocket_state == READY ? "a fix while on the pad unarmed starts it over on the board"
-                                                       : "armed: the board's GNSS stays out for the flight");
+                                 nav_start::onThePad(rocket_state)
+                                     ? "a usable fix before launch starts it over on the board"
+                                     : "in flight: the board's GNSS stays out for the flight");
                         }
 #endif
                     }
