@@ -745,6 +745,7 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
             ekf_.setImuFree(true);
             st_.imu_free = 1;
             st_.imu_free_t = ekf_.time();
+            imu_free_begun_ = true;
         }
         else if (ekf_.imuFree() && !live)
         {
@@ -777,6 +778,7 @@ void RawGnssShadow::onImu(const ShadowImu& s, int64_t time64_us)
     // chute) only once steady and at g's size (LevelGate.h)
     levelled_ = false;
     const bool ground = !(s.flags & kShadowInFlight);
+    if (!ground) flown_ = true;   // the coast release acts only in flight (#1767)
     level_gate_.onStep(t, acc);
     if (s.flags & kShadowLevel)
     {
@@ -930,6 +932,8 @@ void RawGnssShadow::start(double t)
     hdg_unset_ = false;
     hdg_apogee_ = false;
     launch_seen_ = false;
+    imu_free_begun_ = false;
+    flown_ = false;
     // Act's attitude gate: on the pad the ground's (whatever a run that
     // stopped in flight left); a restored flight, with no launch edge to set
     // it, the flight's -- whole from launch, else the heading's, and the
@@ -2247,7 +2251,10 @@ void RawGnssShadow::jobScreen(double age)
     job_.phase = kJobScreenDry;
 }
 
-// The latch in the IMU-free descent (vert_imu_free_release_s, RawGnssShadow.h):
+// The latch in the IMU-free descent (vert_imu_free_release_s, RawGnssShadow.h)
+// and, in flight past the boost, outside it (vert_coast_release_s, its own
+// switch since #1767; its hold, steadiness and gates are in the header). In
+// the IMU-free descent:
 // a latched epoch's fit, judged for letting the latch go. True when no
 // barometer was fused for vert_imu_free_release_s, the latch has held that
 // long, and its last kVertSteadyFits fits agree within vert_release_mps: the
@@ -2268,21 +2275,25 @@ void RawGnssShadow::jobScreen(double age)
 // taken for a steady one.
 bool RawGnssShadow::imuFreeLatchRelease(const gnss_raw::RawGnssStats& rs)
 {
+    // which release applies, by its own switch (#1767): the IMU-free
+    // descent's, or outside it the coast's -- in flight, past the boost, and
+    // once the IMU-free descent has begun only where its release is set
+    const bool imu_free = ekf_.imuFree();
+    const bool past_boost = ekf_.time() - boost_seen_t_ > cfg_.boost_screen_window_s;
+    const bool coast = past_boost && (flown_ || restored_)
+                       && (!imu_free_begun_ || cfg_.vert_imu_free_release_s > 0.0);
+    const double switch_s = imu_free ? cfg_.vert_imu_free_release_s : cfg_.vert_coast_release_s;
     // where the barometer is fused it judges: it brings a right fit back within
     // vert_release_mps, and keeps the filter on a wrong one's side
-    const bool baro_live = ekf_.time() - last_baro_fused_t_ <= cfg_.vert_imu_free_release_s;
-    const bool past_boost = ekf_.time() - boost_seen_t_ > cfg_.boost_screen_window_s;
-    if (!(cfg_.vert_imu_free_release_s > 0.0) || !(ekf_.imuFree() || past_boost)
-        || rs.screen_fit_n < 4 || baro_live)
+    const bool baro_live = ekf_.time() - last_baro_fused_t_ <= switch_s;
+    if (!(switch_s > 0.0) || !(imu_free || coast) || rs.screen_fit_n < 4 || baro_live)
     {
         vert_steady_n_ = 0;
         return false;
     }
-    const bool imu_free = ekf_.imuFree();
     const double steady_mps = imu_free ? cfg_.vert_release_mps
                                        : std::min(cfg_.vert_release_mps, kVertCoastSteadyMps);
-    const double hold_s = imu_free ? cfg_.vert_imu_free_release_s
-                                   : std::max(cfg_.vert_imu_free_release_s, kVertCoastReleaseHoldS);
+    const double hold_s = imu_free ? switch_s : std::max(switch_s, kVertCoastReleaseHoldS);
     const float dv = rs.screen_dv_down_mps;
     const bool steady = vert_steady_n_ > 0
                         && std::fabs(static_cast<double>(dv - vert_last_dv_)) <= steady_mps;
@@ -2296,7 +2307,10 @@ bool RawGnssShadow::imuFreeLatchRelease(const gnss_raw::RawGnssStats& rs)
     const double off = std::sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
     ekf_.reanchorVelocity(x, x[3], static_cast<float>(cfg_.vert_release_mps),
                           static_cast<float>(off * (ekf_.time() - vert_latch_t_) + 20.0));
-    st_.vert_imu_free_releases++;
+    if (imu_free)
+        st_.vert_imu_free_releases++;
+    else
+        st_.vert_coast_releases++;
     vert_steady_n_ = 0;
     return true;
 }

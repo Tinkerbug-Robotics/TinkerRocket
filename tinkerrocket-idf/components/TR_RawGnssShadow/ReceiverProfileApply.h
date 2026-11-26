@@ -325,8 +325,19 @@ inline void applySdrDopplerMeans(const GnssReceiverProfile& p, RawGnssShadow::Co
 //       taken to fly the Goblin's helix too, boresight along the nose), not
 //       in the mosaic's profile, which the replay and the simulator take
 //       too.
+//   - The vertical check's coast release (vert_coast_release_s, 1 s; #1767):
+//     past the boost, outside the IMU-free descent, a latch with no
+//     barometer fused for a second, held at least 5 s, and fits steady to
+//     1 m/s lets the filter take GNSS's velocity. Without it a boost that
+//     left the IMU's vertical over 20 m/s off, or a restore in the coast from
+//     a stale velocity, kept GNSS out until the barometer came back in range
+//     (below about 10.4 km). #1706 meant it for every receiver; it shared the
+//     IMU-free release's switch, which this set leaves off, so the mosaic had
+//     none. The gnss-sdr-dev's and the PX1105R's sets take it from here.
 inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
 {
+    // the vertical check's coast release (#1767)
+    c.vert_coast_release_s = 1.0;
     // the Doppler change check
     c.dv_check = RawGnssShadow::kDvAct;
     c.dv_window_s = 1.0;
@@ -414,8 +425,11 @@ inline void applyMosaicFlightSafeguards(RawGnssShadow::Config& c)
 //     no barometer to bring it back GNSS stayed out for the rest of the
 //     descent (the host test AChutesOpeningInTheImuFreeDescent: 40 m/s at
 //     6.8 g, 69 at 9.9 g). With the barometer the latch let go by itself
-//     (1.0 s, 1.75 s). The mosaic's image and the Beetle's are verified as
-//     they are and do not take it (yet).
+//     (1.0 s, 1.75 s). The mosaic's image is verified as it is and does
+//     not take it (yet); the Beetle V2 flies the PX1105R's set, which does.
+//     The coast release (vert_coast_release_s) is every receiver's
+//     (applyMosaicFlightSafeguards); on the mosaic it stays out of the
+//     descent once the IMU-free mode has begun.
 inline void applySdrFlightSafeguards(RawGnssShadow::Config& c)
 {
     applyMosaicFlightSafeguards(c);

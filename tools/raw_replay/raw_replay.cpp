@@ -236,6 +236,7 @@ struct Args
     bool apogee_flag = true;         // kShadowApogee on every tick from the log's apogee flag (--no-apogee-flag: never)
     int dv_imu_free_off = -1;        // --dv-imu-free-off 0|1: the change check in the IMU-free descent (sdr, px1105r: the image's 1)
     double vert_imu_free_release_s = -1.0;   // --vert-imu-free-release-s X: the latch in the IMU-free descent (sdr, px1105r: 1; 0 off)
+    double vert_coast_release_s = -1.0;      // --vert-coast-release-s X: the latch past the boost (every receiver's: 1; 0 off; #1767)
     double apogee_call_s = -1e9;     // --apogee-call-s: the flight computer's apogee call at this flight time (s), as a
                                      //   rig run's console gave it, where the harness's own quorum cannot call one
     double vert_check_mps = -1.0;    // RawGnssShadow::Config::vert_check_mps (20 m/s; 0 off) -- a RAW_REPLAY_VCHECK build
@@ -554,6 +555,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--apogee-call-s") a.apogee_call_s = std::atof(val());
         else if (k == "--dv-imu-free-off") a.dv_imu_free_off = std::atoi(val());
         else if (k == "--vert-imu-free-release-s") a.vert_imu_free_release_s = std::atof(val());
+        else if (k == "--vert-coast-release-s") a.vert_coast_release_s = std::atof(val());
         else if (k == "--max-epoch-age-s") a.max_epoch_age_s = std::atof(val());
         else if (k == "--vert-check-mps") a.vert_check_mps = std::atof(val());
         else if (k == "--boost-screen-window-s") a.boost_screen_window_s = std::atof(val());
@@ -2109,7 +2111,8 @@ int main(int argc, char** argv)
         {
             // the mosaic's set with the PX1105R's antenna (windup_k 1), its boost and pad settings, and the
             // gnss-sdr-dev image's descent safeguards (--dv-imu-free-off 0, --vert-imu-free-release-s 0 and
-            // --gravity-wgs84 0 fly it without them, as before 2026-11-13)
+            // --gravity-wgs84 0 fly it without them, as before 2026-11-13; --vert-coast-release-s 0 also takes
+            // off the coast release every receiver's set has, #1767)
             applyPx1105rFlightSafeguards(cfg);
             if (a.dv_imu_free_off >= 0)
                 cfg.dv_imu_free_off = a.dv_imu_free_off != 0;
@@ -2119,6 +2122,8 @@ int main(int argc, char** argv)
         else
 #endif
             applyMosaicFlightSafeguards(cfg);
+        if (a.vert_coast_release_s >= 0.0)   // #1767: every receiver's set takes it
+            cfg.vert_coast_release_s = a.vert_coast_release_s;
     }
 #else
     // a build without them (an older tree, or one of RAW_REPLAY_DVCHECK, HDGOBS and ROT off) flies none of the
@@ -5261,8 +5266,8 @@ int main(int argc, char** argv)
                              sh.cfg_.vert_check_mps, sh.cfg_.boost_screen_window_s, list(fw_dropped_t).c_str());
 #endif
 #if RAW_REPLAY_LATCH
-                std::fprintf(ej, "\"vert_latched\": %u, \"vert_imu_free_releases\": %u, ", fs.vert_latched,
-                             fs.vert_imu_free_releases);
+                std::fprintf(ej, "\"vert_latched\": %u, \"vert_imu_free_releases\": %u, \"vert_coast_releases\": %u, ",
+                             fs.vert_latched, fs.vert_imu_free_releases, fs.vert_coast_releases);
 #endif
 #if RAW_REPLAY_DVCHECK
                 {
@@ -5698,14 +5703,16 @@ int main(int argc, char** argv)
                      c.full, c.marked_pr, c.marked_rate, sdr_untimed, sdr_fixes, sdr_eph, sdr_eph_pre,
                      sdr_line.valid() ? "valid" : "NOT valid", sdr_line.driftPpm(), sdr_line.lateness90Ms(),
                      sdr_line.envelopeRmsMs(), sdr_line.samples(), sdr_line.restarts());
-        std::fprintf(stderr, "  vertical check: %u epochs dropped, %u latched after them, %u latches the IMU-free mode let go "
-                     "(vert_imu_free_release_s %.2f)\n", sh.stats().vert_dropped, sh.stats().vert_latched,
-                     sh.stats().vert_imu_free_releases, sh.cfg_.vert_imu_free_release_s);
         std::fprintf(stderr, "  gnss-sdr-dev ionosphere: %d of the board's sets (4001 sub-type 4)%s, %d applied%s\n",
                      sdr_iono_frames, a.sdr_gps_iono.empty() || sdr_iono_off ? "" : " + --gps-iono's", sdr_iono_sets,
                      sdr_iono_off ? " (--gps-iono -: none taken)" : (sdr_iono_sets ? "" : ": the filter flew with NONE"));
     }
 #endif
+    // every receiver's (#1767: the mosaic's and the PX1105R's too)
+    std::fprintf(stderr, "  vertical check: %u epochs dropped, %u latched after them, %u latches the IMU-free mode let go "
+                 "(vert_imu_free_release_s %.2f), %u the coast release (vert_coast_release_s %.2f)\n",
+                 sh.stats().vert_dropped, sh.stats().vert_latched, sh.stats().vert_imu_free_releases,
+                 sh.cfg_.vert_imu_free_release_s, sh.stats().vert_coast_releases, sh.cfg_.vert_coast_release_s);
 #if RAW_REPLAY_MOSAIC
     if (cold && !seed_ready)
         std::fprintf(stderr, "WARNING: the cold start never had a position (no PVTGeodetic with a solution, no META "

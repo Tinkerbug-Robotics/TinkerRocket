@@ -708,11 +708,27 @@ public:
         // barometer fused for that long: where there is one it judges, as
         // before (it brought 6.8 g back in 1.0 s and 9.9 g in 1.75 s). A
         // single bad epoch, or a stale receiver shorter than that, is still
-        // dropped. 0: never (as before). And outside the IMU-free mode, once
-        // past the boost, the same way (V10 pre-flight review, 2026-11-18): a
-        // boost that left the IMU's vertical over vert_check_mps off latched
-        // GNSS out of a whole flight above the barometer's range.
+        // dropped. 0: never (as before).
         double   vert_imu_free_release_s = 0.0;
+        // The latch outside the IMU-free mode, in flight (an IMU step flagged
+        // in flight since the start, or restored in flight; never on the pad)
+        // and past the boost (the coast release; V10
+        // pre-flight review, 2026-11-18; its own switch since #1767): a boost
+        // that left the IMU's vertical over vert_check_mps off, or a restore
+        // in the coast from a stale velocity, latched GNSS out of a whole
+        // flight above the barometer's range, where no barometer brings the
+        // filter back. With no barometer fused for this long (s), the latch
+        // held at least kVertCoastReleaseHoldS and its last kVertSteadyFits
+        // fits steady within kVertCoastSteadyMps, the filter takes GNSS's
+        // velocity as above. Once the IMU-free descent has started it acts
+        // only where vert_imu_free_release_s is set: a receiver whose descent
+        // release is not verified (the mosaic's) keeps its descent as it was.
+        // "Past the boost" is the IMU under boost_screen_g (2 g) for
+        // boost_screen_window_s, so a burn the IMU reads under 2 g is not
+        // told from a coast. 0: never. It shared vert_imu_free_release_s's
+        // switch until #1767, so the mosaic's image had no coast release;
+        // every receiver's flight safeguards set it.
+        double   vert_coast_release_s = 0.0;
         // the Doppler change check (above; DvCheck, off by default)
         uint8_t  dv_check = 0;
         double   dv_sat_k = 5.0;                 // a satellite this many 1-sigmas off the epoch's fit fails
@@ -998,6 +1014,7 @@ public:
         float    vert_worst_dv_down = 0.0f;//   and the largest kept (|.|), m/s
         uint32_t vert_latched = 0;         // epochs dropped after a vertical drop, not yet back (vert_release_mps)
         uint32_t vert_imu_free_releases = 0;   // latches the IMU-free mode let go (vert_imu_free_release_s)
+        uint32_t vert_coast_releases = 0;      // latches the coast release let go (vert_coast_release_s, #1767)
         // the Doppler change check
         uint32_t dv_checks = 0;            // epochs checked: a reference, the IMU's history across, five changes
         uint32_t dv_sat_fails = 0;         //   satellites that failed (epoch by epoch, or summed)
@@ -1431,6 +1448,8 @@ private:
     float         dv_wp_peak_ = 0.0f;
     double        dv_wpwin_ = 0.0;
     bool          launch_seen_ = false; // a launch edge since the start (a restored flight has none)
+    bool          imu_free_begun_ = false; // the IMU-free descent has started since the start (#1767)
+    bool          flown_ = false;          // an IMU step in flight (kShadowInFlight) since the start (#1767)
     void          setFlightGate(bool full);
     void          setGroundGate();
     float         pad_ab_[3] = {}, pad_wb_[3] = {};   // the IMU biases at the seed

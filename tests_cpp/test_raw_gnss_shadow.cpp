@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cmath>
 #include <functional>
+#include <memory>
 #include <random>
 #include <thread>
 #include <vector>
@@ -21,6 +22,7 @@
 #include "Lc86Parser.h"
 #include "Lc86RawEpoch.h"
 #include "RawGnssShadow.h"
+#include "ReceiverProfileApply.h"
 #include "Rtcm3Msm.h"
 #include "RtcmEphemeris.h"
 #include "ShadowLink.h"
@@ -5129,6 +5131,414 @@ TEST(RawGnssShadow, AChutesOpeningInTheImuFreeDescent)
                 EXPECT_EQ(a.st.vert_imu_free_releases, 1u);
             }
         }
+}
+
+// ── The vertical check's coast release (#1706, its own switch since #1767) ──
+
+namespace
+{
+
+struct CoastCase
+{
+    double accel_scale = 1.12;  // the IMU's specific force in the boost, this much high
+    double boost_mps2 = 40.0;   // up, for burn_s
+    double burn_s = 5.0;
+    double gnss_back_s = 2.5;   // after burnout: GNSS lost from ignition to here
+    double t_end_after_bo = 17.0;
+    // a reboot in the coast: the filter restored this long after burnout from
+    // a velocity restore_stale_s old (the snapshot's, as main.cpp seeds it)
+    double restore_after_bo = -1.0;
+    double restore_stale_s = 3.0;
+    // on the pad: from pad_dv_from_s to the launch, each epoch's vertical
+    // pad_dv_mps off (a receiver coherently wrong while the rocket stands)
+    double pad_dv_mps = 0.0;
+    double pad_dv_from_s = 2.0;
+    double t_launch = 6.0;
+    double t_end = -1.0;        // the run's end (s), if not t_end_after_bo past burnout
+    bool baro = false;          // a barometer at the true height, ten a second (below its range's floor)
+    // a stale receiver: from stale_from_s for stale_s, each epoch's vertical stale_dv_mps off (coherent)
+    double stale_from_s = -1.0;
+    double stale_s = 0.0;
+    double stale_dv_mps = 0.0;
+    // a receiver still settling when GNSS is back: each epoch's vertical
+    // alternately jitter_mps off either way, for jitter_s after it is back
+    double jitter_mps = 0.0;
+    double jitter_s = 0.0;
+};
+
+struct CoastRun
+{
+    RawGnssShadow::Stats st;
+    double err_at_back = 0.0;   // the filter's vertical velocity error when GNSS came back
+    double err_end = 0.0;       //   and at the end
+    double back_s = -1.0;       // after GNSS came back: the vertical within 1 m/s from here on (-1: never)
+    double restored_at = -1.0;  // the run's time of the restore (-1: none)
+    double release_after_bo = -1.0;   // the coast release's time after burnout (none: release_seen false)
+    bool release_seen = false;
+    double err_max_pad = 0.0;   // the largest vertical velocity error on the pad
+    double err_max_stale = 0.0; // the largest from stale_from_s to the end
+};
+
+// The pad to 6 s; a boost of boost_mps2 for burn_s with the IMU reading
+// accel_scale high and no GNSS from ignition; then a coast at g, still
+// climbing at the end (no apogee: never the IMU-free mode), with no barometer
+// (above its range). GNSS back gnss_back_s after burnout, ten epochs a second.
+CoastRun flyCoast(const CoastCase& o, RawGnssShadow::Config cfg)
+{
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
+    auto nedToEcefVec = [&](const double n[3], double out[3]) {
+        const double e[3] = {n[1], n[0], -n[2]};
+        out[0] = -so * e[0] - sl * co * e[1] + cl * co * e[2];
+        out[1] = co * e[0] - sl * so * e[1] + cl * so * e[2];
+        out[2] = cl * e[1] + sl * e[2];
+    };
+    cfg.meas.troposphere = false;
+    auto make = [&]() {
+        auto p = std::make_unique<RawGnssShadow>(cfg);
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+            p->onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+        return p;
+    };
+    std::unique_ptr<RawGnssShadow> shp = make();
+    SynthSky sky(cfg.meas);
+    shp->onSeed(padSeed(kT0, lat, lon, h));
+    const double tow0 = goldenEpochs()[0].epoch.tow_s;
+    const double t_launch = o.t_launch, t_bo = t_launch + o.burn_s, dt = 0.002;
+    const double t_restore = o.restore_after_bo >= 0.0 ? t_bo + o.restore_after_bo : 1.0e9;
+    const double t_back = o.restore_after_bo >= 0.0 ? t_restore : t_bo + o.gnss_back_s;
+    const double t_end = o.t_end > 0.0 ? o.t_end : t_bo + o.t_end_after_bo;
+    double p_ned[3] = {}, v_ned[3] = {};
+    std::vector<TimedRawEpoch> due;
+    int next_epoch = 1;
+    CoastRun run;
+    bool noted_back = false;
+    for (double t = dt; t <= t_end + 1e-9; t += dt)
+    {
+        double a_n[3] = {0.0, 0.0, 0.0};
+        double scale = 1.0;
+        if (t > t_launch && t <= t_bo)
+        {
+            a_n[2] = -o.boost_mps2;
+            scale = o.accel_scale;
+        }
+        else if (t > t_bo)
+            a_n[2] = kG;   // the coast: free fall
+        for (int i = 0; i < 3; ++i)
+        {
+            p_ned[i] += v_ned[i] * dt + 0.5 * a_n[i] * dt * dt;
+            v_ned[i] += a_n[i] * dt;
+        }
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        if (t >= t_restore && run.restored_at < 0.0)
+        {
+            // the reboot: a new filter, restored in flight from a stale velocity
+            double dr[3], r[3], la, lo, hh;
+            nedToEcefVec(p_ned, dr);
+            for (int i = 0; i < 3; ++i)
+                r[i] = r0[i] + dr[i];
+            ecef_to_geo(r, &la, &lo, &hh);
+            ShadowSeed seed{};
+            seed.time_us = static_cast<uint32_t>(t64);
+            seed.lla[0] = la;
+            seed.lla[1] = lo;
+            seed.lla[2] = hh;
+            seed.vel_ned[2] = static_cast<float>(v_ned[2] - kG * o.restore_stale_s);   // the climb's, that old
+            seed.quat[0] = 1.0f;
+            seed.restore = 1;
+            shp = make();
+            shp->onSeed(seed);
+            run.restored_at = t;
+        }
+        RawGnssShadow& sh = *shp;
+        // half a sample off the epochs' steps, so "fused within the window" is
+        // the window's doing and not the same step's
+        if (o.baro && std::lround(t / dt) % 50 == 25)
+            sh.onBaro(gnss_raw::ShadowBaro{static_cast<uint32_t>(t64), static_cast<float>(-p_ned[2])});
+        ShadowImu s{};
+        s.time_us = static_cast<uint32_t>(t64);
+        s.acc[2] = static_cast<float>((a_n[2] - kG) * scale);   // body = NED (level): f = a - g
+        s.flags = t < t_launch ? gnss_raw::kShadowLevel : gnss_raw::kShadowInFlight;
+        sh.onImu(s, t64);
+        if (t + 1e-9 >= next_epoch * 0.1)
+        {
+            const bool lost = o.restore_after_bo < 0.0 && t >= t_launch && t < t_back;
+            if (!lost)
+            {
+                double dr[3], r[3], v_e[3];
+                nedToEcefVec(p_ned, dr);
+                double v_built[3] = {v_ned[0], v_ned[1], v_ned[2]};
+                if (o.jitter_mps > 0.0 && t >= t_back && t < t_back + o.jitter_s)
+                    v_built[2] += (next_epoch % 2 ? o.jitter_mps : -o.jitter_mps);
+                if (o.pad_dv_mps != 0.0 && t >= o.pad_dv_from_s && t < t_launch)
+                    v_built[2] += o.pad_dv_mps;
+                if (o.stale_from_s >= 0.0 && t >= o.stale_from_s && t < o.stale_from_s + o.stale_s)
+                    v_built[2] += o.stale_dv_mps;
+                nedToEcefVec(v_built, v_e);
+                for (int i = 0; i < 3; ++i)
+                    r[i] = r0[i] + dr[i];
+                TimedRawEpoch e;
+                e.epoch = sky.epoch(tow0 + next_epoch * 0.1, r, v_e);
+                e.mcu_us = t64;
+                e.gps_week = kGoldenWeek;
+                due.push_back(e);
+            }
+            next_epoch++;
+        }
+        while (!due.empty() && t64 - due.front().mcu_us >= 200000)
+        {
+            sh.onEpoch(due.front());
+            due.erase(due.begin());
+        }
+        if (!run.release_seen && sh.stats().vert_coast_releases > 0)
+        {
+            run.release_seen = true;
+            run.release_after_bo = t - t_bo;
+        }
+        if (sh.running() && t < t_launch)
+            run.err_max_pad = std::max(run.err_max_pad, static_cast<double>(std::fabs(sh.filter().velNed()[2] - v_ned[2])));
+        if (sh.running() && o.stale_from_s >= 0.0 && t >= o.stale_from_s)
+            run.err_max_stale = std::max(run.err_max_stale, static_cast<double>(std::fabs(sh.filter().velNed()[2] - v_ned[2])));
+        if (sh.running() && t >= t_back + 0.25)
+        {
+            const double err = std::fabs(sh.filter().velNed()[2] - v_ned[2]);
+            if (!noted_back)
+            {
+                run.err_at_back = err;
+                noted_back = true;
+            }
+            if (err >= 1.0)
+                run.back_s = -1.0;
+            else if (run.back_s < 0.0)
+                run.back_s = t - t_back;
+            run.err_end = err;
+        }
+    }
+    run.st = shp->stats();
+    return run;
+}
+
+RawGnssShadow::Config safeguarded(int receiver)
+{
+    RawGnssShadow::Config c = primaryCfg();
+    if (receiver == 0) gnss_raw::applyMosaicFlightSafeguards(c);
+    if (receiver == 1) gnss_raw::applySdrFlightSafeguards(c);
+    if (receiver == 2) gnss_raw::applyPx1105rFlightSafeguards(c);
+    return c;
+}
+
+}  // namespace
+
+// #1767: a boost that leaves the IMU's vertical over the vertical check's
+// 20 m/s off, GNSS lost from ignition, a coast above the barometer's range.
+// Every receiver's flight safeguards let the latch go once past the boost and
+// take GNSS's vertical; before #1767 the mosaic's (the coast release behind
+// the IMU-free release's switch, which its set leaves off) held GNSS out to
+// the end of the run.
+TEST(RawGnssShadow, TheCoastReleaseLetsGoOnEveryReceiver)
+{
+    const char* names[] = {"mosaic-G5", "gnss-sdr-dev", "PX1105R"};
+    for (int rx = 0; rx < 3; ++rx)
+    {
+        const CoastRun a = flyCoast(CoastCase{}, safeguarded(rx));
+        std::printf("coast, %s: %.1f m/s off when GNSS came back, latched %u, coast releases %u; within 1 m/s "
+                    "%.2f s after, %.2f m/s at the end\n",
+                    names[rx], a.err_at_back, a.st.vert_latched, a.st.vert_coast_releases, a.back_s, a.err_end);
+        EXPECT_GT(a.err_at_back, 20.0) << names[rx];          // the check latched it
+        EXPECT_GT(a.st.vert_latched, 0u) << names[rx];
+        EXPECT_EQ(a.st.vert_coast_releases, 1u) << names[rx];
+        EXPECT_EQ(a.st.vert_imu_free_releases, 0u) << names[rx];
+        EXPECT_GE(a.back_s, 5.0) << names[rx];                // not before the 5 s hold
+        EXPECT_LT(a.back_s, 9.0) << names[rx];
+        EXPECT_LT(a.err_end, 1.0) << names[rx];
+    }
+    // before #1767: the mosaic's set with the coast release off
+    RawGnssShadow::Config before = safeguarded(0);
+    before.vert_coast_release_s = 0.0;
+    const CoastRun b = flyCoast(CoastCase{}, before);
+    std::printf("coast, mosaic-G5 before #1767: latched %u, releases %u, %.1f m/s at the end\n", b.st.vert_latched,
+                b.st.vert_coast_releases, b.err_end);
+    EXPECT_GT(b.st.vert_latched, 0u);
+    EXPECT_EQ(b.st.vert_coast_releases, 0u);
+    EXPECT_LT(b.back_s, 0.0);
+    EXPECT_GT(b.err_end, 20.0);
+}
+
+// #1767: a reboot in the coast above the barometer's range, the filter
+// restored from the snapshot's velocity 3 s stale (about 29 m/s off on a
+// coast at g): the first epochs latch the check. Every receiver's safeguards
+// let it go once held; before #1767 the mosaic's held GNSS out.
+TEST(RawGnssShadow, TheCoastReleaseLetsGoAfterARestoreOnEveryReceiver)
+{
+    CoastCase o;
+    o.accel_scale = 1.0;
+    o.restore_after_bo = 3.0;
+    const char* names[] = {"mosaic-G5", "gnss-sdr-dev", "PX1105R"};
+    for (int rx = 0; rx < 3; ++rx)
+    {
+        const CoastRun a = flyCoast(o, safeguarded(rx));
+        std::printf("restore, %s: %.1f m/s off after it, latched %u, coast releases %u; within 1 m/s %.2f s after, "
+                    "%.2f m/s at the end\n",
+                    names[rx], a.err_at_back, a.st.vert_latched, a.st.vert_coast_releases, a.back_s, a.err_end);
+        ASSERT_GE(a.restored_at, 0.0);
+        EXPECT_GT(a.err_at_back, 20.0) << names[rx];
+        EXPECT_GT(a.st.vert_latched, 0u) << names[rx];
+        EXPECT_EQ(a.st.vert_coast_releases, 1u) << names[rx];
+        EXPECT_GE(a.back_s, 4.5) << names[rx];
+        EXPECT_LT(a.back_s, 9.0) << names[rx];
+        EXPECT_LT(a.err_end, 1.0) << names[rx];
+    }
+    RawGnssShadow::Config before = safeguarded(0);
+    before.vert_coast_release_s = 0.0;
+    const CoastRun b = flyCoast(o, before);
+    std::printf("restore, mosaic-G5 before #1767: latched %u, releases %u, %.1f m/s at the end\n", b.st.vert_latched,
+                b.st.vert_coast_releases, b.err_end);
+    EXPECT_GT(b.st.vert_latched, 0u);
+    EXPECT_EQ(b.st.vert_coast_releases, 0u);
+    EXPECT_LT(b.back_s, 0.0);
+    EXPECT_GT(b.err_end, 20.0);
+}
+
+// The coast release waits for the boost to end (#1706; pinned with #1767): a
+// long burn with the IMU high and GNSS lost from ignition, back 6 s before
+// burnout, latches the check under thrust; the release still waits until
+// boost_screen_window_s past burnout -- never a fit taken from under thrust.
+// The limit of the rule: "past the boost" is the IMU under boost_screen_g
+// (2 g) for that long, so a burn the IMU reads under 2 g is not told from a
+// coast; this burn reads 4.1 g.
+TEST(RawGnssShadow, TheCoastReleaseNeverActsUnderThrust)
+{
+    CoastCase o;
+    o.burn_s = 12.0;
+    o.boost_mps2 = 30.0;
+    o.gnss_back_s = -6.0;   // lost from ignition, back 6 s before burnout: under thrust
+    o.t_end_after_bo = 12.0;
+    const CoastRun a = flyCoast(o, safeguarded(0));
+    std::printf("long burn, GNSS back under thrust: latched %u, coast releases %u, %.2f s after burnout\n",
+                a.st.vert_latched, a.st.vert_coast_releases, a.release_after_bo);
+    ASSERT_GT(a.st.vert_latched, 0u);
+    ASSERT_EQ(a.st.vert_coast_releases, 1u);
+    EXPECT_GE(a.release_after_bo, safeguarded(0).boost_screen_window_s);
+    EXPECT_LT(a.err_end, 1.0);
+}
+
+// And for fits steady to 1 m/s (kVertCoastSteadyMps), not the latch's 5 m/s:
+// a receiver whose vertical still jumps 2 m/s each way when it is back is not
+// taken for a steady one; the release waits until it settles.
+TEST(RawGnssShadow, TheCoastReleaseWaitsForASettledReceiver)
+{
+    CoastCase o;
+    o.jitter_mps = 2.0;
+    o.jitter_s = 8.0;
+    // the Doppler change check off: it would hold some of the jumping epochs,
+    // and what reaches the vertical check then depends on which -- this is
+    // the coast release's own steadiness rule
+    RawGnssShadow::Config c = safeguarded(0);
+    c.dv_check = RawGnssShadow::kDvOff;
+    const CoastRun a = flyCoast(o, c);
+    std::printf("settling receiver: coast releases %u, %.2f s after burnout (settled %.2f s after)\n",
+                a.st.vert_coast_releases, a.release_after_bo, o.gnss_back_s + o.jitter_s);
+    ASSERT_EQ(a.st.vert_coast_releases, 1u);
+    EXPECT_GE(a.release_after_bo, o.gnss_back_s + o.jitter_s);
+    EXPECT_LT(a.err_end, 1.0);
+}
+
+// The harness itself: the same coast with the IMU right never latches.
+TEST(RawGnssShadow, TheCoastHarnessNeverLatchesWithTheImuRight)
+{
+    CoastCase o;
+    o.accel_scale = 1.0;
+    const CoastRun a = flyCoast(o, safeguarded(0));
+    EXPECT_EQ(a.st.vert_latched, 0u);
+    EXPECT_EQ(a.st.vert_coast_releases, 0u);
+    EXPECT_LT(a.err_end, 1.0);
+}
+
+// Never on the pad (#1767 review): the filter's start leaves no boost seen, so
+// "past the boost" holds on the pad; a receiver coherently 25 m/s off in the
+// vertical there, with no barometer, latched the check and every receiver's
+// set took its velocity. In flight only, now: the latch holds, the filter
+// stays right.
+TEST(RawGnssShadow, TheCoastReleaseNeverActsOnThePad)
+{
+    CoastCase o;
+    o.accel_scale = 1.0;
+    o.pad_dv_mps = 25.0;
+    o.pad_dv_from_s = 2.0;
+    o.t_launch = 40.0;   // never launched in the run
+    o.t_end = 30.0;
+    const char* names[] = {"mosaic-G5", "gnss-sdr-dev", "PX1105R"};
+    for (int rx = 0; rx < 3; ++rx)
+    {
+        const CoastRun a = flyCoast(o, safeguarded(rx));
+        std::printf("pad, %s: latched %u, coast releases %u, the vertical at most %.2f m/s off\n", names[rx],
+                    a.st.vert_latched, a.st.vert_coast_releases, a.err_max_pad);
+        EXPECT_GT(a.st.vert_latched, 0u) << names[rx];
+        EXPECT_EQ(a.st.vert_coast_releases, 0u) << names[rx];
+        EXPECT_LT(a.err_max_pad, 1.0) << names[rx];
+    }
+}
+
+// Where a barometer is fused it judges (as in the IMU-free descent): a
+// receiver coherently 30 m/s off for 15 s late in the flight, the barometer
+// fused (30 s past launch: the port hold over), is held out and never taken;
+// the filter stays on the barometer's side.
+TEST(RawGnssShadow, TheCoastReleaseStandsAsideWhereTheBarometerIsFused)
+{
+    CoastCase o;
+    o.accel_scale = 1.0;
+    o.baro = true;
+    o.t_end = 60.0;
+    o.stale_from_s = 40.0;
+    o.stale_s = 15.0;
+    o.stale_dv_mps = 30.0;
+    const char* names[] = {"mosaic-G5", "gnss-sdr-dev", "PX1105R"};
+    for (int rx = 0; rx < 3; ++rx)
+    {
+        // the Doppler change check off: it holds a step this size itself; the
+        // vertical check and its release are what this pins
+        RawGnssShadow::Config c = safeguarded(rx);
+        c.dv_check = RawGnssShadow::kDvOff;
+        const CoastRun a = flyCoast(o, c);
+        std::printf("baro fused, stale receiver, %s: latched %u, coast releases %u, the vertical at most %.2f m/s "
+                    "off\n", names[rx], a.st.vert_latched, a.st.vert_coast_releases, a.err_max_stale);
+        EXPECT_GT(a.st.vert_latched, 0u) << names[rx];
+        EXPECT_EQ(a.st.vert_coast_releases, 0u) << names[rx];
+        EXPECT_LT(a.err_max_stale, 5.0) << names[rx];
+    }
+}
+
+// The mosaic's descent as it was (#1767 review): once its IMU-free descent
+// has begun the coast release does not act for it (the descent release is
+// not verified on its data). With no barometer, a stale receiver before a
+// main's opening and a hard opening run exactly as with the coast release
+// off -- the release would take the stale velocity in some runs.
+TEST(RawGnssShadow, TheMosaicsDescentIsAsItWas)
+{
+    RawGnssShadow::Config off = safeguarded(0);
+    off.vert_coast_release_s = 0.0;
+    OpeningCase stale;
+    stale.baro = false;
+    stale.stale_from_s = 30.0;
+    stale.stale_s = 8.0;
+    stale.stale_dv_down = 30.0;
+    OpeningCase hard;
+    hard.baro = false;
+    hard.v0 = 60.0;
+    hard.t_open = 0.8;
+    for (const OpeningCase& o : {stale, hard})
+    {
+        const OpeningRun a = flyOpening(o, safeguarded(0));
+        const OpeningRun b = flyOpening(o, off);
+        EXPECT_EQ(a.st.vert_coast_releases, 0u);
+        EXPECT_EQ(a.st.vert_imu_free_releases, 0u);
+        EXPECT_EQ(a.st.epochs_applied, b.st.epochs_applied);
+        EXPECT_EQ(a.err_end, b.err_end);
+        EXPECT_EQ(a.catch_s, b.catch_s);
+    }
 }
 
 TEST(RawGnssShadow, AStaleReceiverInTheImuFreeDescentIsStillKeptOut)

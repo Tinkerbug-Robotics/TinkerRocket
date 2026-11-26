@@ -251,7 +251,7 @@ static_assert(sizeof(void*) != 8 || sizeof(GnssSignalProfile) == 40,
               "GnssSignalProfile changed: add the field to expectSameSignal, then update this size");
 static_assert(sizeof(void*) != 8 || sizeof(GnssReceiverProfile) == 856,
               "GnssReceiverProfile changed: add the field to expectSameNumbers, then update this size");
-static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 2216,
+static_assert(sizeof(void*) != 8 || sizeof(RawGnssShadow::Config) == 2224,
               "RawGnssShadow::Config changed: pin the field in TheShadowSafeguardDefaultsAreTheBeetles, then update "
               "this size");
 
@@ -482,6 +482,10 @@ TEST(ReceiverProfile, ThePx1105rIsTheMosaicsDesignWithItsOwnReceiver)
     EXPECT_FALSE(mo.dv_imu_free_off);
     EXPECT_EQ(mo.vert_imu_free_release_s, 0.0);
     EXPECT_FALSE(mo.ekf.gravity_wgs84);
+    // #1767: the coast release is every receiver's, the mosaic's included
+    EXPECT_EQ(mo.vert_coast_release_s, 1.0);
+    EXPECT_EQ(px.vert_coast_release_s, 1.0);
+    EXPECT_EQ(sd.vert_coast_release_s, 1.0);
 }
 
 TEST(ReceiverProfile, ThePhaseSigmaIsLogLinearInCn0)
@@ -681,6 +685,10 @@ TEST(ReceiverProfile, TheSdrImagesSafeguardsAreTheMosaicsLessTheWindupAndTheChan
     EXPECT_EQ(d.vert_imu_free_release_s, 0.0);
     EXPECT_EQ(m.vert_imu_free_release_s, 0.0);
     EXPECT_EQ(s.vert_imu_free_release_s, 1.0);
+    // #1767: but the coast release past the boost is both's (and off unless an image sets it)
+    EXPECT_EQ(d.vert_coast_release_s, 0.0);
+    EXPECT_EQ(m.vert_coast_release_s, 1.0);
+    EXPECT_EQ(s.vert_coast_release_s, m.vert_coast_release_s);
     // everything else the mosaic's
     s.dv_imu_free_off = m.dv_imu_free_off;
     s.windup_k = m.windup_k;
@@ -913,6 +921,7 @@ TEST(ReceiverProfile, ARefusalsLetInIsKeptInTime)
 // nothing else): r takes each from b.
 void takeFlightSafeguards(RawGnssShadow::Config& r, const RawGnssShadow::Config& b)
 {
+    r.vert_coast_release_s = b.vert_coast_release_s;   // #1767
     r.dv_check = b.dv_check;
     r.dv_window_s = b.dv_window_s;
     r.dv_window_restart = b.dv_window_restart;
@@ -1032,6 +1041,10 @@ TEST(ReceiverProfile, TheMosaicFlightSafeguards)
     EXPECT_EQ(c.windup_k, 0.99);
     EXPECT_FALSE(c.windup_geom);
     EXPECT_FALSE(c.windup_monitor);
+    // the vertical check's coast release past the boost (1 s, #1767), not the
+    // IMU-free descent's (the gnss-sdr-dev's and the PX1105R's own)
+    EXPECT_EQ(c.vert_coast_release_s, 1.0);
+    EXPECT_EQ(c.vert_imu_free_release_s, 0.0);
     // and nothing else: the profile's settings, the builder's, the EKF's, the
     // vertical check (20 m/s), the boost screen and the heading gate as they
     // were, byte for byte once the safeguards' own fields are put back
@@ -1384,6 +1397,7 @@ TEST(ReceiverProfile, TheShadowSafeguardDefaultsAreTheBeetles)
     EXPECT_EQ(c.vert_check_mps, 20.0);
     EXPECT_EQ(c.vert_release_mps, 5.0);
     EXPECT_EQ(c.vert_imu_free_release_s, 0.0);   // the gnss-sdr-dev image's own (applySdrFlightSafeguards)
+    EXPECT_EQ(c.vert_coast_release_s, 0.0);      // every flight safeguards set's (applyMosaicFlightSafeguards, #1767)
     // the Doppler change check: off (exp/v9-dvcheck); its settings act only when it is on
     EXPECT_EQ(c.dv_check, RawGnssShadow::kDvOff);
     EXPECT_EQ(c.dv_sat_k, 5.0);
