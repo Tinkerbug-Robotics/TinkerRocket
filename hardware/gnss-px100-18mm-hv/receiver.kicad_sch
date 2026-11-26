@@ -6,8 +6,8 @@
 	(paper "A3")
 	(title_block
 		(title "RF chain and PX100 receiver")
-		(date "2026-11-23")
-		(rev "V3")
+		(date "2026-11-25")
+		(rev "V4")
 		(company "TinkerRocket")
 	)
 	(lib_symbols

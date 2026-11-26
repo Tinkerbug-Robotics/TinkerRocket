@@ -5,13 +5,15 @@ PX100-5C-01A single-chip L1/L5 raw-measurement receiver and a new RF front end. 
 and LDO supply. Started 2026-10-22 from the carrier at 5c300f3a.
 
 **Prototype (since 2026-10-23, the owner's call).** No patch antenna: the RF input is an SMA edge connector (J1, RF
-Solutions CON-SMA-EDGE-S, as on the Beetle) for a passive antenna or the HackRF rig, on a 4-layer 1.6 mm board
-drawn for JLC04161H-3313. It is a bench and rig board, not the flight carrier.
+Solutions CON-SMA-EDGE-S, as on the Beetle) for a passive antenna or the HackRF rig. V1 and V2 are 4-layer 1.6 mm
+boards drawn for JLC04161H-3313; V3 is 6-layer, JLC06161H-3313. It is a bench and rig board, not the flight carrier.
 
-**State (2026-11-23):** V2 was ordered (JLC, HASL, plotted 2026-11-03) and two boards are built; it is not committed
-or tagged in git. Its as-ordered files and gerbers are kept locally in
-`gnss-px100-18mm-hv-backups/V2-as-ordered-2026-11-03/` (git-ignored). V3 is in work: the title blocks and silkscreen
-read V3, and *V3 front end* below lists what changed. The paragraphs after this one describe V1 and V2.
+**State (2026-11-25):** V3 is released: tag `gnss-px100-18mm-hv-v3.0.0`, with the JLC gerbers and a hand-placement
+package (BOM, placement map, positions) on the GitHub release of that name. It carries the Tinker-Beetle V2's GNSS
+section on 6 layers; *V3 front end* below lists what changed. V4 is in work: the title blocks and silkscreen read V4,
+and nothing else has changed yet. V2 was ordered (JLC, HASL, plotted 2026-11-03) and two boards are built, but it was
+never tagged; its as-ordered files and gerbers are kept locally in `gnss-px100-18mm-hv-backups/V2-as-ordered-2026-11-03/`
+(git-ignored). The paragraphs after this one describe V1 and V2.
 
 **State:** V1 released on 2026-10-23 (tag `gnss-px100-18mm-hv-v1.0.0`) and ordered as bare boards from JLC (order
 Y349-3297386A, shipped). V2 is in work: the title blocks and the silkscreen read V2. The only other changes are two
@@ -30,7 +32,7 @@ ERC is clean apart from inherited off-grid warnings; DRC with schematic parity f
 unconnected. The board setup asks for filled and capped vias, the owner's choice of 2026-10-23, because U1's exposed
 pad needs vias in it (*Layout*, item 3); the V1 order didn't include that option.
 
-## V3 front end (in work, 2026-11-23)
+## V3 front end (released 2026-11-25, `gnss-px100-18mm-hv-v3.0.0`)
 
 The Tinker-Beetle V2's GNSS sheet started as a copy of this V2 front end and has moved on since. V3 brings the carrier's
 RF path back in line with the Beetle's, so the carrier can try the Beetle's chain before a Beetle is built.

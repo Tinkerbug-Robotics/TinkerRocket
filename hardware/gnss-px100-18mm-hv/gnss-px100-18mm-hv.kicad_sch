@@ -6,8 +6,8 @@
 	(paper "A4")
 	(title_block
 		(title "PX100 GNSS carrier, LDO supply")
-		(date "2026-11-23")
-		(rev "V3")
+		(date "2026-11-25")
+		(rev "V4")
 		(company "TinkerRocket")
 	)
 	(lib_symbols
