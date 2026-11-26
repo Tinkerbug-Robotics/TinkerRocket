@@ -466,21 +466,23 @@ PCB caught up with the schematic on 2026-10-30; see *PCB* below.
     0.125 mA per bit over ±4.1 A. It drops 9 mV at the 450 mA charge
     current and dissipates 4 mW there, against the part's 0.4 W rating.
 - **Not done:**
-  - PCB DRC, on the board as saved 2026-11-26 06:22 (7 errors, 1 unconnected):
+  - PCB DRC, on the board as saved 2026-11-26 06:22 (7 errors, 1 unconnected;
+    the owner is clearing them):
     - GND stitching vias on In2 VCC copper: (60.21, 149.20) and
       (57.35, 149.58) short the VCC track under `U3` that feeds `S1`;
       (61.98, 181.03) shorts the In2 VCC link from the shunt to `U5`.
     - The GND via at (49.73, 178.98) sits under `C42` pad 1 (VCC): a short,
       a hole-clearance error and a solder-mask bridge.
     - `S1`'s VCC feed on In2 no longer meets `C42`/`U22` (unconnected).
-    - The nine GND vias inside `U3`'s thermal pad are gone; Espressif asks
-      for at least nine, and *FABRICATION-NOTES* item 3 still counts them.
+  - `FABRICATION-NOTES.md` item 3 and its *Why* paragraph: `U3`'s thermal
+    pad has no vias since 2026-11-26. This board takes no via in any pad
+    (owner), so the nine V1 thermal-pad vias are gone and item 3 needs its
+    V2 rewrite.
   - PCB: the gerbers and the position file are not re-plotted. That waits for
     a V2 order.
-  - Firmware: a 4 MB partition table, and SPIFFS mounted on an external NOR
-    over SPI3. Also a V2 board header with I²C on GPIO12 (SDA) and GPIO10
-    (SCL) and the INA230 at 0x40 with a 20 mΩ shunt (`TR_INA230`). The
-    Tinker-Base header (`board_v4.h`) has no I²C bus.
+  - Firmware: SPIFFS mounted on the external NOR (`U23`) over SPI3. The V2
+    board header (board 5: the 4 MB partition table, and the INA230 at 0x40
+    with a 20 mΩ shunt on GPIO12/GPIO10) is PR #1825, not yet merged.
   - `bom.csv` and `FABRICATION-NOTES.md`, which still describe V1.
 
 ### V1

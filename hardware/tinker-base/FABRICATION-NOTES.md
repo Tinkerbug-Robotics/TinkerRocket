@@ -25,7 +25,9 @@
 > `C7` is now `R61` (0 Ω) and `L4` is 4.3 nH. `U24` (INA230, 0.5 mm pitch
 > QFN-16) and its 20 mΩ shunt `R62` are new on the top side. `R62` sits
 > about 1 mm from `BT2`'s pad P, so add to the `BT2` line: "solder the + tab with
-> the iron off `R62`". See *Status* in
+> the iron off `R62`". `U3`'s thermal pad has no vias on V2 (no via in any
+> pad on this board), so rewrite item 3 and its *Why* paragraph too. See
+> *Status* in
 > [`README.md`](README.md).
 
 **Paste the block below into the fab's order notes verbatim.**
