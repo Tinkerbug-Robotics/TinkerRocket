@@ -459,21 +459,15 @@ PCB caught up with the schematic on 2026-10-30; see *PCB* below.
   - **Checked:** ERC loses the 19 errors on `U24`'s pins and the 2 on
     GPIO10/12, and adds only warnings of kinds the sheet already has.
     The netlist was checked pin by pin. Schematic parity is 0 and
-    `tools/check_board_parity.py` passes with 98 symbols. DRC is not clean
-    yet: see *Not done*.
+    `tools/check_board_parity.py` passes with 98 symbols. DRC on the board
+    as saved 2026-11-26 06:32, after the owner's fixes: 0 errors,
+    0 unconnected, and 31 warnings (silkscreen, plus library notes on `J8`
+    and the logo), the same after a zone refill.
   - **Why 20 mΩ:** the flight computers' 2 mΩ would give 1.25 mA per bit
     over ±41 A, where the base station draws well under 1 A. 20 mΩ gives
     0.125 mA per bit over ±4.1 A. It drops 9 mV at the 450 mA charge
     current and dissipates 4 mW there, against the part's 0.4 W rating.
 - **Not done:**
-  - PCB DRC, on the board as saved 2026-11-26 06:22 (7 errors, 1 unconnected;
-    the owner is clearing them):
-    - GND stitching vias on In2 VCC copper: (60.21, 149.20) and
-      (57.35, 149.58) short the VCC track under `U3` that feeds `S1`;
-      (61.98, 181.03) shorts the In2 VCC link from the shunt to `U5`.
-    - The GND via at (49.73, 178.98) sits under `C42` pad 1 (VCC): a short,
-      a hole-clearance error and a solder-mask bridge.
-    - `S1`'s VCC feed on In2 no longer meets `C42`/`U22` (unconnected).
   - `FABRICATION-NOTES.md` item 3 and its *Why* paragraph: `U3`'s thermal
     pad has no vias since 2026-11-26. This board takes no via in any pad
     (owner), so the nine V1 thermal-pad vias are gone and item 3 needs its
