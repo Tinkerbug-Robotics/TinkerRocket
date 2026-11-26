@@ -11,9 +11,9 @@
 		(company "TinkerRocket")
 	)
 	(lib_symbols
-		(symbol "Custom:AANI-CH-0070"
+		(symbol "Custom:479480001"
 			(pin_names
-				(offset 1.016)
+				(offset 0.254)
 			)
 			(exclude_from_sim no)
 			(in_bom yes)
@@ -21,40 +21,50 @@
 			(in_pos_files yes)
 			(duplicate_pin_numbers_are_jumpers no)
 			(property "Reference" "U"
-				(at -6.35 5.2 0)
+				(at 11.938 5.842 0)
 				(show_name no)
 				(do_not_autoplace no)
 				(effects
 					(font
-						(size 1.27 1.27)
+						(size 1.524 1.524)
 					)
-					(justify left bottom)
 				)
 			)
-			(property "Value" "AANI-CH-0070"
-				(at -6.35 -6.6 0)
+			(property "Value" "479480001"
+				(at 12.192 3.302 0)
 				(show_name no)
 				(do_not_autoplace no)
 				(effects
 					(font
-						(size 1.27 1.27)
+						(size 1.524 1.524)
 					)
-					(justify left bottom)
 				)
 			)
-			(property "Footprint" "Footprints:ANT_AANI-CH-0070_ABR"
-				(at 7.62 1.27 0)
+			(property "Footprint" "Footprints:ANT_47948-0001_MOL"
+				(at 11.684 8.128 0)
 				(show_name no)
 				(do_not_autoplace no)
 				(hide yes)
 				(effects
 					(font
 						(size 1.27 1.27)
+						(italic yes)
 					)
-					(justify left bottom)
 				)
 			)
-			(property "Datasheet" ""
+			(property "Datasheet" "https://www.molex.com/en-us/products/part-detail-pdf/479480001?display=pdf"
+				(at 0.508 14.986 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(hide yes)
+				(effects
+					(font
+						(size 1.27 1.27)
+						(italic yes)
+					)
+				)
+			)
+			(property "Description" ""
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -63,10 +73,19 @@
 					(font
 						(size 1.27 1.27)
 					)
-					(justify left bottom)
 				)
 			)
-			(property "Description" "2.4 GHz loop chip antenna, 1.0 x 0.5 x 0.4 mm, 2.8 dBi; needs a 4.6 x 3.5 mm ground clearance and a pi matching network"
+			(property "ki_locked" ""
+				(at 0 0 0)
+				(show_name no)
+				(do_not_autoplace no)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "ki_keywords" "479480001"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -75,11 +94,10 @@
 					(font
 						(size 1.27 1.27)
 					)
-					(justify left bottom)
 				)
 			)
-			(property "MPN" "AANI-CH-0070"
-				(at 7.62 1.27 0)
+			(property "ki_fp_filters" "ANT_47948-0001_MOL"
+				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
 				(hide yes)
@@ -87,87 +105,13 @@
 					(font
 						(size 1.27 1.27)
 					)
-					(justify left bottom)
 				)
 			)
-			(property "Mfr" "Abracon"
-				(at 7.62 1.27 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left bottom)
-				)
-			)
-			(property "MANUFACTURER" "Abracon LLC"
-				(at 7.62 1.27 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left bottom)
-				)
-			)
-			(property "MAXIMUM_PACKAGE_HEIGHT" "0.45 mm"
-				(at 7.62 1.27 0)
-				(show_name no)
-				(do_not_autoplace no)
-				(hide yes)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left bottom)
-				)
-			)
-			(symbol "AANI-CH-0070_0_1"
-				(rectangle
-					(start -6.35 3.81)
-					(end 6.35 -3.81)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type background)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0 1.02) (xy 1.52 2.54)
-					)
-					(stroke
-						(width 0.2)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0 -1.27) (xy 0 1.02) (xy -1.52 2.54)
-					)
-					(stroke
-						(width 0.2)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-			)
-			(symbol "AANI-CH-0070_1_1"
-				(pin passive line
-					(at -8.89 0 0)
-					(length 2.54)
-					(name "FEED"
+			(symbol "479480001_0_1"
+				(pin unspecified line
+					(at 0 0 0)
+					(length 7.62)
+					(name "1"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -182,10 +126,10 @@
 						)
 					)
 				)
-				(pin passive line
-					(at 8.89 0 180)
-					(length 2.54)
-					(name "GND"
+				(pin unspecified line
+					(at 0 -2.54 0)
+					(length 7.62)
+					(name "2"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -200,10 +144,10 @@
 						)
 					)
 				)
-				(pin passive line
-					(at 8.89 0 180)
-					(length 2.54)
-					(name "GND"
+				(pin unspecified line
+					(at 24.13 -2.54 180)
+					(length 7.62)
+					(name "3"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -218,10 +162,23 @@
 						)
 					)
 				)
-				(pin passive line
-					(at -8.89 0 0)
-					(length 2.54)
-					(name "FEED"
+			)
+			(symbol "479480001_1_1"
+				(rectangle
+					(start 7.62 1.27)
+					(end 16.51 -5.08)
+					(stroke
+						(width 0)
+						(type solid)
+					)
+					(fill
+						(type background)
+					)
+				)
+				(pin unspecified line
+					(at 24.13 0 180)
+					(length 7.62)
+					(name "Feed"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -4705,6 +4662,18 @@
 		(at 120.65 122.555)
 		(uuid "1cf10708-3bd7-436e-a367-a48c0fe83a26")
 	)
+	(no_connect
+		(at 35.56 36.195)
+		(uuid "6f36ff6e-cf7f-41a9-8ef1-ce4f6bf2611c")
+	)
+	(no_connect
+		(at 35.56 38.735)
+		(uuid "81aaa35a-87e7-4da8-bd79-04561feb1b26")
+	)
+	(no_connect
+		(at 59.69 38.735)
+		(uuid "60cddb25-0a71-4f5d-bf8f-736c87f346c8")
+	)
 	(wire
 		(pts
 			(xy 120.65 45.085) (xy 120.65 53.975)
@@ -7643,7 +7612,7 @@
 		)
 	)
 	(symbol
-		(lib_id "Device:C")
+		(lib_id "Device:R_US")
 		(at 71.12 36.195 90)
 		(unit 1)
 		(body_style 1)
@@ -7653,7 +7622,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(uuid "21811464-a1cf-4f20-bf47-d9580471283b")
-		(property "Reference" "C7"
+		(property "Reference" "R61"
 			(at 72.39 32.385 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7664,7 +7633,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "5.1 pF"
+		(property "Value" "0"
 			(at 74.93 40.005 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7675,7 +7644,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
 			(at 72.0852 40.005 0)
 			(hide yes)
 			(show_name no)
@@ -7697,7 +7666,7 @@
 				)
 			)
 		)
-		(property "Description" "Unpolarized capacitor"
+		(property "Description" "Resistor, US symbol"
 			(at 71.12 36.195 0)
 			(hide yes)
 			(show_name no)
@@ -7708,7 +7677,7 @@
 				)
 			)
 		)
-		(property "MPN" "GJM1555C1H5R1WB01"
+		(property "MPN" "RC0402JR-070RL"
 			(at 71.12 36.195 0)
 			(hide yes)
 			(show_name no)
@@ -7719,7 +7688,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Murata"
+		(property "Mfr" "Yageo"
 			(at 71.12 36.195 0)
 			(hide yes)
 			(show_name no)
@@ -7739,7 +7708,7 @@
 		(instances
 			(project "tinker-base"
 				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
-					(reference "C7")
+					(reference "R61")
 					(unit 1)
 				)
 			)
@@ -8910,8 +8879,8 @@
 		)
 	)
 	(symbol
-		(lib_id "Custom:AANI-CH-0070")
-		(at 50.8 36.195 180)
+		(lib_id "Custom:479480001")
+		(at 35.56 36.195 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -8921,7 +8890,7 @@
 		(dnp no)
 		(uuid "589c6f3e-d69e-489b-ae8e-9c5d7ae3fb98")
 		(property "Reference" "U15"
-			(at 48.895 27.94 0)
+			(at 47.498 30.353 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -8931,8 +8900,8 @@
 				(justify left bottom)
 			)
 		)
-		(property "Value" "AANI-CH-0070"
-			(at 59.69 30.48 0)
+		(property "Value" "0479480001"
+			(at 47.752 32.893 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -8942,8 +8911,8 @@
 				(justify left bottom)
 			)
 		)
-		(property "Footprint" "Footprints:ANT_AANI-CH-0070_ABR"
-			(at 50.8 36.195 0)
+		(property "Footprint" "Footprints:ANT_47948-0001_MOL"
+			(at 35.56 36.195 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8954,8 +8923,8 @@
 				(justify left bottom)
 			)
 		)
-		(property "Datasheet" ""
-			(at 50.8 36.195 0)
+		(property "Datasheet" "https://www.molex.com/en-us/products/part-detail-pdf/479480001?display=pdf"
+			(at 35.56 36.195 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8966,8 +8935,8 @@
 				(justify left bottom)
 			)
 		)
-		(property "Description" "2.4 GHz loop chip antenna, 1.0 x 0.5 x 0.4 mm"
-			(at 50.8 36.195 0)
+		(property "Description" "2.4 GHz on-ground LDS chip antenna, 3.2 x 3.2 mm; no ground clearance needed; pad 4 is the feed, pads 1-3 are fixing pads (left unconnected)"
+			(at 35.56 36.195 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8978,8 +8947,8 @@
 				(justify left bottom)
 			)
 		)
-		(property "MPN" "AANI-CH-0070"
-			(at 50.8 36.195 0)
+		(property "MPN" "0479480001"
+			(at 35.56 36.195 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8990,8 +8959,8 @@
 				(justify left bottom)
 			)
 		)
-		(property "Mfr" "Abracon"
-			(at 50.8 36.195 0)
+		(property "Mfr" "Molex"
+			(at 35.56 36.195 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11320,84 +11289,6 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 41.91 36.195 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "bc4eaa84-c638-4e1a-b7ca-83b9be24100c")
-		(property "Reference" "#PWR06"
-			(at 41.91 42.545 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 41.91 40.64 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 41.91 36.195 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 41.91 36.195 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 41.91 36.195 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "e0dc42d2-fc47-467a-a749-19477e3a3080")
-		)
-		(instances
-			(project "tinker-base"
-				(path "/d2421514-d142-4c71-ac69-48d30c1a771f/6cfb856e-ef45-4f36-bd7e-e27b13a29501"
-					(reference "#PWR06")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
 		(at 77.47 94.615 0)
 		(unit 1)
 		(body_style 1)
@@ -12606,7 +12497,7 @@
 				)
 			)
 		)
-		(property "Value" "2.2 nH"
+		(property "Value" "4.3 nH"
 			(at 84.455 38.735 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -12649,7 +12540,7 @@
 				)
 			)
 		)
-		(property "MPN" "LQW15AN2N2C10"
+		(property "MPN" "LQW15AN4N3C00D"
 			(at 86.995 38.735 0)
 			(hide yes)
 			(show_name no)
@@ -14734,6 +14625,54 @@
 					(reference "U23")
 					(unit 1)
 				)
+			)
+		)
+	)
+	(global_label "I2C_SCL"
+		(shape bidirectional)
+		(at 171.45 81.915 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "9a5f4414-9b70-4f8b-a5fc-c0a878ce0dc1")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 171.45 81.915 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+	)
+	(global_label "I2C_SDA"
+		(shape bidirectional)
+		(at 171.45 86.995 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "11a0d618-4bfb-429d-ba73-8fee1aa05f35")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 171.45 86.995 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
 			)
 		)
 	)
