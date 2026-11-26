@@ -15319,6 +15319,11 @@ static void loop_fc()
                 // out of the error budget instead of being paid for in margin.
                 g.gnss_agl_m = (float)(gnss_latest_si.alt - ref_alt_m) +
                                g.gnss_vel_u_mps * ((float)gnss_age_us * 1e-6f);
+                // #1761: which fix, and how old, so the gate can require a run
+                // of consistent fixes before the backstop may fire. The
+                // receive timestamp changes with every fix.
+                g.gnss_fix_id     = gnss_latest_si.time_us;
+                g.gnss_fix_age_ms = gnss_age_us / 1000u;
 
                 MainDeployGate::step(main_deploy_state, g);
 
