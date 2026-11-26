@@ -5488,7 +5488,7 @@
 		)
 		(uuid "26e898eb-923e-4bee-9e00-4ecfa4b879aa")
 	)
-	(text "FL6 (L1) and FL7 (L5, the TA2471A of SkyTraq's reference) are 50 ohm with no matching.\nC36 + L14 and C37 4 pF + L15 are SkyTraq's input matches into the PX100.\nC65 and C72 keep DC off the SAWs if pins 40 and 37 carry a bias (2026-10-27 review, V2 item 5)."
+	(text "FL6 (L1) and FL7 (L5, Abracon ABSTS5A2-210M011M, the twin of SkyTraq's reference TA2471A) are 50 ohm with no matching.\nC36 + L14 and C37 4 pF + L15 are SkyTraq's input matches into the PX100.\nC65 and C72 keep DC off the SAWs if pins 40 and 37 carry a bias (2026-10-27 review, V2 item 5)."
 		(exclude_from_sim no)
 		(at 228.6 86.36 0)
 		(effects
@@ -5587,7 +5587,7 @@
 		)
 		(uuid "c2795f9c-8b10-4376-be8e-cc214169414e")
 	)
-	(text "Y1: Epson TG2520SMN 26 MHz, +/-0.5 ppm, fed by the\nPX100's own TCXO LDO (pin 3). Its long side is the\ng-sensitive X axis (0.4 ppb/g typ): keep it along board x,\nacross the thrust. C48 is a 0 ohm link: the TCXO drives TCXO_I\ndirectly, as in SkyTraq's reference (refit 1 nF if the clock fails).\nY2: 32.768 kHz, no load capacitors."
+	(text "Y1: Epson TG2016SMN 26 MHz (X1G0054410304), +/-0.5 ppm, the\nstand-in for the unstocked TG2520SMN (same family and data),\n2.0 x 1.6 mm centred on the 2520 lands. Fed by the\nPX100's own TCXO LDO (pin 3). Its long side is the\ng-sensitive X axis (0.4 ppb/g typ): keep it along board x,\nacross the thrust. C48 is a 0 ohm link: the TCXO drives TCXO_I\ndirectly, as in SkyTraq's reference (refit 1 nF if the clock fails).\nY2: 32.768 kHz, no load capacitors."
 		(exclude_from_sim no)
 		(at 110.49 205.74 0)
 		(effects
@@ -10896,7 +10896,7 @@
 				)
 			)
 		)
-		(property "Value" "TA2471A"
+		(property "Value" "ABSTS5A2-210M011M"
 			(at 167.64 85.598 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10917,7 +10917,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.lcsc.com/datasheet/C5975435.pdf"
+		(property "Datasheet" "https://www.lcsc.com/datasheet/C3283473.pdf"
 			(at 167.64 81.28 0)
 			(hide yes)
 			(show_name no)
@@ -10928,7 +10928,7 @@
 				)
 			)
 		)
-		(property "Description" "L5 SAW"
+		(property "Description" "L5 SAW. Abracon ABSTS5A2-210M011M, the TA2471A's twin (same data sheet figures and pins: 1 IN, 4 OUT, 2/3/5 GND; 1164-1189 MHz, 1.8/2.4 dB, 849-980 MHz rejection 51 dB min); stand-in from 2026-11-25 as the TA2471A is not stocked."
 			(at 167.64 81.28 0)
 			(hide yes)
 			(show_name no)
@@ -10939,7 +10939,7 @@
 				)
 			)
 		)
-		(property "MPN" "TA2471A"
+		(property "MPN" "ABSTS5A2-210M011M"
 			(at 167.64 81.28 0)
 			(hide yes)
 			(show_name no)
@@ -10950,7 +10950,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Tai-Saw (TST)"
+		(property "Mfr" "Abracon"
 			(at 167.64 81.28 0)
 			(hide yes)
 			(show_name no)
@@ -10961,7 +10961,7 @@
 				)
 			)
 		)
-		(property "Dist" "LCSC"
+		(property "Dist" "DigiKey"
 			(at 167.64 81.28 0)
 			(hide yes)
 			(show_name no)
@@ -10972,7 +10972,7 @@
 				)
 			)
 		)
-		(property "Dist_PN" "C5975435"
+		(property "Dist_PN" "535-ABSTS5A2-210M011MCT-ND"
 			(at 167.64 81.28 0)
 			(hide yes)
 			(show_name no)
@@ -18756,7 +18756,7 @@
 				)
 			)
 		)
-		(property "Value" "TG2520SMN 26 MHz"
+		(property "Value" "TG2016SMN 26 MHz"
 			(at 130.81 163.83 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -18788,7 +18788,7 @@
 				)
 			)
 		)
-		(property "Description" ""
+		(property "Description" "Stand-in for the TG2520SMN 26.000000MHz MCGNNM (not stocked, 2026-11-25): Epson TG2016SMN 26 MHz MCGNNM, same family and data sheet (+/-0.5 ppm -40..85 C, same g-sensitivity data, pin 1 open or GND). 2.0 x 1.6 mm, centred on the 2.5 x 2.0 lands with its long side along board x; use less paste and check after the bake that it has not slid or turned."
 			(at 124.46 157.48 0)
 			(hide yes)
 			(show_name no)
@@ -18799,7 +18799,7 @@
 				)
 			)
 		)
-		(property "MPN" "TG2520SMN 26.000000MHz MCGNNM"
+		(property "MPN" "X1G0054410304"
 			(at 124.46 157.48 0)
 			(hide yes)
 			(show_name no)
@@ -18821,7 +18821,7 @@
 				)
 			)
 		)
-		(property "Dist" "DigiKey"
+		(property "Dist" "LCSC"
 			(at 124.46 157.48 0)
 			(hide yes)
 			(show_name no)
@@ -18832,7 +18832,7 @@
 				)
 			)
 		)
-		(property "Dist_PN" ""
+		(property "Dist_PN" "C7527385"
 			(at 124.46 157.48 0)
 			(hide yes)
 			(show_name no)
