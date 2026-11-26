@@ -1,6 +1,7 @@
 # Tinker-Beetle V2 — fabrication and assembly notes
 
-> **These notes are for the V2 order, written 2026-11-24 against the board saved that day.**
+> **These notes are for the V2 order: written 2026-11-24, re-checked 2026-11-25 against the release
+> board (tag `tinker-beetle-v2.0.0`).**
 > They replace the V1.0.1 notes (tag `rocket-computer-mini-v1.0.1`, 091601cb), which stay in git
 > history at the tag. V1 carried the Quectel LC86G module. V2 carries the SkyTraq PX100 receiver
 > with its own L1/L5 front end under a two-piece shield. So V1's LC86G items are not carried over:
@@ -43,13 +44,13 @@ A2. SURFACE FINISH: ENIG. REQUIRED FOR THE 0.40 mm PITCH
     (U2, U3, U4, U18, U21, U23, U47, FL2, J6).
     DO NOT SUBSTITUTE HASL.
 
-A3. VIAS: ALL 633 VIAS FILLED WITH NON-CONDUCTIVE EPOXY AND
+A3. VIAS: ALL 701 VIAS FILLED WITH NON-CONDUCTIVE EPOXY AND
     PLATED OVER (CAPPED), IPC-4761 TYPE VII, BOTH SIDES.
     *** VIA-IN-PAD IS USED THROUGHOUT THIS BOARD. ***
-    319 VIAS ARE CENTRED IN SMD PADS AND 49 MORE CUT A PAD
+    341 VIAS ARE CENTRED IN SMD PADS AND 58 MORE CUT A PAD
     EDGE, ON BOTH FACES, UNDER PASTE: EXPOSED PADS (U5, U11,
     U15, U18, U19, U23, U30, U32, U47), THE TPS2HC16 VBB PADS,
-    THE SHIELD FRAME LAND, J8, J3, AND 173 IN PASSIVE PADS.
+    THE SHIELD FRAME LAND, J8, J3, IC PINS AND 188 PASSIVE PADS.
     NO VIA IS TO BE LEFT OPEN OR ONLY TENTED. IF THIS LINE IS
     NOT ON THE QUOTE, THE BOARD IS NOT BUILDABLE.
 
@@ -57,9 +58,9 @@ A4. CONTROLLED IMPEDANCE: NOT ORDERED. NO COUPON.
     THE RF LINES ARE DRAWN ON THE A1 TEMPLATE, ARE SHORT, AND
     THEIR MATCHES ARE TUNED ON THE BENCH:
     - GNSS L1/L5: 0.18 mm TRACK, 0.20 mm GAPS, B.Cu OVER
-      In6.Cu GND, ABOUT 50 OHM. LONGEST RUN 7.2 mm.
-    - 2.4 GHz BLE (U15 TO U14): 0.18 mm, 6.8 mm IN ALL.
-    - 900 MHz LORA (U16 TO J8): 10.1 mm.
+      In6.Cu GND, ABOUT 50 OHM. LONGEST NET 6.0 mm.
+    - 2.4 GHz BLE (U15 TO U14): 0.18 mm, 7.8 mm IN ALL.
+    - 900 MHz LORA (U16 TO J8): 0.18 mm ON B.Cu, 12.0 mm.
     DO NOT ADJUST TRACK WIDTHS FOR IMPEDANCE.
 
 A5. ALL VIAS 0.40 mm PAD ON 0.30 mm DRILL (ASPECT 5.4:1).
@@ -73,8 +74,8 @@ A6. MIN TRACK 0.10 mm. MIN SPACING 0.10 mm.
 
 A7. MIXED TECHNOLOGY. PLATED HOLES: AE1 (1 x 1.00 mm),
     C130 (2 x 0.90 mm), J2 (10 x 1.20 mm), H1-H4 (4 x 2.20 mm,
-    NO NET). PLATED SLOTS: J6 (4 x 0.85 x 0.60 mm).
-    NON-PLATED: J6 (0.52 mm ROUND AND 0.72 x 0.52 mm OVAL).
+    NO NET). PLATED SLOTS: J6 (4 x 1.20 x 0.60 mm).
+    NON-PLATED: J6 (0.60 mm AND 0.80 mm ROUND).
     FINEST SMD PITCH 0.40 mm (SEE A2).
 
 A8. SOLDER MASK: U15 AND U32 HAVE 0.07 mm MASK WEBS BETWEEN
@@ -163,14 +164,21 @@ B7. TUNING PARTS ARE UNFITTED: C157, C158 (GNSS MATCH,
     BENCH TUNE CALLS FOR, THEN SNAP THE COVER ON.
 
 B8. C130 (CDA CXHP2R7205R-TW, 2 F 2.7 V RADIAL SUPERCAP)
-    GOES ON LAST, BY HAND, AFTER THE COVER. NEVER REFLOW IT:
-    IRON BELOW 350 C FOR UNDER 4 s; THE PART IS RATED 70 C.
-    POLARISED: PAD 1 (SQUARE) = V_SCAP (+), PAD 2 = GND.
-    FORM THE LEADS SO THE CAN LIES OVER THE SHIELD 4.0 mm OFF
-    THE BACK (THE COVER TOP IS AT 3.75 mm). SOLDER FROM THE
-    FRONT; C118 IS 0.7 mm FROM ITS PADS. STAKE THE CAN WITH
-    NEUTRAL/ALKOXY-CURE RTV - NEVER ACETOXY-CURE.
-    C130 MUST BE REMOVED BEFORE THE COVER CAN COME OFF.
+    GOES ON LAST, BY HAND, STANDING UPRIGHT IN ITS PRINTED TPU
+    SUPPORT (c130-support/). NEVER REFLOW IT: IRON BELOW 350 C
+    FOR UNDER 4 s; THE PART IS RATED 70 C.
+    POLARISED: PAD 1 (SQUARE) = V_SCAP (+), PAD 2 = GND. THE
+    NOTCH IN THE SUPPORT'S RIM SITS OVER PAD 1.
+    STAKE THE SUPPORT'S FOOT TO THE BOARD (EAST SIDE, BETWEEN
+    U30 AND U2) WITH NEUTRAL/ALKOXY-CURE RTV - NEVER ACETOXY.
+    THREAD THE STRAIGHT LEADS THROUGH THE SEAT AND PUSH THE CAN
+    DOWN ONTO IT: 2.0 mm OFF THE BACK, OVER C6, U3, CR3 AND THE
+    SMALL PARTS ROUND ITS HOLES. SOLDER FROM THE FRONT; C118 IS
+    0.7 mm FROM ITS PADS. THEN FILL THE SLEEVE WITH RTV.
+    THE BACK IS THEN 14.0 mm TALL (15.5 mm AT THE CAN'S LENGTH
+    TOLERANCE; J2 IS 12.8 mm). THE SHIELD COVER COMES OFF WITH
+    C130 IN PLACE. CALIBRATE THE MAGNETOMETER (U3, 0.9 mm FROM
+    THE CAN) WITH C130 FITTED.
 
 B9. J2 (WAGO 2601-1105) IS HAND SOLDERED FROM THE FRONT AFTER
     BOTH PASSES. FIVE 0402s (R10-R13, R19) SIT 0.43-0.49 mm
@@ -181,14 +189,14 @@ B10. J6 (VERTICAL USB-C) IS PIN-IN-PASTE ON THE BACK PASS:
     ONLY; INSPECT THE SHELL JOINTS.
 
 B11. PLACEMENT FILE: kicad-cli pcb export pos --exclude-dnp
-    --smd-only (271 REFLOWED PARTS PLUS 4 FIDUCIALS), THEN
-    DROP J8 (B6). DO NOT USE --exclude-fp-th: IT ALSO DROPS
+    --smd-only (277 PARTS PLUS 4 FIDUCIALS), THEN DROP J8
+    (B6), LEAVING 276 REFLOWED PARTS. DO NOT USE --exclude-fp-th: IT ALSO DROPS
     J6. THE BOM EXPORT MUST HONOUR DNP (C12 IS DNP).
 
 B12. ORIENTATION. POLARISED ON THE BACK: D5-D14, CR3, C130,
     AND Q11 (ITS EXPOSED PAD IS THE DRAIN; MIRRORED, THE
     REVERSE-POLARITY PROTECTION IS SILENTLY LOST). ON THE
-    FRONT: D1-D4, D15. U14 (BLE CHIP ANTENNA, BACK): MOLEX'S
+    FRONT: D1-D4, D15, CR4. U14 (BLE CHIP ANTENNA, BACK): MOLEX'S
     FEEDING-PAD CORNER GOES ON PAD 4 - CHECK IT AGAINST THE
     MOLEX DRAWING, NOT THE FOOTPRINT'S NOTCH MARK.
 ```
@@ -203,14 +211,14 @@ which was built to JLC08161H-2116, so the job file and any impedance figure KiCa
 the board JLC builds.
 
 **A3 — via-in-pad is a property of the whole board, not of one part.** V1 needed it for the LC86G's
-ground pads. V2 uses it everywhere: 319 vias sit centred in SMD pads on both faces, under paste,
-including nine in the PX100's exposed pad, 27 in the shield frame's land and one in each pyro
+ground pads. V2 uses it everywhere: 341 vias sit centred in SMD pads on both faces, under paste,
+including nine in the PX100's exposed pad, 24 in the shield frame's land and three in each pyro
 switch's VBB pad. An unfilled barrel there wicks the joint it sits in, so the old "all other vias
-tented" line no longer describes any via on the board. Measured 2026-11-24 (633 vias in all; 49
-more cut a pad edge).
+tented" line no longer describes any via on the board. Measured 2026-11-25 on the release board
+(701 vias in all; 58 more cut a pad edge).
 
 **A4 — no impedance service.** The GNSS lines were checked with a field solver at about 50 Ω on
-the A1 template. The runs are short (7.2 mm at L5, 6.8 mm at 2.4 GHz, 10.1 mm at 915 MHz), so a
+the A1 template. The runs are short (6.0 mm on the longest GNSS net, 7.8 mm at 2.4 GHz, 12.0 mm at 915 MHz), so a
 few ohms of deviation costs a fraction of a dB, and the BLE and GNSS matches are tuned on the bench
 anyway (B7). A coupon would measure geometry the template already fixes.
 
@@ -232,9 +240,12 @@ goes on by hand once the pin is soldered and the front end is tuned. The project
 a 1 mm lip on the frame, which would leave the 2.2 mm pad only about 0.135 mm clear of the window;
 Laird does not draw the lip, so measure a real frame first (Still open).
 
-**B8 — C130 sits on the cover.** Its can lies over the shield, so the cover cannot come off while
-C130 is fitted, and the can clears the cover top by only about 0.25 mm if the leads are formed to
-the 4.0 mm in the 3D model.
+**B8 — C130 stands clear of the shield.** Lying down, its can covered the shield, so the cover
+could not come off while C130 was fitted. Standing on its own two holes in the TPU support, it sits
+2.0 mm over the low parts round the holes (C6 at 1.33 mm is the tallest) and 0.30 mm outside the
+cover's outline. `c130-support/README.md` has the fit check against the board's 3D export, and the
+board's C130 3D model shows it standing. The price is height: the back grows from J2's 12.8 mm to
+14.0 mm, or 15.5 mm at the can's length tolerance.
 
 ---
 
@@ -242,19 +253,12 @@ the 4.0 mm in the 3D model.
 
 - **Frame window against the patch pin pad (B5).** Measure the BMI-S-202-F frames on the PX100
   carrier V2 before buying. The 0.135 mm figure comes from the 3D model's assumed 1 mm lip.
-- **C130 over the shield (B8).** Decide whether C130 moves off the shield so the cover can be
-  removed without unsoldering it.
-- **J6's drill features.** The plated slots are 0.85 × 0.60 mm (1.42:1) and the non-plated oval is
-  0.72 × 0.52 mm, both below JLC's usual slot minimums, and the round non-plated hole is 0.10 mm
-  from the pours. Expect an engineering query, or redraw the footprint (design review item 13);
-  update A7 if it changes.
 - **J8 paste apertures (B6).** The shared `Footprints:CON-SMA-EDGE-S` footprint pastes all five
   pads, two of them on the face opposite the connector. Strip them in the library or give this
   board its own variant, then drop the masking instruction.
 - **U14's orientation mark (B12).** The footprint's Fab notch is on the pads 1/4 face, while
   Molex's drawing appears to put the part's notch on the opposite face. Add a back-silk mark at
   pad 4 (design review item 12).
-- **LoRa feed (A4).** If it is rerouted onto B.Cu (design review item 10), update its length in A4.
 - **U5's moisture sensitivity (B3).** Not in SkyTraq's data sheet; ask them, and replace the MSL 3
   assumption with the real figure.
 - **Board copy.** Block A is also on the board's Dwgs.User layer. Keep the two identical.
