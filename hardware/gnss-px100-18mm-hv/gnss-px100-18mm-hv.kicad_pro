@@ -266,7 +266,7 @@
       "internal_id": "",
       "mfg": "",
       "mpn": "",
-      "sch_revision": "V1"
+      "sch_revision": "V2"
     },
     "layer_pairs": [],
     "layer_presets": [],
@@ -570,59 +570,27 @@
       },
       {
         "netclass": "RF",
-        "pattern": "Net-(C20-Pad2)"
+        "pattern": "Net-(FL3-COM)"
       },
       {
         "netclass": "RF",
-        "pattern": "Net-(FL4-IN)"
+        "pattern": "Net-(FL3-HB)"
       },
       {
         "netclass": "RF",
-        "pattern": "Net-(FL4-OUT)"
+        "pattern": "Net-(FL3-LB)"
       },
       {
         "netclass": "RF",
-        "pattern": "Net-(C22-Pad2)"
+        "pattern": "Net-(C61-Pad2)"
       },
       {
         "netclass": "RF",
-        "pattern": "Net-(U3-AI)"
+        "pattern": "Net-(U3-RFIN)"
       },
       {
         "netclass": "RF",
-        "pattern": "Net-(U3-AO)"
-      },
-      {
-        "netclass": "RF",
-        "pattern": "Net-(FL5-IN)"
-      },
-      {
-        "netclass": "RF",
-        "pattern": "Net-(FL5-OUT)"
-      },
-      {
-        "netclass": "RF",
-        "pattern": "Net-(C24-Pad2)"
-      },
-      {
-        "netclass": "RF",
-        "pattern": "Net-(U4-AI)"
-      },
-      {
-        "netclass": "RF",
-        "pattern": "Net-(U4-AO)"
-      },
-      {
-        "netclass": "RF",
-        "pattern": "Net-(C26-Pad1)"
-      },
-      {
-        "netclass": "RF",
-        "pattern": "/RF chain and PX100/LNA_OUT"
-      },
-      {
-        "netclass": "RF",
-        "pattern": "/RF chain and PX100/ARM_L5"
+        "pattern": "Net-(U3-RFOUT)"
       },
       {
         "netclass": "RF",
@@ -634,11 +602,35 @@
       },
       {
         "netclass": "RF",
-        "pattern": "Net-(FL7-OUT)"
+        "pattern": "Net-(C65-Pad2)"
       },
       {
         "netclass": "RF",
         "pattern": "/RF chain and PX100/LNA_IN1"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(C66-Pad2)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(U4-RFIN)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(U4-RFOUT)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(FL7-IN)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(FL7-OUT)"
+      },
+      {
+        "netclass": "RF",
+        "pattern": "Net-(C72-Pad2)"
       },
       {
         "netclass": "RF",
