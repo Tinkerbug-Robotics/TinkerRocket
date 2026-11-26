@@ -18,7 +18,7 @@
 //    and partitions_4mb.csv for this board; main.cpp refuses to compile a
 //    board-5 image that declares more than 4 MB.
 //  - U23, a GD25Q128ESIGR 16 MB NOR log flash, on GPIO4-7 (pads V1 left
-//    unconnected). No firmware drives it yet; see Storage below.
+//    unconnected). Logs go there; see Storage below.
 //  - An I2C bus: I2C_SCL on GPIO10 (pad 15), I2C_SDA on GPIO12 (pad 17), with
 //    5.11 k pull-ups to +3V3 (R63, R64). Its only device is U24, an INA230 on
 //    the cell (see below).
@@ -54,20 +54,21 @@ struct board_pins
     static constexpr int LORA_UART_RX_PIN = -1;
     static constexpr int LORA_ACT_PIN     = -1;
 
-    // --- Storage: spiffs in the package's 4 MB, for now ---
-    // The boot flash is inside U3. partitions_4mb.csv gives spiffs 1.94 MB
-    // after two 1 MB app slots, and that is where logs go today.
+    // --- Storage: U23, a 16 MB SPI NOR log flash ---
+    // U23 (GD25Q128ESIGR, JEDEC C8 40 18) sits on GPIO4-7, the same M_* nets
+    // and pins as the V2 base station's NAND (legacy/board_v2.h): M_SCK GPIO4,
+    // M_MOSI GPIO5, M_FLASH_CS GPIO6, M_MISO GPIO7, on SPI3_HOST (the radio
+    // has SPI2_HOST). R58-R60 pull /CS, /WP and /HOLD up to +3V3, so the bus
+    // is 1-bit SPI. It is a NOR, not a NAND: main.cpp mounts it through
+    // esp_flash + wear levelling + FAT at /extflash (mountExternalNorFat()),
+    // never through the NAND driver, which would probe it and fail.
     //
-    // U23 (GD25Q128ESIGR, 16 MB NOR) sits on GPIO4-7, the same M_* nets and
-    // pins as the V2 base station's NAND (legacy/board_v2.h): M_SCK GPIO4,
-    // M_MOSI GPIO5, M_FLASH_CS GPIO6, M_MISO GPIO7. R58-R60 pull /CS, /WP and
-    // /HOLD up to +3V3. It is a NOR, not a NAND, so HAS_EXT_NAND stays false:
-    // the NAND path (spi_nand_flash) would probe it, fail, and log a demotion
-    // on every boot. Mounting it needs its own driver path, which is not
-    // written yet. The pins are named here so that work starts from the
-    // netlist; nothing in main.cpp reads them while HAS_EXT_NAND is false.
+    // If it does not come up, logs fall back to spiffs in the package's 4 MB
+    // (partitions_4mb.csv: 1.94 MB after two 1 MB app slots), and that is a
+    // demotion: the storage frame says so (BSS_FLAG_FALLBACK).
     static constexpr bool HAS_SDMMC    = false;
     static constexpr bool HAS_EXT_NAND = false;
+    static constexpr bool HAS_EXT_NOR  = true;
     static constexpr int FLASH_SCK  = 4;   // M_SCK      -> U23 CLK (pin 6)
     static constexpr int FLASH_MOSI = 5;   // M_MOSI     -> U23 DI  (pin 5)
     static constexpr int FLASH_CS   = 6;   // M_FLASH_CS -> U23 /CS (pin 1)

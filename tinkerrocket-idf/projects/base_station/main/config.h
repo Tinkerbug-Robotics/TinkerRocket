@@ -39,6 +39,10 @@
 
 struct config : board_pins
 {
+    // A board fitted with somewhere better than internal spiffs to log. Landing
+    // on spiffs on such a board is a demotion (bs_storage_policy::demoted).
+    static constexpr bool HAS_PRIMARY_STORAGE = HAS_EXT_NAND || HAS_EXT_NOR || HAS_SDMMC;
+
     // --- Debug ---
     static constexpr bool DEBUG = true;
     static constexpr uint32_t STATS_PERIOD_MS = 5000;
@@ -151,6 +155,25 @@ struct config : board_pins
     // timing — and half-speed NAND still beats a 1.9 MB partition.
     static constexpr uint32_t NAND_CLOCK_HZ             = 20 * 1000 * 1000;
     static constexpr uint32_t NAND_CLOCK_FALLBACK_HZ    = 10 * 1000 * 1000;
+
+    // External SPI NOR (HAS_EXT_NOR: the Tinker-Base V2's U23, a GD25Q128E).
+    // Same bring-up policy as the NAND above: NAND_MOUNT_ATTEMPTS attempts,
+    // NAND_SETTLE_MS before the first command, only the last may format, and
+    // the last runs at the fallback clock. The clocks are the NAND's: the pins
+    // go through the GPIO matrix, and a 133 MHz part has nothing to prove at
+    // 20 MHz. Whole MHz, because esp_flash takes MHz.
+    static constexpr uint32_t NOR_CLOCK_HZ              = NAND_CLOCK_HZ;
+    static constexpr uint32_t NOR_CLOCK_FALLBACK_HZ     = NAND_CLOCK_FALLBACK_HZ;
+    static_assert(NOR_CLOCK_HZ % 1000000 == 0 && NOR_CLOCK_FALLBACK_HZ % 1000000 == 0,
+                  "esp_flash_spi_device_config_t.freq_mhz is whole MHz");
+    // Ceiling on the WIP poll before esp_flash takes over: the reset that
+    // follows a flash can land in the middle of an erase the wear-levelling
+    // layer started. It erases 4 KB sectors only, and the GD25Q128E's worst
+    // 4 KB sector erase is 400 ms. An absent chip can read WIP set (MISO has
+    // no pull and floats), and then costs this much per attempt.
+    static constexpr uint32_t NOR_READY_TIMEOUT_MS      = 500;
+    static constexpr uint32_t NOR_EXPECTED_BYTES        = 16u * 1024 * 1024;   // GD25Q128E
+    static constexpr const char* NOR_PARTITION_LABEL    = "extlog";
 
     // --- LoRa CSV Logging ---
     // Close the log after 5 min of no rocket packets.  Long enough to ride

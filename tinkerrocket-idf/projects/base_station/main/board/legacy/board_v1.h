@@ -32,6 +32,7 @@ struct board_pins
     // --- Storage: SD card over SDMMC 4-bit ---
     static constexpr bool HAS_SDMMC    = true;
     static constexpr bool HAS_EXT_NAND = false;
+    static constexpr bool HAS_EXT_NOR  = false;  // a SPI NOR log flash: the Tinker-Base V2 only
     static constexpr int SD_CLK = 6;
     static constexpr int SD_CMD = 7;
     static constexpr int SD_D0  = 5;

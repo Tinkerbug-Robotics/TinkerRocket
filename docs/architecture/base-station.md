@@ -155,7 +155,11 @@ Each flight becomes a timestamped CSV. On the current board (`TR_BS_BOARD=3`) th
 on the SPIFFS partition of the 16 MB boot NOR — 9.94 MB, and there is no other flash on
 the board, so SPIFFS there is the design and not a demotion. The earlier boards mount an
 external SPI NAND as FAT and fall back to a small internal SPIFFS when it fails, which
-`bs_storage_policy` reports as a demotion. A log opens on
+`bs_storage_policy` reports as a demotion. The Tinker-Base V2 (`TR_BS_BOARD=5`) does the
+same with a 16 MB SPI NOR (U23, a GD25Q128E on SPI3): `esp_flash` drives the chip, the
+whole of it is registered as one external partition, and FAT mounts on it through wear
+levelling at `/extflash`, the NAND's mount point, with the NAND's bounded retry. Its
+fallback is the 1.94 MB SPIFFS in the 4 MB in-package flash. A log opens on
 first packet and closes on one of three conditions: an explicit stop, an in-flight safety
 timeout, or five minutes of silence. Writes are flushed periodically rather than per
 packet, since `fflush()` only pushes stdio buffers down to the driver.
@@ -276,7 +280,7 @@ and not yet built. Its ESP32-S3FH4R2 boots from the 4 MB in its package, so the
 build takes `sdkconfig.defaults.flash4mb` and `partitions_4mb.csv` (two 1 MB app
 slots, 1.94 MB spiffs). It adds an I²C bus (SDA GPIO12, SCL GPIO10) whose only
 device is an INA230 on the cell (see *Power*), and a 16 MB NOR log flash on
-GPIO4–7 that no firmware drives yet, so it logs to spiffs for now.
+GPIO4–7, where it logs (see *Logging*).
 
 A plain `build/` directory defaults to `TR_BS_BOARD=2`, a superseded board. Flashing
 that onto a V6 **boots without a radio**: with `USE_UART_RADIO_MODEM=false` the direct-SPI

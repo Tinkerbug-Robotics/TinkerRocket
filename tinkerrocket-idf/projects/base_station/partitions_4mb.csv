@@ -13,9 +13,11 @@
 # anything is erased.
 #
 # spiffs keeps the 8 MB table's 0x1F0000 (1.94 MB) and ends exactly at
-# 0x400000, the end of the part. On this board it is the log store only until
-# the 16 MB NOR log flash (U23, GPIO4-7, board_v5.h) has a driver; at ~1.6 MB
-# an hour with three rockets transmitting it holds a bit over an hour.
+# 0x400000, the end of the part. On this board it is the FALLBACK: logs go to
+# the 16 MB NOR log flash (U23, GPIO4-7, board_v5.h, mounted as FAT at
+# /extflash), and spiffs takes them only when U23 does not come up, which the
+# storage frame reports as a demotion. At ~1.6 MB an hour with three rockets
+# transmitting it holds a bit over an hour.
 nvs,      data, nvs,     0x9000,  0x5000,
 otadata,  data, ota,     0xe000,  0x2000,
 ota_0,    app,  ota_0,   0x10000, 0x100000,

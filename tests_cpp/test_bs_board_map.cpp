@@ -27,6 +27,7 @@
 // "**** STORAGE DEMOTED ****" for hardware working exactly as designed.
 TEST(BsBoardMapV3, HasNoExternalNandOrSdSlot) {
     EXPECT_FALSE(config::HAS_EXT_NAND);
+    EXPECT_FALSE(config::HAS_EXT_NOR);
     EXPECT_FALSE(config::HAS_SDMMC);
     EXPECT_EQ(config::FLASH_SCK, -1);
     EXPECT_EQ(config::FLASH_MOSI, -1);
@@ -149,6 +150,8 @@ TEST(BsBoardMapV4, RadioPinsAreDistinctAndOffReservedPins) {
 // unconnected pads, so SPIFFS is the intended backing, not a demotion.
 TEST(BsBoardMapV4, LogsToSpiffsOnTheBootNor) {
     EXPECT_FALSE(config::HAS_EXT_NAND);
+    EXPECT_FALSE(config::HAS_EXT_NOR);
+    EXPECT_FALSE(config::HAS_PRIMARY_STORAGE);
     EXPECT_FALSE(config::HAS_SDMMC);
     EXPECT_EQ(config::FLASH_CS, -1);
     EXPECT_FALSE(bs_storage_policy::demoted(config::HAS_EXT_NAND, /*on_spiffs=*/true));
@@ -223,16 +226,35 @@ TEST(BsBoardMapV5, SignalsAreDistinctAndOffReservedPins) {
     }
 }
 
-// U23 is a NOR on GPIO4-7, not a NAND: the NAND path must not run on it, and
-// with no NAND declared, spiffs is the intended backing, not a demotion.
-TEST(BsBoardMapV5, LogFlashPinsNamedButNotTreatedAsNand) {
+// U23 is a NOR on GPIO4-7, not a NAND: it is mounted by the NOR path, and the
+// NAND path (which would probe it and fail) must not run on it.
+TEST(BsBoardMapV5, LogsToTheNorOnGpio4To7) {
+    EXPECT_TRUE(config::HAS_EXT_NOR);
     EXPECT_FALSE(config::HAS_EXT_NAND);
     EXPECT_FALSE(config::HAS_SDMMC);
     EXPECT_EQ(config::FLASH_SCK, 4);    // M_SCK
     EXPECT_EQ(config::FLASH_MOSI, 5);   // M_MOSI
     EXPECT_EQ(config::FLASH_CS, 6);     // M_FLASH_CS
     EXPECT_EQ(config::FLASH_MISO, 7);   // M_MISO
-    EXPECT_FALSE(bs_storage_policy::demoted(config::HAS_EXT_NAND, /*on_spiffs=*/true));
+    EXPECT_EQ(config::NOR_EXPECTED_BYTES, 16u * 1024 * 1024);   // GD25Q128E
+}
+
+// With the NOR fitted, landing on the 1.94 MB internal spiffs is a demotion,
+// and the storage frame must say so (BSS_FLAG_FALLBACK).
+TEST(BsBoardMapV5, SpiffsIsADemotionOnThisBoard) {
+    EXPECT_TRUE(config::HAS_PRIMARY_STORAGE);
+    EXPECT_TRUE(bs_storage_policy::demoted(config::HAS_PRIMARY_STORAGE, /*on_spiffs=*/true));
+    EXPECT_FALSE(bs_storage_policy::demoted(config::HAS_PRIMARY_STORAGE, /*on_spiffs=*/false));
+}
+
+// The WIP poll before esp_flash must outlast the longest erase the
+// wear-levelling layer can leave running: a 4 KB sector, 400 ms worst case on
+// the GD25Q128E. The NOR clocks are whole MHz (esp_flash's unit).
+TEST(BsBoardMapV5, NorBringUpCoversASectorErase) {
+    EXPECT_GE(config::NOR_READY_TIMEOUT_MS, 400u);
+    EXPECT_EQ(config::NOR_CLOCK_HZ % 1000000, 0u);
+    EXPECT_EQ(config::NOR_CLOCK_FALLBACK_HZ % 1000000, 0u);
+    EXPECT_LT(config::NOR_CLOCK_FALLBACK_HZ, config::NOR_CLOCK_HZ);
 }
 
 // The bus carries the INA230 and nothing else: no gauge, no pack charger.
@@ -291,6 +313,21 @@ TEST(BsBoardMapGauged, HasNoFlightPackDividers) {
 }
 
 #endif
+
+// The NAND and NOR paths share SPI3_HOST, the GPIO4-7 pin names, the
+// /extflash mount point and the bring-up latches, so a board has one or the
+// other; and "primary storage" is exactly the three kinds there are.
+TEST(BsBoardMapAll, AtMostOneExternalFlashKind) {
+    EXPECT_FALSE(config::HAS_EXT_NAND && config::HAS_EXT_NOR);
+    EXPECT_EQ(config::HAS_PRIMARY_STORAGE,
+              config::HAS_EXT_NAND || config::HAS_EXT_NOR || config::HAS_SDMMC);
+    if (config::HAS_EXT_NOR) {
+        EXPECT_GE(config::FLASH_SCK, 0);
+        EXPECT_GE(config::FLASH_MOSI, 0);
+        EXPECT_GE(config::FLASH_MISO, 0);
+        EXPECT_GE(config::FLASH_CS, 0);
+    }
+}
 
 // The INA230 runs on the gauge-less path in updateBattery() and is probed in
 // place of the gauges, so a board may have one or the other, and an INA230
