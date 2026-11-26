@@ -37,6 +37,7 @@ bool FakeNandBackend::readPage(uint32_t block, uint32_t page_in_block, uint8_t* 
     if (read_error_persistent_.count({block, page_in_block})) return false;
     std::memcpy(out, pageStorage(block, page_in_block), page_size_);
     ++read_count_;
+    if (after_read) after_read(block, page_in_block);
     return true;
 }
 

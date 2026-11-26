@@ -10555,7 +10555,12 @@ static bool initLoggingSubsystem()
                 // writeFrame and the download path are not stalled behind it,
                 // and it exits as soon as the scan is done. Allocation is safe
                 // meanwhile without any gate: an orphaned run is ALLOCATED and
-                // findContiguousFree only hands out FREE blocks.
+                // findContiguousFree only hands out FREE blocks. A flight armed
+                // meanwhile (an OC reboot in flight re-arms one) is left alone:
+                // the scan skips the active flight's range, reads each page
+                // under the flight log's lock, and the flight gets an id above
+                // every orphan's. (The #846 snapshot re-seed below still runs
+                // before the scan has indexed anything: #1717.)
                 if (flightlog.recoveryDeferred())
                 {
                     xTaskCreatePinnedToCore(

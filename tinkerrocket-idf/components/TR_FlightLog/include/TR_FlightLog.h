@@ -236,8 +236,9 @@ public:
     // #1127: true when begin()'s brownout-recovery scan failed. The stored
     // flights stay listable, readable and DELETABLE — deleting is the remedy
     // when the scan failed because the index was full — but prepareFlight()
-    // and writeFrame() refuse, because the orphaned range is unresolved and a
-    // new allocation could land on it.
+    // refuses, because the orphaned range is unresolved and a new allocation
+    // could land on it. A flight already being logged when a deferred scan
+    // fails keeps logging: its range is apart from every orphan.
     bool          recoveryFailed() const { return recovery_failed_; }
 
     // #1279 follow-up. True between a defer_recovery begin() and the
@@ -248,17 +249,25 @@ public:
     // scan: findContiguousFree only ever hands out BLOCK_FREE blocks, and an
     // orphaned run is BLOCK_ALLOCATED, so a new flight cannot land on one
     // whether or not recovery has run. What the scan adds is RECOVERING the
-    // data in those runs and freeing their unused tails.
+    // data in those runs and freeing their unused tails. A flight may be armed
+    // and logged while it runs: the scan skips the active flight's range, does
+    // each page read under the object lock, and a flight armed meanwhile gets
+    // an id above every orphan's.
     bool          recoveryDeferred() const { return recovery_deferred_; }
 
     // Run the deferred scan to completion. Call from a task that can afford
     // minutes; it takes the object lock only in short bursts (never across the
     // page reads), so writeFrame and the download path are not stalled behind
-    // it. No-op unless begin() deferred. The budget is deliberately NOT
+    // it: one page read per burst. No-op unless begin() deferred. The budget is deliberately NOT
     // enforced here — it exists to stop the scan holding up a caller, and a
     // deferred scan holds up nobody.
     Status        runDeferredRecovery();
     const Config& config() const        { return cfg_; }
+#ifndef ESP_PLATFORM
+    // Host tests only: does the calling thread hold the object lock? Lets a
+    // test check, from inside the NAND backend, that a read is made under it.
+    bool lockHeldByThisThreadForTest() const { return mutex_.heldByThisThread(); }
+#endif
     // #671: runtime geometry captured from the backend at begin(). Valid only
     // after begin(); before it these return the legacy figures. The flush
     // task's chunk quantum and the tail-scan window are denominated in
@@ -390,6 +399,14 @@ private:
     // the last valid page, synthesize a partial FlightIndexEntry, and persist.
     // Orphaned ranges with no valid pages are released back to FREE.
     Status scanForBrownoutRecovery(bool enforce_budget);
+    // Is `block` inside an index entry's range? Caller holds mutex_ (or runs
+    // before anything else can).
+    bool     blockInIndexLocked(uint32_t block) const;
+    // begin() with defer_recovery: one past the highest flight_id on page 0 of
+    // any orphaned block, so a flight armed before the scan adopts the orphans
+    // never shares an id with one (0 when there are none).
+    uint32_t orphanNextIdAtBoot();
+    uint32_t orphan_next_id_ = 0;
 };
 
 }  // namespace tr_flightlog
