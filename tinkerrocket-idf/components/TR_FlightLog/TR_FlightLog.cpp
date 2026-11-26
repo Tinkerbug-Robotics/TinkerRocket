@@ -189,6 +189,7 @@ Status TR_FlightLog::begin(TR_NandBackend& nand, const Config& cfg,
     if (cfg_.defer_recovery) {
         recovery_deferred_ = true;
         recovery_failed_   = false;
+        orphan_next_id_    = orphanNextIdAtBoot();
         FL_LOGI("begin: recovery scan DEFERRED to the caller (#1279)");
         return Status::Ok;
     }
@@ -228,29 +229,83 @@ Status TR_FlightLog::runDeferredRecovery() {
         FL_LOGI("deferred recovery complete: %zu flight(s) in index",
                 index_.size());
     } else {
-        FL_LOGW("deferred recovery FAILED (%d) — the write path is now gated "
-                "on recovery_failed_ (#1127)", (int)st);
+        FL_LOGW("deferred recovery FAILED (%d) — no new flight can be armed "
+                "(#1127); one already logging continues", (int)st);
     }
     return st;
+}
+
+bool TR_FlightLog::blockInIndexLocked(uint32_t block) const {
+    for (size_t i = 0; i < index_.size(); ++i) {
+        const auto& e = index_.at(i);
+        if (block >= e.start_block &&
+            block <  static_cast<uint32_t>(e.start_block) + e.n_blocks) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint32_t TR_FlightLog::orphanNextIdAtBoot() {
+    // A flight armed before the deferred scan adopts the orphans takes
+    // index_.nextFlightId(), which an orphan may already hold: the flight cut
+    // off by the last reboot got that very id. Two flights sharing an id gave
+    // two same-named flight_recovered_<id>.bin after another reboot, and let
+    // the scan merge two adjacent orphans into one. So read the id on page 0
+    // of every orphaned block (each block holds one flight, its first page
+    // written first): 1/64 of the scan's reads, at begin(), before anything
+    // else runs, so page_buf_ is free.
+    uint32_t next = 0;
+    uint8_t* const page = page_buf_;
+    for (uint32_t b = cfg_.flight_region_start; b < cfg_.flight_region_end; ++b) {
+        if (bitmap_.get(b) != BLOCK_ALLOCATED || blockInIndexLocked(b)) continue;
+        if (!nand_->readPage(b, 0, page)) continue;
+        PageHeader hdr;
+        std::memcpy(&hdr, page, sizeof(hdr));
+        if (hdr.magic != FPAG_MAGIC || hdr.crc32 != page_crc(page, g_page_)) continue;
+        if (hdr.flight_id >= next) next = hdr.flight_id + 1;
+    }
+    return next;
 }
 
 Status TR_FlightLog::scanForBrownoutRecovery(bool enforce_budget) {
     if (!initialized_) return Status::NotInitialized;
 
     // A block is "orphaned" if it's ALLOCATED but not covered by any index
-    // entry. We walk the flight region looking for contiguous orphaned runs.
-    auto is_in_index = [&](uint32_t block) {
-        for (size_t i = 0; i < index_.size(); ++i) {
-            const auto& e = index_.at(i);
-            if (block >= e.start_block &&
-                block <  static_cast<uint32_t>(e.start_block) + e.n_blocks) {
-                return true;
-            }
-        }
-        return false;
+    // entry, nor by the flight being logged. We walk the flight region
+    // looking for contiguous orphaned runs.
+    //
+    // The active flight is ALLOCATED and not in the index until
+    // finalizeFlight, which is exactly what an orphan looks like. A
+    // synchronous scan runs before any flight can start, but a deferred one
+    // runs beside the live log (#1279 follow-up), and it used to adopt the
+    // flight being logged as flight_recovered_<id>.bin, free its unwritten
+    // tail under it, and merge it with an orphan just before it — the usual
+    // layout, because a new flight starts right after the last allocated
+    // range. Read under the lock on every check: the range grows with each
+    // extension, and a flight can start or finalize between two bursts. A
+    // flight that starts mid-scan takes only FREE blocks, so it can never be
+    // inside a run already found.
+    auto is_active = [&](uint32_t block) {
+        return flight_active_ && block >= active_start_block_ &&
+               block < active_start_block_ + active_n_blocks_;
     };
+    auto is_in_index = [&](uint32_t block) { return blockInIndexLocked(block); };
 
-    uint8_t* const page = page_buf_;  // off-stack (member); recovery is boot-time single-threaded
+    // #1279 follow-up: every NAND read below, and the check of what it read,
+    // is one burst under the object lock. A deferred scan runs beside
+    // writeFrame and readFlightPage, which build and read their pages in
+    // page_buf_ under that lock, and the NAND driver's page read is not
+    // atomic: it drops the SPI lock between the read-to-cache command and the
+    // cache readout. Unlocked, the scan's reads interleaved with theirs —
+    // through the buffer and through the chip's one cache register — so a
+    // download could return the orphan's page, a logged frame could be
+    // judged as the orphan's, and the scan could judge theirs. One page per
+    // burst (a page read plus a CRC, about the cost of one download page)
+    // keeps the flush task's waits short; a burst across a whole block would
+    // hold it ~0.6 s.
+    uint8_t* const page = page_buf_;
+
     bool index_dirty  = false;
     bool bitmap_dirty = false;
 
@@ -294,14 +349,11 @@ Status TR_FlightLog::scanForBrownoutRecovery(bool enforce_budget) {
         }
         // #1279 follow-up: this runs concurrently with writeFrame and the
         // download path once it is deferred to a task, so every touch of
-        // bitmap_/index_ is under the object lock. The lock is taken in SHORT
-        // bursts and never across the page reads below, which are the slow
-        // part — a held lock there would stall the flush task for ~0.6 s per
-        // block. The NAND layer serialises its own SPI access, so the reads
-        // themselves need no lock from us.
+        // bitmap_/index_, and every page read (above), is under the object
+        // lock, in short bursts.
         {
             FlightLogLockGuard guard(mutex_);
-            if (bitmap_.get(b) != BLOCK_ALLOCATED || is_in_index(b)) {
+            if (bitmap_.get(b) != BLOCK_ALLOCATED || is_in_index(b) || is_active(b)) {
                 ++b;
                 continue;
             }
@@ -315,16 +367,25 @@ Status TR_FlightLog::scanForBrownoutRecovery(bool enforce_budget) {
         // same-named flight_recovered_<id>.bin entries with the data torn in
         // half (#276). The bad block is skipped when scanning pages (below) and
         // walked over on read (readFlightPage). Recovery runs every boot, so two
-        // distinct un-indexed flights never coexist to be wrongly merged here.
+        // distinct orphaned flights never coexist to be wrongly merged here; the
+        // one un-indexed range that can sit beside an orphan is the flight being
+        // logged, and the run stops at it.
         {
             FlightLogLockGuard guard(mutex_);
             while (b < cfg_.flight_region_end &&
                    (bitmap_.get(b) == BLOCK_ALLOCATED || bitmap_.get(b) == BLOCK_BAD) &&
-                   !is_in_index(b)) {
+                   !is_in_index(b) && !is_active(b)) {
                 ++b;
             }
         }
         const uint32_t run_len = b - run_start;
+        // The start check and the walk test the same blocks, so a run is never
+        // empty; if a change ever lets them disagree, step on rather than
+        // re-test this block for ever.
+        if (run_len == 0) {
+            ++b;
+            continue;
+        }
 
         // Scan the run for pages with valid PageHeader CRC. Track the highest
         // seq_number + associated flight_id.
@@ -333,6 +394,8 @@ Status TR_FlightLog::scanForBrownoutRecovery(bool enforce_budget) {
         uint32_t last_flight_id      = 0;
         uint32_t valid_pages         = 0;   // #276: count of magic+CRC pages
         bool     saw_any             = false;
+        uint32_t run_flight_id       = 0;   // the flight of the run's first valid page
+        uint32_t split_at            = run_len;   // blocks of this run that are that flight's
 
         bool over_budget = false;
         for (uint32_t i = 0; i < run_len; ++i) {
@@ -358,38 +421,50 @@ Status TR_FlightLog::scanForBrownoutRecovery(bool enforce_budget) {
                         (unsigned long)(now() - t0));
             }
             const uint32_t blk = run_start + i;
-            {
-                FlightLogLockGuard guard(mutex_);
-                if (bitmap_.get(blk) == BLOCK_BAD) continue;
-            }
-
             // Fast-path: read just the first page of the block. If its header
             // doesn't carry FPAG_MAGIC, no writeFrame ever ran in this block
             // (the rest is 0xFF by contract — each block in an allocated
             // range was erased before use). Skip the 63 remaining reads.
-            if (!nand_->readPage(blk, 0, page)) continue;
+            //
+            // A block whose first page belongs to another flight starts the
+            // next orphan: two can sit back to back when the OC reboots twice
+            // before a deferred scan reaches the first (the comment on the
+            // run walk), and before this the walk merged them, and freed the
+            // second's blocks as the first's unused tail.
+            bool blank = false, next_flight = false;
             {
+                FlightLogLockGuard guard(mutex_);
+                if (bitmap_.get(blk) == BLOCK_BAD) continue;
+                if (!nand_->readPage(blk, 0, page)) continue;
                 PageHeader hdr0;
                 std::memcpy(&hdr0, page, sizeof(hdr0));
-                if (hdr0.magic != FPAG_MAGIC)
-                {
-                    // Block was erased but never programmed — nothing to find.
-                    yield_to_scheduler();
-                    continue;
-                }
-                // First page looked valid; handle it below along with the rest.
-                if (hdr0.crc32 == page_crc(page, g_page_))
-                {
-                    ++valid_pages;
-                    if (!saw_any || hdr0.seq_number > last_seq) {
-                        last_seq           = hdr0.seq_number;
-                        last_flight_id     = hdr0.flight_id;
-                        last_good_page_rel = static_cast<int32_t>(i * g_ppb_);
-                        saw_any            = true;
+                if (hdr0.magic != FPAG_MAGIC) {
+                    blank = true;   // erased but never programmed — nothing to find
+                } else if (hdr0.crc32 == page_crc(page, g_page_)) {
+                    if (saw_any && hdr0.flight_id != run_flight_id) {
+                        next_flight = true;
+                    } else {
+                        ++valid_pages;
+                        if (!saw_any || hdr0.seq_number > last_seq) {
+                            last_seq           = hdr0.seq_number;
+                            last_flight_id     = hdr0.flight_id;
+                            last_good_page_rel = static_cast<int32_t>(i * g_ppb_);
+                        }
+                        if (!saw_any) run_flight_id = hdr0.flight_id;
+                        saw_any = true;
                     }
                 }
             }
+            if (blank) {
+                yield_to_scheduler();
+                continue;
+            }
+            if (next_flight) {
+                split_at = i;
+                break;
+            }
             for (uint32_t p = 1; p < g_ppb_; ++p) {
+                FlightLogLockGuard guard(mutex_);
                 if (!nand_->readPage(blk, p, page)) continue;
                 if (page_is_all_ones(page, g_page_)) continue;   // unwritten
 
@@ -397,14 +472,16 @@ Status TR_FlightLog::scanForBrownoutRecovery(bool enforce_budget) {
                 std::memcpy(&hdr, page, sizeof(hdr));
                 if (hdr.magic != FPAG_MAGIC) continue;
                 if (hdr.crc32 != page_crc(page, g_page_)) continue;
+                if (saw_any && hdr.flight_id != run_flight_id) continue;   // not this flight's
                 ++valid_pages;
 
                 if (!saw_any || hdr.seq_number > last_seq) {
                     last_seq           = hdr.seq_number;
                     last_flight_id     = hdr.flight_id;
                     last_good_page_rel = static_cast<int32_t>(i * g_ppb_ + p);
-                    saw_any            = true;
                 }
+                if (!saw_any) run_flight_id = hdr.flight_id;
+                saw_any = true;
             }
             // Yield after each block so the per-block scan cost can be
             // absorbed without starving IDLE1 and tripping task_wdt.
@@ -418,10 +495,14 @@ Status TR_FlightLog::scanForBrownoutRecovery(bool enforce_budget) {
         // the boundary check already had, just honoured mid-run too.
         if (over_budget) break;
 
+        // The rest of the run is the next orphan: resume the walk there.
+        const uint32_t span = split_at;
+        if (span < run_len) b = run_start + span;
+
         if (!saw_any) {
             // No recoverable data in this range — release it.
             FlightLogLockGuard guard(mutex_);
-            bitmap_.markFreeRange(run_start, run_len);
+            bitmap_.markFreeRange(run_start, span);
             bitmap_dirty = true;
             continue;
         }
@@ -440,7 +521,7 @@ Status TR_FlightLog::scanForBrownoutRecovery(bool enforce_budget) {
         // walked on read (readFlightPage).
         const uint32_t used_pages  = static_cast<uint32_t>(last_good_page_rel + 1);
         uint32_t used_blocks = (used_pages + g_ppb_ - 1) / g_ppb_;
-        if (used_blocks > run_len) used_blocks = run_len;
+        if (used_blocks > span) used_blocks = span;
 
         FlightIndexEntry entry{};
         entry.magic       = FLGT_MAGIC;
@@ -464,7 +545,7 @@ Status TR_FlightLog::scanForBrownoutRecovery(bool enforce_budget) {
         // finalizeFlight. Without this a brownout flight permanently holds its
         // full prealloc — ~4 such flights fill the chip despite <10 MB of real
         // data each (the 2026-06-25 silent log-loss / #281 root cause).
-        const uint32_t free_count = run_len - used_blocks;
+        const uint32_t free_count = span - used_blocks;
         if (free_count > 0) {
             FlightLogLockGuard guard(mutex_);
             bitmap_.markFreeRange(run_start + used_blocks, free_count);
@@ -746,7 +827,10 @@ Status TR_FlightLog::prepareFlightLocked(uint32_t& flight_id_out) {
     bitmap_.markAllocatedRange(start, cfg_.prealloc_blocks);
     persistBitmap();
 
+    // Above every orphan's id while the deferred scan has not adopted them
+    // (orphanNextIdAtBoot); once it has, the index covers them.
     active_flight_id_   = index_.nextFlightId();
+    if (active_flight_id_ < orphan_next_id_) active_flight_id_ = orphan_next_id_;
     active_start_block_ = start;
     active_n_blocks_    = cfg_.prealloc_blocks;
     active_next_page_   = 0;
@@ -808,9 +892,11 @@ Status TR_FlightLog::writeFrame(const uint8_t* payload, size_t payload_len) {
     if (lk_dt > wf_lock_wait_max_us_) wf_lock_wait_max_us_ = lk_dt;
     wf_lock_wait_sum_us_ = wf_lock_wait_sum_us_ + lk_dt;
     if (!initialized_)   return Status::NotInitialized;
-    // #1127: defence in depth — prepareFlight() already refuses while a
-    // recovery is pending, so flight_active_ cannot be set in this state.
-    if (recovery_failed_) return Status::RecoveryPending;
+    // #1127: a failed recovery refuses new flights (prepareFlight). A flight
+    // already being logged when a DEFERRED scan fails keeps logging: its range
+    // is FREE blocks it took at arm, apart from every orphan, and stopping it
+    // would lose the rest of a flight to protect nothing.
+    if (recovery_failed_ && !flight_active_) return Status::RecoveryPending;
     if (!flight_active_) return Status::Error;
     if (payload == nullptr && payload_len != 0) return Status::OutOfRange;
     if (payload_len > payloadPerPage()) return Status::OutOfRange;

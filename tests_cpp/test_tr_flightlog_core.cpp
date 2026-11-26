@@ -2176,11 +2176,13 @@ TEST(TRFlightLogRoom, FlightRoomIsZeroBeforeBegin) {
 }
 
 TEST(TRFlightLogRoom, TwoFlightsSharingAnIdArePlannedInTheArmsOrder) {
-    // A flight armed before the deferred recovery adopted an orphan shares the
-    // orphan's id. The plan must take them in evictOldestLocked's order (the
-    // first in the index), or flightRoom() promises a room the arm misses: at
-    // a 12-block target, taking the orphan first plans 12 blocks where the arm,
-    // deleting a.bin, gets 16.
+    // Two stored flights can share an id: a flight armed before the deferred
+    // recovery adopts an orphan whose first pages could not be read at boot
+    // (a transient read fault hides its id) takes the same one. The plan must
+    // take them in evictOldestLocked's order (the first in the index), or
+    // flightRoom() promises a room the arm misses: at a 12-block target,
+    // taking the orphan first plans 12 blocks where the arm, deleting a.bin,
+    // gets 16.
     const auto base = [] {
         auto cfg = smallRegionCfg(4, 7);   // [32, 60)
         cfg.extend_blocks = 4;
@@ -2204,7 +2206,9 @@ TEST(TRFlightLogRoom, TwoFlightsSharingAnIdArePlannedInTheArmsOrder) {
             TR_FlightLog fl;
             auto cfg = base();
             cfg.defer_recovery = true;
-            ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+            for (uint32_t blk = 48; blk < 52; ++blk) nand.injectReadErrorPersistent(blk, 0);
+            ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);   // the orphan's id unseen
+            nand.clearReadErrors();
             ASSERT_EQ(fl.deleteFlight("x.bin"), Status::Ok);
             ASSERT_EQ(fl.deleteFlight("y.bin"), Status::Ok);
             ASSERT_EQ(logFlight(fl, 8, "a.bin"), 8u * NAND_PAGES_PER_BLK);   // id 5 again, [32, 40)
@@ -2916,6 +2920,351 @@ TEST(TRFlightLogBrownout, DeferredRecoveryRunsToCompletionRegardlessOfTheBudget)
 
     EXPECT_EQ(fl2.index().size(), 1u);
     EXPECT_NE(std::strstr(fl2.index().at(0).filename, "recovered"), nullptr);
+}
+
+// ----------------------------------------------------------------
+// The deferred scan runs beside a live flight log. With defer_recovery the
+// board is usable while the scan walks the region, so a flight can be armed,
+// logged and downloaded from meanwhile. The scan must leave the active flight
+// alone (it is ALLOCATED and not yet in the index, which is exactly what an
+// orphan looks like), and must not share writeFrame's and readFlightPage's
+// page buffer, which it reads into without the lock.
+// ----------------------------------------------------------------
+
+namespace {
+TR_FlightLog::Config liveScanCfg() {
+    TR_FlightLog::Config cfg;
+    cfg.prealloc_blocks     = 4;
+    cfg.extend_blocks       = 4;
+    cfg.flight_region_start = 32;
+    cfg.flight_region_end   = 32 + 24;
+    cfg.defer_recovery      = true;
+    return cfg;
+}
+
+// A frame whose bytes say which page of which flight it is.
+std::vector<uint8_t> liveFrame(uint8_t flight_tag, uint32_t page) {
+    std::vector<uint8_t> f(PAYLOAD_PER_PAGE);
+    for (size_t i = 0; i < f.size(); ++i) f[i] = (uint8_t)(flight_tag ^ (page * 7u + i));
+    return f;
+}
+
+// Arm and write `pages` frames tagged `tag`, then cut the power: an orphan.
+void makeLiveScanOrphan(FakeNandBackend& nand, MemoryBitmapStore& store, uint32_t pages, uint8_t tag) {
+    TR_FlightLog fl;
+    auto cfg = liveScanCfg();
+    cfg.defer_recovery = false;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    for (uint32_t p = 0; p < pages; ++p) {
+        const auto f = liveFrame(tag, p);
+        ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok);
+    }
+}
+
+// Every logical page of `name` reads back as liveFrame(tag, page).
+void expectLiveFlight(TR_FlightLog& fl, const char* name, uint32_t pages, uint8_t tag) {
+    const FlightIndexEntry* e = fl.index().findByFilename(name);
+    ASSERT_NE(e, nullptr) << name;
+    ASSERT_EQ(e->final_bytes, pages * PAYLOAD_PER_PAGE) << name;
+    std::vector<uint8_t> buf(PAYLOAD_PER_PAGE);
+    for (uint32_t p = 0; p < pages; ++p) {
+        size_t got = 0;
+        ASSERT_EQ(fl.readFlightPage(name, p * PAYLOAD_PER_PAGE, buf.data(), buf.size(), got), Status::Ok);
+        ASSERT_EQ(got, (size_t)PAYLOAD_PER_PAGE);
+        ASSERT_EQ(buf, liveFrame(tag, p)) << name << " page " << p;
+    }
+}
+}  // namespace
+
+TEST(TRFlightLogDeferredScan, TheActiveFlightIsNotAdopted) {
+    // No orphan at all: the scan finds only the flight being logged, which
+    // used to come back as flight_recovered_1.bin with its tail freed under it.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, liveScanCfg(), &store), Status::Ok);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    const uint32_t pages = 6 * NAND_PAGES_PER_BLK;   // past the prealloc: one extension
+    for (uint32_t p = 0; p < pages / 2; ++p) {
+        const auto f = liveFrame(0xA1, p);
+        ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok);
+    }
+    ASSERT_EQ(fl.runDeferredRecovery(), Status::Ok);
+    EXPECT_EQ(fl.index().size(), 0u) << "the live flight was adopted";
+    for (uint32_t b = fl.activeStartBlock(); b < fl.activeStartBlock() + fl.activeBlockCount(); ++b)
+        EXPECT_EQ(fl.bitmap().get(b), BLOCK_ALLOCATED) << "block " << b;
+    for (uint32_t p = pages / 2; p < pages; ++p) {
+        const auto f = liveFrame(0xA1, p);
+        ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok);
+    }
+    ASSERT_EQ(fl.finalizeFlight("live.bin", pages * PAYLOAD_PER_PAGE), Status::Ok);
+    ASSERT_EQ(fl.index().size(), 1u);
+    expectLiveFlight(fl, "live.bin", pages, 0xA1);
+}
+
+TEST(TRFlightLogDeferredScan, AnOrphanNextToTheActiveFlightIsRecoveredAlone) {
+    // The usual layout after a reboot: the new flight starts right after the
+    // orphan, the last allocated range. The scan's run walk went straight on
+    // into the live flight and recovered the two as one.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    const uint32_t orphan_pages = 2 * NAND_PAGES_PER_BLK + 5;
+    makeLiveScanOrphan(nand, store, orphan_pages, 0x0F);
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, liveScanCfg(), &store), Status::Ok);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    ASSERT_EQ(fl.activeStartBlock(), 36u) << "the layout this test needs";
+    const uint32_t pages = 3 * NAND_PAGES_PER_BLK;
+    for (uint32_t p = 0; p < pages; ++p) {
+        const auto f = liveFrame(0xA1, p);
+        ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok);
+    }
+    ASSERT_EQ(fl.runDeferredRecovery(), Status::Ok);
+    ASSERT_EQ(fl.index().size(), 1u);
+    const FlightIndexEntry& o = fl.index().at(0);
+    EXPECT_EQ(o.start_block, 32u);
+    EXPECT_EQ(o.n_blocks, 3u);
+    expectLiveFlight(fl, o.filename, orphan_pages, 0x0F);
+    ASSERT_EQ(fl.finalizeFlight("live.bin", pages * PAYLOAD_PER_PAGE), Status::Ok);
+    expectLiveFlight(fl, "live.bin", pages, 0xA1);
+
+    TR_FlightLog again;   // and a later boot finds nothing more to recover
+    auto cfg = liveScanCfg();
+    cfg.defer_recovery = false;
+    ASSERT_EQ(again.begin(nand, cfg, &store), Status::Ok);
+    EXPECT_EQ(again.index().size(), 2u);
+}
+
+TEST(TRFlightLogDeferredScan, AFlightArmedButNotYetLoggingKeepsItsBlocks) {
+    // Armed with nothing written yet, the flight's blocks read blank, so no
+    // flight id splits them off the orphan before them: only the run walk's
+    // check keeps the orphan's unused-tail trim from freeing them.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    makeLiveScanOrphan(nand, store, NAND_PAGES_PER_BLK + 3, 0x0F);   // 2 of [32, 36) used
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, liveScanCfg(), &store), Status::Ok);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    ASSERT_EQ(fl.activeStartBlock(), 36u) << "the layout this test needs";
+    ASSERT_EQ(fl.runDeferredRecovery(), Status::Ok);
+    for (uint32_t b = 36; b < 40; ++b) EXPECT_EQ(fl.bitmap().get(b), BLOCK_ALLOCATED) << "block " << b;
+    ASSERT_EQ(fl.index().size(), 1u);
+    EXPECT_EQ(fl.index().at(0).n_blocks, 2u);
+    const uint32_t pages = 6 * NAND_PAGES_PER_BLK;
+    for (uint32_t p = 0; p < pages; ++p) {
+        const auto f = liveFrame(0xA1, p);
+        ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok);
+    }
+    ASSERT_EQ(fl.finalizeFlight("live.bin", pages * PAYLOAD_PER_PAGE), Status::Ok);
+    expectLiveFlight(fl, "live.bin", pages, 0xA1);
+}
+
+TEST(TRFlightLogDeferredScan, EveryPageTheScanReadsIsReadUnderTheLock) {
+    // Unlocked, the scan's reads shared page_buf_ with writeFrame and
+    // readFlightPage, and the chip's cache register with them too: the NAND
+    // driver drops its SPI lock between the read-to-cache command and the
+    // readout. Every read the scan makes in the flight region must hold the
+    // object lock.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    makeLiveScanOrphan(nand, store, 3 * NAND_PAGES_PER_BLK, 0x0F);
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, liveScanCfg(), &store), Status::Ok);
+    uint32_t reads = 0, unlocked = 0;
+    nand.after_read = [&](uint32_t block, uint32_t) {
+        if (block >= liveScanCfg().flight_region_end) return;   // the index save's own reads
+        ++reads;
+        if (!fl.lockHeldByThisThreadForTest()) ++unlocked;
+    };
+    ASSERT_EQ(fl.runDeferredRecovery(), Status::Ok);
+    nand.after_read = nullptr;
+    EXPECT_GE(reads, 3u * NAND_PAGES_PER_BLK);
+    EXPECT_EQ(unlocked, 0u);
+    ASSERT_EQ(fl.index().size(), 1u);
+    expectLiveFlight(fl, fl.index().at(0).filename, 3 * NAND_PAGES_PER_BLK, 0x0F);
+}
+
+TEST(TRFlightLogDeferredScan, FlightsLoggedAndDownloadedBesideTheScanComeOutWhole) {
+    // The OC's real layout: the scan on its own task while the flush task logs
+    // and the app downloads. Each scan read takes a little while (under the
+    // lock), so the two threads interleave page by page: the live flight
+    // extends, finalizes and a second one is armed while the scan runs.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    const uint32_t stored_pages = 1 * NAND_PAGES_PER_BLK;
+    const uint32_t orphan_pages = 3 * NAND_PAGES_PER_BLK;
+    {
+        TR_FlightLog fl;
+        auto cfg = liveScanCfg();
+        cfg.flight_region_end = 32 + 40;
+        cfg.defer_recovery    = false;
+        ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+        uint32_t id = 0;
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+        for (uint32_t p = 0; p < stored_pages; ++p) {
+            const auto f = liveFrame(0x5A, p);
+            ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok);
+        }
+        ASSERT_EQ(fl.finalizeFlight("stored.bin", stored_pages * PAYLOAD_PER_PAGE), Status::Ok);
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);   // the orphan, cut off by a reboot
+        for (uint32_t p = 0; p < orphan_pages; ++p) {
+            const auto f = liveFrame(0x0F, p);
+            ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok);
+        }
+    }
+    TR_FlightLog fl;
+    auto cfg = liveScanCfg();
+    cfg.flight_region_end = 32 + 40;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    nand.after_read = [&](uint32_t block, uint32_t) {
+        if (block < cfg.flight_region_end && fl.lockHeldByThisThreadForTest() && fl.recoveryDeferred())
+            std::this_thread::sleep_for(std::chrono::microseconds(30));
+    };
+    Status scan_st = Status::Error;
+    std::thread scan([&] { scan_st = fl.runDeferredRecovery(); });
+
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    const uint32_t live_pages = 6 * NAND_PAGES_PER_BLK;   // the prealloc and an extension
+    uint32_t bad_downloads = 0;
+    std::vector<uint8_t> buf(PAYLOAD_PER_PAGE);
+    for (uint32_t p = 0; p < live_pages; ++p) {
+        const auto f = liveFrame(0xA1, p);
+        ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok) << "page " << p;
+        size_t got = 0;
+        const uint32_t q = p % stored_pages;
+        if (fl.readFlightPage("stored.bin", q * PAYLOAD_PER_PAGE, buf.data(), buf.size(), got) != Status::Ok ||
+            buf != liveFrame(0x5A, q))
+            ++bad_downloads;
+    }
+    ASSERT_EQ(fl.finalizeFlight("live1.bin", live_pages * PAYLOAD_PER_PAGE), Status::Ok);
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);   // re-armed while the scan may still run
+    for (uint32_t p = 0; p < NAND_PAGES_PER_BLK; ++p) {
+        const auto f = liveFrame(0xB2, p);
+        ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok);
+    }
+    scan.join();
+    nand.after_read = nullptr;
+    ASSERT_EQ(scan_st, Status::Ok);
+    ASSERT_EQ(fl.finalizeFlight("live2.bin", NAND_PAGES_PER_BLK * PAYLOAD_PER_PAGE), Status::Ok);
+    EXPECT_EQ(bad_downloads, 0u);
+
+    ASSERT_EQ(fl.index().size(), 4u);
+    const FlightIndexEntry* orphan = nullptr;
+    for (size_t i = 0; i < fl.index().size(); ++i)
+        if (std::strncmp(fl.index().at(i).filename, "flight_recovered_", 17) == 0) orphan = &fl.index().at(i);
+    ASSERT_NE(orphan, nullptr);
+    expectLiveFlight(fl, orphan->filename, orphan_pages, 0x0F);
+    expectLiveFlight(fl, "stored.bin", stored_pages, 0x5A);
+    expectLiveFlight(fl, "live1.bin", live_pages, 0xA1);
+    expectLiveFlight(fl, "live2.bin", NAND_PAGES_PER_BLK, 0xB2);
+    for (size_t i = 0; i < fl.index().size(); ++i)
+        for (size_t j = i + 1; j < fl.index().size(); ++j)
+            EXPECT_NE(fl.index().at(i).flight_id, fl.index().at(j).flight_id) << i << " and " << j;
+}
+
+TEST(TRFlightLogDeferredScan, AFlightArmedBeforeTheScanTakesANewId) {
+    // The flight cut off by the reboot holds index_.nextFlightId(): a flight
+    // armed before the scan adopts it must not take the same id.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    makeLiveScanOrphan(nand, store, NAND_PAGES_PER_BLK, 0x0F);   // id 1
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, liveScanCfg(), &store), Status::Ok);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    EXPECT_EQ(id, 2u);
+    ASSERT_EQ(fl.runDeferredRecovery(), Status::Ok);
+    ASSERT_EQ(fl.index().size(), 1u);
+    EXPECT_EQ(fl.index().at(0).flight_id, 1u);
+}
+
+TEST(TRFlightLogDeferredScan, TwoOrphansBackToBackAreRecoveredApart) {
+    // The OC reboots in flight, re-arms, and reboots again before its deferred
+    // scan got to the first orphan: two orphans side by side at the next boot.
+    // The run walk joins them; the scan used to recover one merged flight and
+    // free the second's blocks as the first's tail.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    const uint32_t first_pages = 2 * NAND_PAGES_PER_BLK + 5;   // [32, 35) used of [32, 36)
+    makeLiveScanOrphan(nand, store, first_pages, 0x0F);
+    const uint32_t second_pages = 3 * NAND_PAGES_PER_BLK;
+    {
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, liveScanCfg(), &store), Status::Ok);   // deferred, never run
+        uint32_t id = 0;
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+        ASSERT_EQ(fl.activeStartBlock(), 36u) << "the layout this test needs";
+        for (uint32_t p = 0; p < second_pages; ++p) {
+            const auto f = liveFrame(0xA1, p);
+            ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok);
+        }
+    }
+    TR_FlightLog fl;
+    auto cfg = liveScanCfg();
+    cfg.defer_recovery = false;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    ASSERT_EQ(fl.index().size(), 2u);
+    const FlightIndexEntry& a = fl.index().at(0);
+    const FlightIndexEntry& b = fl.index().at(1);
+    EXPECT_EQ(a.start_block, 32u);
+    EXPECT_EQ(a.n_blocks, 3u);
+    EXPECT_EQ(b.start_block, 36u);
+    EXPECT_EQ(b.n_blocks, 3u);
+    EXPECT_NE(a.flight_id, b.flight_id);
+    expectLiveFlight(fl, a.filename, first_pages, 0x0F);
+    expectLiveFlight(fl, b.filename, second_pages, 0xA1);
+    EXPECT_EQ(fl.bitmap().get(35), BLOCK_FREE) << "the first's unused tail";
+    EXPECT_EQ(fl.bitmap().get(39), BLOCK_FREE) << "the second's unused tail";
+}
+
+TEST(TRFlightLogDeferredScan, AFailedScanLetsTheFlightBeingLoggedGoOn) {
+    // A full index makes the deferred scan fail. That refuses new flights
+    // (#1127), but the flight already being logged must not stop mid-flight.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog::Config cfg;
+    cfg.prealloc_blocks     = 1;
+    cfg.extend_blocks       = 1;
+    cfg.flight_region_start = 32;
+    cfg.flight_region_end   = 32 + 200;
+    {
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+        const auto f = liveFrame(0x11, 0);
+        for (size_t n = 0; n < FlightIndex::MAX_ENTRIES; ++n) {
+            uint32_t id = 0;
+            ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+            ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok);
+            char name[24];
+            std::snprintf(name, sizeof(name), "f%03zu.bin", n);
+            ASSERT_EQ(fl.finalizeFlight(name, PAYLOAD_PER_PAGE), Status::Ok);
+        }
+        uint32_t id = 0;
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);   // the orphan
+        ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok);
+    }
+    TR_FlightLog fl;
+    auto dcfg = cfg;
+    dcfg.defer_recovery = true;
+    ASSERT_EQ(fl.begin(nand, dcfg, &store), Status::Ok);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    for (uint32_t p = 0; p < 10; ++p) {
+        const auto f = liveFrame(0xA1, p);
+        ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok);
+    }
+    EXPECT_NE(fl.runDeferredRecovery(), Status::Ok) << "the index is full";
+    ASSERT_TRUE(fl.recoveryFailed());
+    for (uint32_t p = 10; p < 3 * NAND_PAGES_PER_BLK; ++p) {
+        const auto f = liveFrame(0xA1, p);
+        ASSERT_EQ(fl.writeFrame(f.data(), f.size()), Status::Ok) << "page " << p;
+    }
 }
 
 TEST(TRFlightLogFinalize, BadBlockMidFlightKeepsAllDataAndBlocks) {

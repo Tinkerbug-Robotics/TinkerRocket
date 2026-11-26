@@ -18,7 +18,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #else
+#include <atomic>
 #include <mutex>
+#include <thread>
 #endif
 
 namespace tr_flightlog {
@@ -42,8 +44,10 @@ public:
     void unlock() { if (handle_) xSemaphoreGive(handle_); }
 #else
     FlightLogMutex() = default;
-    void lock()   { m_.lock(); }
-    void unlock() { m_.unlock(); }
+    void lock()   { m_.lock(); owner_.store(std::this_thread::get_id()); }
+    void unlock() { owner_.store(std::thread::id()); m_.unlock(); }
+    // Host tests only (TR_FlightLog::lockHeldByThisThreadForTest).
+    bool heldByThisThread() const { return owner_.load() == std::this_thread::get_id(); }
 #endif
 
     FlightLogMutex(const FlightLogMutex&)            = delete;
@@ -53,7 +57,8 @@ private:
 #ifdef ESP_PLATFORM
     SemaphoreHandle_t handle_;
 #else
-    std::mutex m_;
+    std::mutex                   m_;
+    std::atomic<std::thread::id> owner_{};
 #endif
 };
 

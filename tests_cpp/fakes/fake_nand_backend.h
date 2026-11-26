@@ -4,6 +4,7 @@
 #include "TR_FlightLog_types.h"
 
 #include <cstdint>
+#include <functional>
 #include <set>
 #include <unordered_map>
 #include <vector>
@@ -56,6 +57,11 @@ public:
     // blocks intact — models a transient fault that goes away, which reset()
     // cannot express because it blanks the chip.
     void clearReadErrors();
+
+    // Called after every successful readPage(), with its block and page. Lets
+    // a test act at the moment another path reads, e.g. a download or a
+    // logged frame landing in the middle of the deferred recovery scan.
+    std::function<void(uint32_t block, uint32_t page_in_block)> after_read;
 
     // Inspect raw storage (for tests that need to check what was actually written).
     const uint8_t* peekPage(uint32_t block, uint32_t page_in_block) const;
