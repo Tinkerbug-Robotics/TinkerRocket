@@ -55,6 +55,7 @@
 
 #include "BurnoutDetector.h"
 #include "GnssAscentGate.h"
+#include "gnss_fix_policy.h"   // #1763: a record votes only with a usable fix
 #include "ShadowLink.h"
 #include "TR_KinematicChecks.h"
 #include "landing_transition_policy.h"
@@ -255,7 +256,7 @@ public:
             ga.in_flight = in_flight_;
             ga.burnout = burnout_;
             ga.apogee = apogee_now;
-            ga.gnss_fix_ok = have_fix_ && fix_.fix_mode >= 3 && fix_.num_sats >= cfg_.gnss_min_sats &&
+            ga.gnss_fix_ok = have_fix_ && gnss_fix::usable(fix_.fix_mode, fix_.num_sats, cfg_.gnss_min_sats) &&
                              (t_us - fix_.t_us) < 2000000;
             ga.gnss_fix_id = fix_id_;
             ga.gnss_agl_m = static_cast<float>(fix_.alt_m - ref_alt_);
@@ -294,13 +295,21 @@ public:
             }
         }
         const bool votes_ok = ekf_healthy && !(cfg_.guard && guard_.latched);
+        // #1763: as main.cpp's gps_new_for_kc, a record is new GPS only with a
+        // usable fix (gnss_fix_policy.h); the latest record's, whose velocity is read.
+        const bool fix_votes = fix_new_ && gnss_fix::usable(fix_.fix_mode, fix_.num_sats, cfg_.gnss_min_sats);
+        if (fix_votes)
+        {
+            have_vote_fix_ = true;
+            vote_fix_t_us_ = fix_.t_us;
+        }
         float pos[3] = {0.0f, 0.0f, imu_pos_up};
         float vel[3] = {imu_vel_[0], imu_vel_[1], imu_vel_[2]};
         const bool had_launch = kin_.launch_flag;
         const bool had_apogee = kin_.apogee_flag;
         const bool had_backstop = kin_.apogee_backstop_flag;
         kin_.kinematicChecks(palt_m_, imu_fresh ? acc_norm_ : 0.0f, pos, vel, roll_dps_, baro_new_,
-                             static_cast<float>(fix_.alt_m), fix_new_, rpy_[1], burnout_, mach_locked_,
+                             static_cast<float>(fix_.alt_m), fix_votes, rpy_[1], burnout_, mach_locked_,
                              static_cast<float>(fix_.vel_u), votes_ok, baro_healthy, imu_fresh,
                              GnssAscentGate::gnssVotes(gate_));
         baro_new_ = false;
@@ -320,7 +329,7 @@ public:
             rep_.call_pitch = kin_.pitch_apogee_flag;
             rep_.call_ekf_healthy = votes_ok;
             rep_.call_baro_ok = !mach_locked_ && baro_healthy;
-            rep_.call_gps_ok = GnssAscentGate::gnssVotes(gate_) && have_fix_ && (t_us - fix_.t_us) < 500000;
+            rep_.call_gps_ok = GnssAscentGate::gnssVotes(gate_) && have_vote_fix_ && (t_us - vote_fix_t_us_) < 500000;
             rep_.call_vz = imu_vel_[2];
             rep_.call_pitch_deg = rpy_[1] * 57.29577951f;
             rep_.call_baro_rate = kin_.d_alt_est_;
@@ -454,6 +463,8 @@ private:
     // the receiver
     FixIn fix_;
     bool have_fix_ = false, fix_new_ = false;
+    bool have_vote_fix_ = false;   // a usable fix has voted (#1763): the GPS voter's freshness runs from it
+    int64_t vote_fix_t_us_ = 0;
     uint32_t fix_id_ = 0;
     // the filter as the loop reads it
     float rpy_[3] = {0.0f, 1.57f, 0.0f};

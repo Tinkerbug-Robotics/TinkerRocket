@@ -84,6 +84,8 @@ struct Faults
     // from 0 to ramp_mps over the ramp_s before the true apogee, held after it
     double ramp_mps = 0.0;
     double ramp_s = 3.0;
+    double no_fix_from_s = 1.0e9;  // from this flight time the receiver's records say no fix (fix_mode 0), still
+                                   // sent with their velocity (#1763)
 };
 
 // How the flight is flown through the loop, besides the faults.
@@ -209,8 +211,9 @@ Flown fly(const Faults& f, const Flying& how)
         {
             rr::FixIn fx;
             fx.t_us = t_us;
-            fx.fix_mode = 3;
-            fx.num_sats = 20;
+            const bool no_fix = tf >= f.no_fix_from_s;
+            fx.fix_mode = no_fix ? 0 : 3;
+            fx.num_sats = no_fix ? 0 : 20;
             fx.alt_m = h0 + s.h;
             fx.vel_n = s.vh;
             fx.vel_u = s.vu + bias(tf, f.gps_vu_bias);
@@ -339,6 +342,29 @@ TEST(RawReplayVotes, ACoherentReceiverFaultIsWhatTheGuardIsFor)
                 "called at %+.3f s\n",
                 bare.t_apogee - 100.0, bare.rep.apogee_s - bare.t_apogee, guarded.rep.guard_s - 100.0,
                 guarded.rep.apogee_s - guarded.t_apogee);
+}
+
+// #1763: the same coherent fault, with the receiver's fix lost at 6 s, after
+// GNSS was admitted, and its records still sent (as the SAM-M10Q, PX1105R
+// and mosaic-G5 drivers send them) with the low velocity. A no-fix record is
+// no vote: the filter alone cannot call, so nothing calls early, and the
+// receiver is not an available voter at the call. Counted, these records
+// voted with the filter and called apogee early, as the fault with a fix does.
+TEST(RawReplayVotes, ANoFixRecordIsNoVoter)
+{
+    Faults f;
+    f.filter_vz_bias = -15.0;
+    f.gps_vu_bias = -15.0;
+    f.from_s = 2.5;
+    f.no_fix_from_s = 6.0;
+    const Flown r = fly(f, false);
+    ASSERT_FALSE(std::isnan(r.rep.admitted_s));
+    ASSERT_LT(r.rep.admitted_s, r.t_launch_us + 6.0);   // admitted while it had its fix
+    ASSERT_FALSE(std::isnan(r.rep.apogee_s));
+    EXPECT_GT(r.rep.apogee_s, r.t_apogee - 1.0);
+    EXPECT_FALSE(r.rep.call_gps);
+    EXPECT_FALSE(r.rep.call_gps_ok);
+    std::printf("[ no fix ] apogee T+%.3f: called at %+.3f s\n", r.t_apogee - 100.0, r.rep.apogee_s - r.t_apogee);
 }
 
 TEST(RawReplayVotes, ACoherentCoastRampIsTheGuardsGap)

@@ -41,6 +41,7 @@ try:
         KinematicChecks,
         MAX_BARO_RATE_MS,
         MIN_BARO_SPIKE_STEP_M,
+        gnss_fix_usable,
     )
     _IMPORT_OK = True
     _IMPORT_ERROR = ""
@@ -109,6 +110,7 @@ def _replay(records):
     gnss_may_vote = True   # GnssAscentGate; logs without the byte vote as before
     new_baro = False
     new_gps = False
+    gps_rec_s = 0.0
     gvu_t: list[float] = []   # GNSS Doppler vert-velocity (for true-apogee xing)
     gvu_v: list[float] = []
 
@@ -138,8 +140,10 @@ def _replay(records):
         if kind == "gnss":
             latest_gps_alt = float(r["alt_m"])
             latest_gps_vel_u = float(r["vel_u"])
-            new_gps = True
-            gps_pass_t.append((t_us - t0_us) / 1e6)
+            # #1763: new GPS only with a usable fix, as main.cpp (the latest
+            # record decides); its pass state is noted at its own time.
+            new_gps = gnss_fix_usable(r["fix_mode"], r["num_sats"])
+            gps_rec_s = (t_us - t0_us) / 1e6
             gvu_t.append((t_us - t0_us) / 1e6)
             gvu_v.append(latest_gps_vel_u)
             continue
@@ -195,7 +199,8 @@ def _replay(records):
         pass_baro.append(bool(kc.last_baro_pass))
         pass_pitch.append(bool(kc.last_pitch_pass))
         # GPS pass is only meaningful on new_gps ticks (one entry per gnss).
-        if new_gps_was and len(gps_pass_t) > len(gps_pass_v):
+        if new_gps_was:
+            gps_pass_t.append(gps_rec_s)
             gps_pass_v.append(bool(kc.last_gps_pass))
 
         # First-fire snapshots
