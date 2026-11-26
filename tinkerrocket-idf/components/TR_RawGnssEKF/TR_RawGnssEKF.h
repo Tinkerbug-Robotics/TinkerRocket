@@ -614,8 +614,9 @@ public:
     // of the filter takes it along; init turns it off.
     void setImuFree(bool on);
     bool imuFree() const { return imu_free_; }
-    // The IMU-free mode's re-anchor (RawGnssShadow's vertical latch,
-    // vert_imu_free_release_s): the velocity (NED) and clock rate moved by a
+    // The vertical latch's re-anchor (RawGnssShadow: the IMU-free mode's,
+    // vert_imu_free_release_s, and the coast's, vert_coast_release_s): the
+    // velocity (NED) and clock rate moved by a
     // fit of the epoch's Dopplers (lastVelocityFit), the velocity's covariance
     // with every other state cleared and its 1-sigma set to vel_sigma (a
     // block taken out of a positive P leaves it positive), the position's
