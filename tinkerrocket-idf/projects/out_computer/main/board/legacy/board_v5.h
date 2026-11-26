@@ -25,6 +25,7 @@ struct board_pins
     // The arm lines are the flight computer's alone; no consent stage here.
     static constexpr int ARM_CONSENT_PIN = -1;
     static constexpr int INA_ALERT_PIN = -1;     // #1553: none
+    static constexpr bool INA_ALERT_DRIVES_ARM_TRIP = false;   // no hardware arm trip
     static constexpr int PG_RAIL_PIN = -1;       // #1593: V10 only
     static constexpr int VBUCK_OK_PIN = -1;      // #1593: V10 only
 

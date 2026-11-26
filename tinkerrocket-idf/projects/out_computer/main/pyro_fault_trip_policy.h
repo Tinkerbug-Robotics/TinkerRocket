@@ -26,9 +26,16 @@
 //     OC_ARM_EN from the ISR. Latency is one or two 140 us conversions plus
 //     the ISR, then U9's gate discharge through R22 (100 k, 0.2-0.5 ms in its
 //     linear region; a smaller R22 is part of #1554).
-//   - Beetle: U23's ALERT pin is not connected, so a task polls the shunt
+//   - Beetle V2: U23's ALERT pin is not connected, so a task polls the shunt
 //     register every tick (1 ms) while consent is up. Slower; the next Beetle
 //     revision routes ALERT (#1554).
+//   - Beetle V3 and Mantis V11 (branch hardware/pyro-pfet-alert-trip): ALERT
+//     also trips the arm in hardware. Low on INA_ALERT turns on Q15, and Q16
+//     pulls U9's gate low, whatever either processor is doing. The Beetle V3's
+//     ALERT reaches no S3 pin (R150 pulls it up), so its firmware half is
+//     still the poll. On these boards anything the INA230 puts on ALERT holds
+//     U9 off: see "Mask/Enable" below, and INA_ALERT_DRIVES_ARM_TRIP in the
+//     board headers.
 //
 // After a trip consent stays low for kHoldOffMs, which outlasts the FC's
 // settle + pulse on the shorted channel. The FC then marks that channel Done
@@ -65,7 +72,9 @@
 // ### The alert pin is shared with #1409 ###
 // The INA230 runs one alert function at a time. #1409 plans a brownout warning
 // on the same INA_ALERT pin; while consent is up SOL owns it, and #1409's
-// function may run only while consent is down (alertOwner()).
+// function may run only while consent is down (alertOwner()). Where the pin
+// drives the arm trip that rule is also what makes #1409 harmless: its alert
+// holds U9 off, which only matters with consent up.
 //
 // Pure so the decision table is host-testable (test_pyro_fault_trip_policy).
 // main.cpp owns the pin, the INA230 and the task that polls it; what the poll
@@ -174,22 +183,72 @@ inline AlertOwner alertOwner(bool consent_up, bool brownout_wanted)
 inline constexpr uint16_t kMeSol  = 1u << 15;   // shunt over-limit
 inline constexpr uint16_t kMeCnvr = 1u << 10;   // conversion ready on the ALERT pin
 
-// The Mask/Enable word for SOL ownership, and the Alert Limit word.
+// ---- Mask/Enable --------------------------------------------------------------
 //
-// CNVR also drives the ALERT pin, once per conversion. Where the pin reaches
-// an S3 (alert_pin_wired) it must be off, or every conversion reads as a trip.
-// Where it does not (the Beetle) keep it on: it is what the rail-on read path
-// has always run with. The CVRF flag (bit 3) that path polls does not depend
-// on it (datasheet: CVRF is set after every conversion; CNVR only routes it to
-// the pin) — the V10 bench confirms that before its first flight.
+// Two board facts decide what may go on the ALERT pin:
+//   alert_pin_wired  — ALERT reaches an S3 input (INA_ALERT_PIN >= 0)
+//   drives_arm_trip  — ALERT pulls U9's gate low in hardware
+//                      (INA_ALERT_DRIVES_ARM_TRIP; Beetle V3, Mantis V11)
+//
+// CNVR also drives the ALERT pin, once per conversion: it asserts with CVRF
+// and holds until the next Mask/Enable read (the 100 Hz CVRF read), so the pin
+// sits low most of the time. Where the pin reaches an S3 it must be off while
+// the guard runs, or every conversion reads as a trip. Where the pin drives the
+// arm trip it must be off ALWAYS: in the guard it would hold U9 off while
+// consent is up, so the board could not fire, and outside it there is nothing
+// to gain from it. Every other board keeps CNVR where it has always run, at
+// boot and outside the guard on all of them, and in the guard on the Beetle V2.
+//
+// The CVRF flag (bit 3) that readINA230Power polls does not depend on CNVR
+// (datasheet: CVRF is set after every conversion; CNVR only routes it to the
+// pin). The V10's guard already reads it at 100 Hz with CNVR off.
 //
 // Transparent alert (LEN = 0): the pin follows each conversion, so it releases
 // on its own once consent is down and the current has gone, and the 100 Hz
 // Mask/Enable read for CVRF cannot clear a trip by reading it.
-inline uint16_t solMaskEnable(bool alert_pin_wired)
+
+// May CNVR go on the pin? In the guard (consent up) or outside it.
+inline bool cnvrAllowed(bool guard, bool alert_pin_wired, bool drives_arm_trip)
 {
-    return alert_pin_wired ? kMeSol : (uint16_t)(kMeSol | kMeCnvr);
+    if (drives_arm_trip) return false;   // never: the pin holds U9 off
+    return guard ? !alert_pin_wired : true;
 }
+
+// The word the guard writes as it arms: SOL, plus CNVR where allowed.
+inline uint16_t solMaskEnable(bool alert_pin_wired, bool drives_arm_trip)
+{
+    return cnvrAllowed(true, alert_pin_wired, drives_arm_trip)
+               ? (uint16_t)(kMeSol | kMeCnvr) : kMeSol;
+}
+
+// The word the guard writes as it stands down: CNVR where allowed, else nothing
+// on the pin. #1409's function, when it exists, takes the pin from here.
+inline uint16_t idleMaskEnable(bool alert_pin_wired, bool drives_arm_trip)
+{
+    return cnvrAllowed(false, alert_pin_wired, drives_arm_trip) ? kMeCnvr : (uint16_t)0;
+}
+
+// The word the boot path writes, from the register as read (`now`; 0 when the
+// read failed). The INA230 sits on the always-on rail and no boot resets it,
+// so the register holds whatever the last image left. A board whose pin drives
+// the arm trip gets the whole word, written even when the read failed: nothing
+// on the pin until the guard arms SOL, so a CNVR an older image left, or a SOL
+// an out computer reset mid-guard left, is cleared. Every other board adds
+// CNVR to what is there, which is what TR_INA230::enableConversionReadyAlert
+// has always done.
+inline uint16_t bootMaskEnable(uint16_t now, bool alert_pin_wired, bool drives_arm_trip)
+{
+    if (drives_arm_trip) return idleMaskEnable(alert_pin_wired, true);
+    return (uint16_t)(now | kMeCnvr);
+}
+
+// Does the boot path write at all? Only on a successful read, as before, except
+// where the pin drives the trip: that word does not depend on the read.
+inline bool bootWritesMaskEnable(bool read_ok, bool drives_arm_trip)
+{
+    return read_ok || drives_arm_trip;
+}
+
 inline constexpr uint16_t kSolAlertLimit = (uint16_t)kTripLimitCounts;
 
 // ---- The trip -----------------------------------------------------------------

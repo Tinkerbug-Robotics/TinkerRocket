@@ -1769,6 +1769,17 @@ foreach(BOARD V9 V10 M2)
     target_link_libraries(test_oc_board_map_${BOARD} GTest::gtest_main)
     gtest_discover_tests(test_oc_board_map_${BOARD} TEST_PREFIX "${BOARD}.")
 endforeach()
+# The Tinker-Beetle V3: the M2 map with TR_BEETLE_V3, whose INA230 ALERT drives
+# the hardware arm trip, so no Mask/Enable word may carry CNVR.
+add_executable(test_oc_board_map_M3 test_oc_board_map.cpp)
+target_compile_definitions(test_oc_board_map_M3 PRIVATE TR_BOARD_M2=1 TR_BEETLE_V3=1)
+target_include_directories(test_oc_board_map_M3 PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_oc_board_map_M3 GTest::gtest_main)
+gtest_discover_tests(test_oc_board_map_M3 TEST_PREFIX "M3.")
 
 # ---------- test_test_mode_gate_policy (#1137 item 5) ----------
 add_executable(test_test_mode_gate_policy test_test_mode_gate_policy.cpp)

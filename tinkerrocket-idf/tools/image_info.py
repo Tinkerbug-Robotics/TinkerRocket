@@ -98,6 +98,8 @@ def board_of(version: str) -> str | None:
 
       -v7 -v8 -v9   flight_computer, out_computer, base_station
       -m2           flight_computer, out_computer, on the Tinker-Beetle V2
+      -m3           out_computer on the Tinker-Beetle V3 (TR_BEETLE_V3); its
+                    flight computer runs -m2 so far
       -m1           the same, on the Tinker-Beetle V1 (retired; images exist)
       -b1           the single-MCU mini (retired), when TR_MINI_BOARD was set
 

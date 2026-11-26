@@ -73,6 +73,17 @@ elseif(NOT _tr_oc_board_flag_count EQUAL 1)
         "dir per variant — a stale CMake cache is the usual cause.")
 endif()
 target_compile_definitions(${COMPONENT_LIB} PRIVATE ${_tr_oc_board_flags}=1)
+# The Tinker-Beetle V3 variant of the M2 map (main/board/board_m2.h): U23's
+# ALERT drives a hardware arm trip there, so the INA230 never puts CNVR on it.
+#   idf.py -B build_m3 -DTR_BOARD_M2=1 -DTR_BEETLE_V3=1 build
+if(TR_BEETLE_V3)
+    if(NOT TR_BOARD_M2)
+        message(FATAL_ERROR
+            "out_computer: TR_BEETLE_V3 is the Tinker-Beetle V3 variant of the M2 "
+            "map. Build it with -DTR_BOARD_M2=1 -DTR_BEETLE_V3=1.")
+    endif()
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE TR_BEETLE_V3=1)
+endif()
 # Every out_computer board is an ESP32-S3; assert it so a stray build dir
 # cannot produce an image for the wrong architecture.
 if(CONFIG_IDF_TARGET AND NOT "${CONFIG_IDF_TARGET}" STREQUAL "esp32s3")
@@ -80,7 +91,9 @@ if(CONFIG_IDF_TARGET AND NOT "${CONFIG_IDF_TARGET}" STREQUAL "esp32s3")
         "out_computer: every board revision is an ESP32-S3, but this build dir is "
         "configured for '${CONFIG_IDF_TARGET}'. Use a fresh build dir.")
 endif()
-if(TR_BOARD_M2)
+if(TR_BOARD_M2 AND TR_BEETLE_V3)
+    message(STATUS "out_computer: board pin map M2 + TR_BEETLE_V3 (main/board/board_m2.h, Tinker-Beetle V3 in work: the V2 map, INA230 ALERT drives the hardware arm trip, no CNVR on it)")
+elseif(TR_BOARD_M2)
     message(STATUS "out_computer: board pin map M2 (main/board/board_m2.h, Tinker-Beetle V2 in work, on-board SPI radio, seven signals moved from rev1)")
 elseif(TR_BOARD_V10)
     message(STATUS "out_computer: board pin map V10 (main/board/board_v10.h, arm consent on GPIO14, PSRAM ring)")
