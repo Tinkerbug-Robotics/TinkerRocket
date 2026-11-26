@@ -1540,13 +1540,17 @@ private fun ReadinessBanner(
     val color = if (held) tr.statusIdle else when (readiness) {
         TelemetryData.FlightReadiness.READY -> tr.statusOk
         TelemetryData.FlightReadiness.CAUTION -> tr.statusWarn
-        TelemetryData.FlightReadiness.NOT_READY -> tr.statusBad
+        TelemetryData.FlightReadiness.NOT_READY, TelemetryData.FlightReadiness.LANDED,
+        TelemetryData.FlightReadiness.LANDED_SIM -> tr.statusBad
+        TelemetryData.FlightReadiness.IN_FLIGHT -> tr.statusIdle
         TelemetryData.FlightReadiness.UNKNOWN -> tr.statusIdle
     }
     val glyph = if (held) "…" else when (readiness) {
         TelemetryData.FlightReadiness.READY -> "✓"
         TelemetryData.FlightReadiness.CAUTION -> "⚠"
-        TelemetryData.FlightReadiness.NOT_READY -> "✕"
+        TelemetryData.FlightReadiness.NOT_READY, TelemetryData.FlightReadiness.LANDED,
+        TelemetryData.FlightReadiness.LANDED_SIM -> "✕"
+        TelemetryData.FlightReadiness.IN_FLIGHT -> "↑"
         TelemetryData.FlightReadiness.UNKNOWN -> "…"
     }
     Row(

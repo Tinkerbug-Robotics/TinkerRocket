@@ -217,6 +217,12 @@ public data class TelemetryData(
      */
     val gnssHAccM: Int? = null,               // "hacc"
     val state: String = "UNKNOWN",            // "st"
+    /**
+     * #1766: "st" was in the frame. Absent, [state] "UNKNOWN" means no state
+     * yet; present, it is the firmware not naming the state (a newer FC's
+     * state through an older OC or base station, a corrupt byte).
+     */
+    val stateReceived: Boolean = false,
 
     // FC boot progress, emitted ONLY while the FC is still in setup_fc()
     // (the OC gates all three on boot_valid = fc_boot_status_valid &&
@@ -643,7 +649,7 @@ public data class TelemetryData(
 
     // ── Go/no-go rollup (#303) ────────────────────────────────────────────
     public enum class FlightReadiness {
-        UNKNOWN, READY, CAUTION, NOT_READY;
+        UNKNOWN, READY, CAUTION, NOT_READY, LANDED, LANDED_SIM, IN_FLIGHT;
 
         public val label: String
             get() = when (this) {
@@ -651,6 +657,9 @@ public data class TelemetryData(
                 READY -> "Ready to fly"
                 CAUTION -> "Not ready — check sensors"
                 NOT_READY -> "Do not fly"
+                LANDED -> "Do not fly — LANDED: power-cycle to re-arm"
+                LANDED_SIM -> "Do not fly — the sim's LANDED: press Stop on the SIM banner to re-arm"
+                IN_FLIGHT -> "In flight"
             }
     }
 
@@ -664,9 +673,24 @@ public data class TelemetryData(
     // right, and the flight computer's thrust-axis check stands guard in the
     // boost.  NA (a manual code, off the pad, older firmware or BS) is ignored.
     // Amber = anything in between.
+    // #1766: and only on the pad. A launch is armed in READY and PRELAUNCH; in
+    // any other state the sensors say nothing about flying. LANDED above all:
+    // the flight computer holds it (#317) until a power-cycle, or a flown-out
+    // sim's ([simActive], NSF_SIM_ACTIVE) until its Stop, and a rocket launched
+    // from it never enters INFLIGHT -- no deployment, no flight log. Its card
+    // said "Ready to fly". INFLIGHT reads "In flight" (grey, no alarm); any
+    // other state, a state the firmware could not name ("UNKNOWN" received)
+    // included, reads "Do not fly". No state received yet: the sensors alone.
     public val flightReadiness: FlightReadiness
         get() {
             if (!hasSensorHealth) return FlightReadiness.UNKNOWN
+            when {
+                state == "READY" || state == "PRELAUNCH" -> {}
+                state == "LANDED" -> return if (simActive) FlightReadiness.LANDED_SIM else FlightReadiness.LANDED
+                state == "INFLIGHT" -> return FlightReadiness.IN_FLIGHT
+                state == "UNKNOWN" && !stateReceived -> {}   // no state yet: the sensors alone
+                else -> return FlightReadiness.NOT_READY
+            }
             val hardFault =
                 listOf(baroHealth, imuHealth, battHealth, storageHealth).contains(SensorHealth.BAD) ||
                     (1..4).any { pyroHealth(it) == SensorHealth.BAD }
@@ -923,6 +947,7 @@ public data class TelemetryData(
             numSats = flexInt(json, "nsat") ?: 0,                       // #571
             gnssHAccM = flexInt(json, "hacc"),                          // #552
             state = strictString(json, "st") ?: "UNKNOWN",
+            stateReceived = strictString(json, "st") != null,
             fcBootStepRaw = flexInt(json, "bs"),
             fcBootElapsedMs = flexInt(json, "bt"),
             fcBootDegraded = flexInt(json, "bd") ?: 0,

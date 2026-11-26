@@ -37,6 +37,7 @@ constexpr uint8_t LANDED   = 4;
 
 using sim_flight::Edge;
 using sim_flight::classify;
+using sim_flight::reportsSim;
 using sim_flight::simulated;
 using sim_flight::startRefused;
 using sim_flight::stopApplies;
@@ -295,6 +296,53 @@ TEST(SimFlightPolicy, aRefusedStartNeverProducesTheStartEdge)
     ASSERT_TRUE(startRefused(/*command_lockout_state=*/true));
     EXPECT_EQ(classify(/*prev_active=*/false, /*curr_active=*/false, false),
               Edge::None);
+}
+
+// ── The flag the FC reports (#1766) ────────────────────────────────────────
+
+// A flown-out sim's whole held LANDED carries NSF_SIM_ACTIVE, so the apps'
+// SIM banner (the only Stop control) and the OC see a sim's LANDED through a
+// reconnect or a relay switch; the Stop's reset drops it.
+TEST(SimFlightPolicy, aFlownOutSimsHeldLandedReportsTheSimUntilItsStop)
+{
+    bool prev_active = false;
+    bool latched     = false;
+    EXPECT_FALSE(reportsSim(latched, false)) << "the pad before any sim";
+
+    ASSERT_EQ(classify(prev_active, true, false), Edge::Start);
+    latched     = true;
+    prev_active = true;
+    EXPECT_TRUE(reportsSim(latched, true)) << "the sim flying";
+
+    ASSERT_EQ(classify(prev_active, false, /*fc_landed=*/true), Edge::EndedLanded);
+    prev_active = false;
+    for (int pass = 0; pass < 1000; pass++)   // held LANDED, the sim idle
+        ASSERT_TRUE(reportsSim(latched, false)) << pass;
+
+    ASSERT_TRUE(stopApplies(latched, false));   // the operator's Stop: the reset
+    latched = false;
+    EXPECT_FALSE(reportsSim(latched, false)) << "back on the pad: a real flight next";
+}
+
+// The sim's give-up with the FC still INFLIGHT (#971): the flag holds through
+// the give-up pass, as the dry-fire gate does, until the early end's reset.
+TEST(SimFlightPolicy, theGiveUpPassStillReportsTheSim)
+{
+    EXPECT_TRUE(reportsSim(/*latched=*/true, /*active=*/false));
+    ASSERT_EQ(classify(true, false, /*fc_landed=*/false), Edge::EndedEarly);
+    EXPECT_FALSE(reportsSim(/*latched=*/false, false)) << "after the reset";
+}
+
+// The flag is the dry-fire gate's own predicate (simulated()), so the OC and
+// the apps see a sim exactly when the FC dry-fires; with neither the latch
+// nor an active sim (a real flight's LANDED, the latch being RAM set only by
+// a Start), no sim.
+TEST(SimFlightPolicy, theFlagIsTheDryFireGatesPredicate)
+{
+    EXPECT_FALSE(reportsSim(false, false));
+    for (const bool latched : {false, true})
+        for (const bool active : {false, true})
+            EXPECT_EQ(reportsSim(latched, active), simulated(latched, active)) << latched << active;
 }
 
 }  // namespace

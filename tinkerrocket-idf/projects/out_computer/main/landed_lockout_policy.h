@@ -28,15 +28,15 @@
 //       action — brings about. An FC reset never sets the flag on its own.
 //   (b) the departure from a LANDED phase that was itself a SIM flight (the
 //       flag was set in its LANDED frames, or in the INFLIGHT frames that led
-//       to it). A flown-out sim holds LANDED with the flag up for one loop
-//       pass at most (#971: the sim ends on the next IMU drain), which the
-//       500 Hz NonSensorData frame catches about half the time (V10 pre-flight
-//       review, 2026-11-18); the FC then holds LANDED with the flag DOWN, and
-//       the operator's sim Stop resets it to READY — flag still down. So the
-//       flight's own INFLIGHT frames, which carry the flag throughout, decide
-//       it too. Clearing here is what lets a real flight after a bench sim be
-//       logged without an OC reboot, which the old rule allowed and this one
-//       must not lose.
+//       to it). Since #1766 the FC keeps the flag up for the whole of a
+//       flown-out sim's held LANDED (sim_flight::reportsSim), and drops it
+//       with the reset the operator's sim Stop makes, back to READY. Before,
+//       the flag was up there for one loop pass at most (#971: the sim ends
+//       on the next IMU drain), and the flight's own INFLIGHT frames, which
+//       carry the flag throughout, decided it -- they still do, for a frame
+//       stream that missed the LANDED ones. Clearing here is what lets a real
+//       flight after a bench sim be logged without an OC reboot, which the
+//       old rule allowed and this one must not lose.
 //
 // A real flight's LANDED (no sim flag in any of its frames) is therefore left
 // only by an FC reset, and the lockout holds through it: the OC has to reboot

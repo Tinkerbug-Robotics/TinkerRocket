@@ -294,6 +294,40 @@ final class TelemetryDataTests: XCTestCase {
         XCTAssertEqual(t.sensorHealthRows.count, 6)            // 6 core, no pyros
     }
 
+    /// #1766: readiness is judged on the sensors only on the pad (READY,
+    /// PRELAUNCH, or no state received yet). LANDED says how to re-arm (a
+    /// sim's: its Stop; a real flight's: a power-cycle), INFLIGHT is "In
+    /// flight", and anything else -- a state the firmware could not name
+    /// included -- is "Do not fly", whatever the sensors say.
+    func testReadiness_OffThePad_DoNotFly() throws {
+        let allOK = pack(baro: .ok, imu: .ok, ekf: .ok, mag: .ok, gnss: .ok, batt: .ok)
+        func at(_ st: String, h: Int? = nil, fs: Int = 0) throws -> TelemetryData {
+            try JSONDecoder().decode(TelemetryData.self,
+                                     from: "{\"h\":\(h ?? allOK),\"st\":\"\(st)\",\"fs\":\(fs)}".data(using: .utf8)!)
+        }
+        XCTAssertEqual(try at("READY").flightReadiness, .ready)
+        XCTAssertEqual(try at("PRELAUNCH").flightReadiness, .ready)
+        XCTAssertEqual(try decode(health: allOK).flightReadiness, .ready)   // no state received
+        XCTAssertEqual(try at("UNKNOWN").flightReadiness, .notReady)        // received: not named
+        let landed = try at("LANDED").flightReadiness
+        XCTAssertEqual(landed, .landed)
+        XCTAssertTrue(landed.label.hasPrefix("Do not fly") && landed.label.contains("power-cycle"))
+        let sim = try at("LANDED", fs: 0x100).flightReadiness              // NSF_SIM_ACTIVE
+        XCTAssertEqual(sim, .landedSim)
+        XCTAssertTrue(sim.label.hasPrefix("Do not fly") && sim.label.contains("Stop"))
+        XCTAssertEqual(try at("INFLIGHT").flightReadiness, .inFlight)
+        for st in ["INITIALIZATION", "INIT", "MAG_CAL", "SOMETHING_NEW"] {
+            XCTAssertEqual(try at(st).flightReadiness, .notReady, st)
+        }
+        // the state is read before the sensors: LANDED with a hard fault is LANDED
+        let bad = pack(baro: .bad, imu: .ok, ekf: .ok, gnss: .ok, batt: .ok)
+        XCTAssertEqual(try at("LANDED", h: bad).flightReadiness, .landed)
+        // a hard fault on the pad is still red, and no scorecard still waits
+        XCTAssertEqual(try at("READY", h: bad).flightReadiness, .notReady)
+        let none = try JSONDecoder().decode(TelemetryData.self, from: "{\"st\":\"LANDED\"}".data(using: .utf8)!)
+        XCTAssertEqual(none.flightReadiness, .unknown)
+    }
+
     /// Hard faults waiting won't fix → red "do not fly".
     func testReadiness_HardFaults_NotReady() throws {
         let baro = try decode(health: pack(baro: .bad, imu: .ok, ekf: .ok, gnss: .ok, batt: .ok))

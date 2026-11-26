@@ -2802,6 +2802,9 @@ static constexpr uint8_t NSF_PYRO_ARMED   = (1u << 6);
 // Simulated flight in progress (#393): reported so the app's sim banner /
 // Stop-sim control is driven by the rocket's actual state instead of a
 // client-side latch that dies on BLE reconnect (BLEDevice is recreated).
+// #1766: for the whole of a sim's flight state, the held LANDED of a
+// flown-out sim included, until the Stop (or next Start) resets it
+// (sim_flight::reportsSim).
 static constexpr uint8_t NSF_SIM_ACTIVE   = (1u << 7);
 
 // NonSensorData.apogee_flags bit masks (appended in #142/#143).
@@ -3150,7 +3153,8 @@ static constexpr uint8_t LORA_LOGGING_BIT = 0x80;
 
 // #835 item 9: sim_active rides num_sats bit 6, alongside LORA_LOGGING_BIT.
 // The FC raises NSF_SIM_ACTIVE while TR_Sensor_Collector_Sim is substituting
-// IMU/baro/GNSS, and a DIRECT BLE link relays it ("fs" bit 8) — but the LoRa
+// IMU/baro/GNSS (and, #1766, through a flown-out sim's held LANDED until the
+// Stop), and a DIRECT BLE link relays it ("fs" bit 8) — but the LoRa
 // frame had nowhere to put it: flags_state is fully allocated (4 flags + 3-bit
 // state + camera) and so is flags2 (burnout + 5-bit orient code + 2-bit mode).
 // The base station memset()s its output and never assigned sim_active, so a
