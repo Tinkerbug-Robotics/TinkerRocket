@@ -51,16 +51,19 @@ public:
                             uint32_t& out_start) const;
 
     // Where a new flight can grow furthest: the first run of `n_blocks` FREE
-    // blocks inside the stretch of FREE-or-BAD blocks in [range_start,
-    // range_end) that holds the most FREE blocks (a flight steps over BAD
-    // blocks as it grows; an allocated block ends its growth). First-fit put a
-    // flight into the hole an evicted flight left and capped it at the next
-    // stored flight (V10 pre-flight review, 2026-11-18). False when no stretch
-    // holds such a run.
+    // blocks inside a stretch of FREE-or-BAD blocks in [range_start,
+    // range_end), in the stretch where the most FREE blocks lie from that run's
+    // start to the stretch's end (a flight steps over BAD blocks as it grows;
+    // an allocated block or range_end ends its growth). First-fit put a flight
+    // into the hole an evicted flight left and capped it at the next stored
+    // flight (V10 pre-flight review, 2026-11-18). `out_room`, when given,
+    // receives that FREE count: the most the flight can ever hold (#1758).
+    // False when no stretch holds such a run.
     bool findRoomiestFree(uint32_t n_blocks,
                           uint32_t range_start,
                           uint32_t range_end,
-                          uint32_t& out_start) const;
+                          uint32_t& out_start,
+                          uint32_t* out_room = nullptr) const;
 
     // Aggregate counters for health reporting. countInState walks the WHOLE
     // die — including the pre-region (LFS) and metadata blocks, which are
@@ -72,6 +75,10 @@ public:
     // active block count; an empty or inverted range counts 0.
     size_t countInState(BlockState state) const;
     size_t countInStateRange(BlockState state, uint32_t start, uint32_t end) const;
+
+    // #1758: an FNV-1a hash of the active state, for TR_FlightLog's room
+    // cache. Equal states hash equal; it is not stored anywhere.
+    uint32_t fingerprint() const;
 
     // Serialization (round-trip safe).
     void serializeTo(uint8_t* buf, size_t len) const;

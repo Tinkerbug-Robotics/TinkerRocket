@@ -61,6 +61,13 @@ public:
         // the card keeps a rolling buffer instead of evicting one flight per arm.
         // Clamped to the flight region; 0 means "reclaim only just enough to fit".
         uint16_t auto_evict_target_free_blocks = 0;
+        // #1758: the room, unbroken, to clear for the new flight at arm when
+        // auto_evict_oldest is on. Eviction also continues oldest-first until
+        // the stretch the flight starts in holds this many FREE blocks from its
+        // start. A flight is one contiguous range and nothing evicts in flight,
+        // so a total-free floor alone let a long flight's log end at the next
+        // stored flight. Clamped to the flight region; 0 = no room target.
+        uint16_t auto_evict_target_room_blocks = 0;
 
         // #1279 follow-up: run the boot recovery scan OFF the caller's thread.
         // begin() then returns as soon as the bitmap and index are loaded, and
@@ -105,6 +112,24 @@ public:
     // genuinely free blocks to 44 (#1235 item 3). The #315 eviction floor has
     // always been measured this way; the health verdict now is too.
     uint32_t regionFreeBlocks() const;
+
+    // #1758: the room a flight has to log in. room_blocks is the most blocks
+    // its range can ever hold: the FREE blocks from its start until a stored
+    // flight or the region end stops it (BAD blocks are stepped over, and a
+    // flight cannot continue in a second range). While a flight is active,
+    // that is the blocks it holds plus those it can still extend into.
+    // Otherwise it is what the next prepareFlight() would give: with
+    // auto_evict_oldest, after the evictions it would make, planned on a copy
+    // of the bitmap with nothing deleted. region_free_blocks is
+    // regionFreeBlocks() on the same terms, and evictions is how many stored
+    // flights that arm would delete. All zero before begin() or after a failed
+    // recovery.
+    struct FlightRoom {
+        uint32_t room_blocks        = 0;
+        uint32_t region_free_blocks = 0;
+        uint32_t evictions          = 0;
+    };
+    FlightRoom flightRoom();
 
     // Active-flight accessors (stable after prepareFlight, before finalizeFlight).
     bool      isFlightActive()     const { return flight_active_; }
@@ -315,14 +340,30 @@ private:
 
     // #315 rolling buffer. evictOldestLocked deletes the single oldest eligible
     // (finalized, non-active) flight and returns true, or false when the index
-    // holds nothing eligible. evictOldestToTargetLocked repeats it oldest-first
-    // until the pending prealloc fits, an index slot is free, AND free blocks
-    // reach cfg_.auto_evict_target_free_blocks — or nothing eligible remains;
-    // it returns the number of flights evicted. Both assume mutex_ is held and
-    // are reached only from prepareFlightLocked (arm time — no active flight to
-    // hit, since the active allocation is never in the index).
+    // holds nothing eligible. evictOldestToTargetLocked deletes the oldest
+    // flights planEvictionsLocked counts, and returns how many went. Both
+    // assume mutex_ is held and are reached only from prepareFlightLocked (arm
+    // time — no active flight to hit, since the active allocation is never in
+    // the index).
     bool     evictOldestLocked();
     uint32_t evictOldestToTargetLocked();
+
+    // #315 / #1758: the eviction plan, made on a copy of bitmap_ freed the way
+    // deleteFlightLocked frees, in evictOldestLocked's order: how many of the
+    // oldest flights must go until the prealloc fits, an index slot is free,
+    // free blocks reach cfg_.auto_evict_target_free_blocks AND the new
+    // flight's room reaches cfg_.auto_evict_target_room_blocks, with the room
+    // and free count it then leaves. When the goals cannot all be met, the
+    // fewest evictions that give the most room there is (none when no flight
+    // can start at all). With auto_evict_oldest off it plans none. Not inlined,
+    // so the 512-byte copy is never on the stack under the deletes it plans.
+    // Assumes mutex_ is held.
+    [[gnu::noinline]] FlightRoom planEvictionsLocked() const;
+    // flightRoom()'s cache key: a hash of what the plan reads.
+    uint32_t planKeyLocked() const;
+    FlightRoom room_cache_;
+    uint32_t   room_cache_key_   = 0;
+    bool       room_cache_valid_ = false;
 
     // On a mid-block program failure, retire `bad_block` (relative index
     // `rel_block`) and relocate the `valid_pages` pages already written at its

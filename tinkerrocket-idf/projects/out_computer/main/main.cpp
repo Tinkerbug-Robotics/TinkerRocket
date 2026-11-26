@@ -237,10 +237,18 @@ static SensorHealthState ocStorageHealth()
     // also counts the always-free LFS pre-region and metadata blocks — 36 on
     // every shipping geometry — and against prealloc_blocks that read OK or
     // DEGRADED when the region had less room than the thresholds intend.
-    in.region_free_blocks    = flightlog.regionFreeBlocks();
+    //
+    // #1758: both counts are what the next arm will leave, after the oldest
+    // flights it will evict (planned, nothing deleted), or what the active
+    // flight has. The raw count read BAD on a full card in READY although the
+    // arm would make room, and said nothing of the room a flight gets unbroken.
+    const tr_flightlog::TR_FlightLog::FlightRoom room = flightlog.flightRoom();
+    in.region_free_blocks    = room.region_free_blocks;
+    in.flight_room_blocks    = room.room_blocks;
+    in.room_target_blocks    = flightlog.config().auto_evict_target_room_blocks;
     in.prealloc_blocks       = flightlog.config().prealloc_blocks;
     in.nand_prog_fail        = s.nand_prog_fail;
-    in.index_used            = flightlog.index().size();
+    in.index_used            = flightlog.index().size() - room.evictions;   // #1758: as the arm leaves it
     in.index_capacity        = tr_flightlog::FlightIndex::MAX_ENTRIES;
     in.mram_probe_failed     = logger.mramProbeFailed();
     // #1235 item 4: V9/V10's PSRAM ring falling back to the 64 KB internal
@@ -462,12 +470,20 @@ static void flightlogFlushTaskHook(void* /*ctx*/)
                          (unsigned)flightlog.lastEvictedFlightId(),
                          (unsigned)flightlog.regionFreeBlocks());   // #1235 item 3: region, not die
             }
+            // #1758: the most this flight's log can hold, unbroken.
+            const tr_flightlog::TR_FlightLog::FlightRoom room = flightlog.flightRoom();
+            const uint32_t room_mb_x10 = (uint32_t)((uint64_t)room.room_blocks *
+                                                    flightlog.pagesPerBlock() *
+                                                    flightlog.payloadPerPage() / 100000u);
             ESP_LOGI("FLIGHTLOG",
-                     "prepareFlight OK (deferred): id=%u, range=[%u..%u), pages=%u",
+                     "prepareFlight OK (deferred): id=%u, range=[%u..%u), blocks=%u, "
+                     "room %u blocks (%u.%u MB)",
                      (unsigned)id,
                      (unsigned)flightlog.activeStartBlock(),
                      (unsigned)(flightlog.activeStartBlock() + flightlog.activeBlockCount()),
-                     (unsigned)flightlog.activeBlockCount());
+                     (unsigned)flightlog.activeBlockCount(),
+                     (unsigned)room.room_blocks,
+                     (unsigned)(room_mb_x10 / 10u), (unsigned)(room_mb_x10 % 10u));
         }
         else
         {
@@ -9403,7 +9419,8 @@ static void printStats()
     logger.getStats(s);
 
     // Flash-space stats for the app's storage bar (every ~3 s on a live BLE
-    // link).  Same flightlog accounting as ocStorageHealth(); accurate on a
+    // link): the raw block counts, how full the card is now. ocStorageHealth()
+    // judges the room the next arm will leave instead (#1758). Accurate on a
     // direct rocket connection.
     if (ble_app.isConnected())
     {
@@ -10496,6 +10513,21 @@ static bool initLoggingSubsystem()
             fl_cfg.auto_evict_target_free_blocks = static_cast<uint16_t>(
                 static_cast<uint32_t>(fl_cfg.flight_region_end - fl_cfg.flight_region_start) *
                 kAutoEvictTargetFreePct / 100u);
+            // #1758 (owner decision, 2026-11-25): the new flight gets a fifth of
+            // the flight region UNBROKEN, which the 10% total floor never
+            // promised: a flight is one range, so on a full card its log ended
+            // at the next stored flight, wherever eviction's hole happened to
+            // end (10.4-40 MB in the review's runs). A fifth is ~52 MB on the
+            // V10 board (~4 min of the GNSS board's log) and ~26 MB on the
+            // Beetle V2 (~5 min). Measured with 10-13 MB flights, the card then
+            // keeps ~67% as history on average and never under ~60%; the dip
+            // comes where the log wraps, as the hole left at the region's end
+            // waits for the flights around it to go. A third kept ~46%, down to
+            // ~33%. Oldest-first eviction grows the room in place: each flight
+            // starts at the front of the roomiest stretch, so the flight after
+            // the room is usually the oldest.
+            fl_cfg.auto_evict_target_room_blocks = static_cast<uint16_t>(
+                static_cast<uint32_t>(fl_cfg.flight_region_end - fl_cfg.flight_region_start) / 5u);
             // #1279 follow-up: do NOT scan for orphaned runs on this thread.
             // begin() is reached from loop_oc, which is also the only thing
             // that dispatches BLE commands — so a scan that takes minutes (a

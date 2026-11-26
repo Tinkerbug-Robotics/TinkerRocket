@@ -81,29 +81,31 @@ bool BlockStateBitmap::findContiguousFree(uint32_t n_blocks,
 bool BlockStateBitmap::findRoomiestFree(uint32_t n_blocks,
                                         uint32_t range_start,
                                         uint32_t range_end,
-                                        uint32_t& out_start) const {
+                                        uint32_t& out_start,
+                                        uint32_t* out_room) const {
     if (n_blocks == 0) return false;
     if (range_start >= range_end) return false;
     if (range_end > block_count_) range_end = block_count_;
 
     bool     found     = false;
-    uint32_t best_free = 0;
+    uint32_t best_room = 0;
     uint32_t b = range_start;
     while (b < range_end) {
         if (get(b) != BLOCK_FREE && get(b) != BLOCK_BAD) { ++b; continue; }
         const uint32_t stretch_start = b;
-        uint32_t free_n = 0;
-        while (b < range_end && (get(b) == BLOCK_FREE || get(b) == BLOCK_BAD)) {
-            if (get(b) == BLOCK_FREE) ++free_n;
-            ++b;
-        }
+        while (b < range_end && (get(b) == BLOCK_FREE || get(b) == BLOCK_BAD)) ++b;
         uint32_t start = 0;
-        if (free_n > best_free && findContiguousFree(n_blocks, stretch_start, b, start)) {
-            best_free = free_n;
+        if (!findContiguousFree(n_blocks, stretch_start, b, start)) continue;
+        // #1758: the room is what lies AFTER the start: FREE blocks before it
+        // (cut off by a BAD block inside the first n) are never reached.
+        const uint32_t room = static_cast<uint32_t>(countInStateRange(BLOCK_FREE, start, b));
+        if (room > best_room) {
+            best_room = room;
             out_start = start;
             found     = true;
         }
     }
+    if (found && out_room != nullptr) *out_room = best_room;
     return found;
 }
 
@@ -119,6 +121,16 @@ size_t BlockStateBitmap::countInStateRange(BlockState state,
         if (get(b) == state) ++count;
     }
     return count;
+}
+
+uint32_t BlockStateBitmap::fingerprint() const {
+    uint32_t h = 2166136261u;
+    const size_t n = serializedSize();
+    for (size_t i = 0; i < n; ++i) {
+        h ^= data_[i];
+        h *= 16777619u;
+    }
+    return h ^ block_count_;
 }
 
 void BlockStateBitmap::serializeTo(uint8_t* buf, size_t len) const {
