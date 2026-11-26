@@ -4913,8 +4913,18 @@ struct __attribute__((packed)) FlightSnapshotData
     // --- Pyro state (safety-critical) ---
     // "Armed" is no longer snapshotted: with per-fire arming, the ARM
     // pin is only HIGH momentarily, and a reboot leaves it LOW anyway.
-    // On recovery we re-fire any unfired channel whose trigger condition
-    // is still satisfied.
+    // On recovery we re-fire any channel that had not started whose trigger
+    // condition is still satisfied.
+    //
+    // pyroN_fired, #1760: 0 not started, 1 fired (Done: the pulse ran its
+    // length, every older writer's only non-zero value; or restored as spent
+    // after a reset that cut it short), 2 started (in its arm settle or pulse
+    // when the snapshot was taken; its pulse waits until the OC holds this). A restore treats any
+    // non-zero value as spent, so a fire that had started is never repeated:
+    // one whose own short reset the FC used to fire again on every boot.
+    // Values in flight_computer/main/pyro_restore_policy.h. Size- and
+    // offset-neutral, and every older snapshot reads as before: no VERSION
+    // bump.
     uint8_t  pyro_apogee_detected;
     uint8_t  pyro1_fired;
     uint8_t  pyro2_fired;

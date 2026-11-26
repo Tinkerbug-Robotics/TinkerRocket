@@ -1618,29 +1618,58 @@ _P(
 _P(
     "Snapshot.snap_pyro1_fired", "Pyro 1 fired (snapshot)",
     kind=KIND_BOOL,
-    note="Channel 1 fired, as recorded in the snapshot so a rebooted FC does not re-fire it.",
+    note="Channel 1 fired or had started to fire (#1760), as recorded in the snapshot so a "
+         "rebooted FC does not fire it again.",
     caution=
-        "Deliberately named apart from NonSensor.pyro1_fired: same fact, different rate and "
-        "different purpose. A disagreement between them across a reboot is exactly what this "
-        "channel is for.",
+        "Deliberately named apart from NonSensor.pyro1_fired: it is set from the moment the "
+        "channel starts, about 210 ms before NonSensor's bit (the end of the pulse), at a "
+        "different rate and for a different purpose. A disagreement between them across a "
+        "reboot is exactly what this channel is for.",
 )
 _P(
     "Snapshot.snap_pyro2_fired", "Pyro 2 fired (snapshot)",
     kind=KIND_BOOL,
-    note="Channel 2 fired, carried across a reboot to suppress a re-fire.",
-    caution="The 10 Hz twin of NonSensor.pyro2_fired — compare, do not substitute.",
+    note="Channel 2 fired or had started to fire (#1760), carried across a reboot to suppress a re-fire.",
+    caution="Leads NonSensor.pyro2_fired by the pulse — compare, do not substitute.",
 )
 _P(
     "Snapshot.snap_pyro3_fired", "Pyro 3 fired (snapshot)",
     kind=KIND_BOOL,
-    note="Channel 3 fired, carried across a reboot to suppress a re-fire.",
-    caution="The 10 Hz twin of NonSensor.pyro3_fired — compare, do not substitute.",
+    note="Channel 3 fired or had started to fire (#1760), carried across a reboot to suppress a re-fire.",
+    caution="Leads NonSensor.pyro3_fired by the pulse — compare, do not substitute.",
 )
 _P(
     "Snapshot.snap_pyro4_fired", "Pyro 4 fired (snapshot)",
     kind=KIND_BOOL,
-    note="Channel 4 fired, carried across a reboot to suppress a re-fire.",
-    caution="The 10 Hz twin of NonSensor.pyro4_fired — compare, do not substitute.",
+    note="Channel 4 fired or had started to fire (#1760), carried across a reboot to suppress a re-fire.",
+    caution="Leads NonSensor.pyro4_fired by the pulse — compare, do not substitute.",
+)
+_P(
+    "Snapshot.snap_pyro1_mid_fire", "Pyro 1 mid-fire (snapshot)",
+    kind=KIND_BOOL,
+    note="Channel 1 had started to fire (its arm settle or its pulse) but not finished. A rebooted "
+         "FC treats it as fired and does not repeat it (#1760); snap_pyro1_fired is set too.",
+    caution="Sent on the pass the channel starts, off the 10 Hz cadence, then on every snapshot "
+            "until the pulse ends. A channel restored after such a reset reads fired (1), not "
+            "mid-fire, from then on.",
+)
+_P(
+    "Snapshot.snap_pyro2_mid_fire", "Pyro 2 mid-fire (snapshot)",
+    kind=KIND_BOOL,
+    note="Channel 2 had started to fire but not finished; not repeated after a reboot (#1760).",
+    caution="See snap_pyro1_mid_fire.",
+)
+_P(
+    "Snapshot.snap_pyro3_mid_fire", "Pyro 3 mid-fire (snapshot)",
+    kind=KIND_BOOL,
+    note="Channel 3 had started to fire but not finished; not repeated after a reboot (#1760).",
+    caution="See snap_pyro1_mid_fire.",
+)
+_P(
+    "Snapshot.snap_pyro4_mid_fire", "Pyro 4 mid-fire (snapshot)",
+    kind=KIND_BOOL,
+    note="Channel 4 had started to fire but not finished; not repeated after a reboot (#1760).",
+    caution="See snap_pyro1_mid_fire.",
 )
 _P(
     "Snapshot.b2r_code", "Board-to-rocket orientation code",

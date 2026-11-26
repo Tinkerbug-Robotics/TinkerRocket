@@ -67,6 +67,7 @@
 #include "test_mode_gate_policy.h"   // #1137 item 5: the #363 failsafe and the test-command gates
 #include "flight_timeout_policy.h"  // #1753: the INFLIGHT timeout holds for an owed or just-fired channel
 #include "thrust_axis_policy.h"     // #1755: the boost thrust axis against an AUTO frame
+#include "pyro_restore_policy.h"    // #1760: a fire that had started is not repeated after a reset
 #include "mount_health_policy.h"    // #1755: the apps' "Mounting" dot: an AUTO frame confirmed on the pad lately
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include "servo_pin_policy.h"    // servoPinsValid(): a Beetle int -1 pin is unmapped, not GPIO 0xFFFFFFFF
@@ -389,6 +390,12 @@ typedef struct
 
 static QueueHandle_t i2s_tx_queue = nullptr;
 static TaskHandle_t  i2s_sender_task_handle = nullptr;
+// #1760: SNAPSHOT_MSG frames the queue has taken (the loop task, enqueueI2STx)
+// and the sender has written into the DMA ring (i2sSenderTask). FIFO, so the
+// Nth one queued is the Nth one written: a pyro pulse waits for the snapshot
+// that records its channel as started to be written, plus one ring.
+static std::atomic<uint32_t> i2s_snap_queued{0};
+static std::atomic<uint32_t> i2s_snap_written{0};
 
 // ==========================================================================
 // SECTION: I2C link to the Out Computer
@@ -1054,11 +1061,29 @@ enum class PyroChState : uint8_t {
     Done,       // fired; latched, prevents re-fire this flight
 };
 
+// #1760: the channel as the flight snapshot records it.
+static PyroRestorePolicy::Phase pyroPhase(PyroChState s)
+{
+    switch (s)
+    {
+    case PyroChState::ArmSettle: return PyroRestorePolicy::Phase::Settling;
+    case PyroChState::Firing:    return PyroRestorePolicy::Phase::Firing;
+    case PyroChState::Done:      return PyroRestorePolicy::Phase::Done;
+    default:                     return PyroRestorePolicy::Phase::Idle;
+    }
+}
+
 struct PyroChRuntime {
     PyroChState state          = PyroChState::Idle;
     uint32_t    phase_start_ms = 0;     // millis when current state began
     bool        cont_known     = false; // true after first cont read post-power-on
     bool        cont           = false; // last reading: true = closed (load present)
+    // #1760, while in ArmSettle: the snapshot recording this channel as
+    // started — its ordinal in i2s_snap_queued (0 = not queued yet), and when
+    // the sender was first seen to have written it.
+    uint32_t    edge_seq       = 0;
+    bool        edge_on_wire   = false;
+    uint32_t    edge_wire_ms   = 0;
 };
 
 static PyroChRuntime pyro_ch[4] = {};
@@ -1076,7 +1101,8 @@ static uint32_t      pyro_last_fire_ms      = 0;
 // no state machine.
 // --- Inflight reboot recovery ---
 // Snapshot of critical flight state, sent to OC over I2S at 10 Hz during
-// INFLIGHT and stored in OC's MRAM.  On unexpected reboot (brownout,
+// INFLIGHT, and on the pass a pyro channel starts (#1760), and stored in OC's
+// MRAM.  On unexpected reboot (brownout,
 // watchdog), FC queries OC over I2C and restores state to resume flight ops
 // with correct pyro state, EKF navigation, and flight phase.
 //
@@ -1176,10 +1202,11 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
 
     portENTER_CRITICAL(&pyro_spinlock);
     snap.pyro_apogee_detected = pyro_apogee_detected ? 1 : 0;
-    snap.pyro1_fired = (pyro_ch[0].state == PyroChState::Done) ? 1 : 0;
-    snap.pyro2_fired = (pyro_ch[1].state == PyroChState::Done) ? 1 : 0;
-    snap.pyro3_fired = (pyro_ch[2].state == PyroChState::Done) ? 1 : 0;
-    snap.pyro4_fired = (pyro_ch[3].state == PyroChState::Done) ? 1 : 0;
+    // #1760: fired, or started (settle or pulse) — both spent on a restore.
+    snap.pyro1_fired = PyroRestorePolicy::snapshotValue(pyroPhase(pyro_ch[0].state));
+    snap.pyro2_fired = PyroRestorePolicy::snapshotValue(pyroPhase(pyro_ch[1].state));
+    snap.pyro3_fired = PyroRestorePolicy::snapshotValue(pyroPhase(pyro_ch[2].state));
+    snap.pyro4_fired = PyroRestorePolicy::snapshotValue(pyroPhase(pyro_ch[3].state));
     portEXIT_CRITICAL(&pyro_spinlock);
 
     snap.ground_pressure_pa = ground_pressure_pa;
@@ -1246,7 +1273,9 @@ static void buildFlightSnapshot(FlightSnapshotData& snap, uint32_t now_ms, uint8
     snap.crc32 = computeSnapshotCRC(snap);
 }
 
-static void saveFlightSnapshot(uint32_t now_ms)
+// True when the I2S queue took the frame (#1760: the pyro edge snapshot
+// retries until it does).
+static bool saveFlightSnapshot(uint32_t now_ms)
 {
     FlightSnapshotData snap = {};
     buildFlightSnapshot(snap, now_ms);
@@ -1254,9 +1283,9 @@ static void saveFlightSnapshot(uint32_t now_ms)
     // Hand off to the I2S sender — non-blocking, runs entirely from Core 1
     // RAM.  ~13 KB/s additional bandwidth on top of the existing ~78 KB/s
     // sensor stream.  No flash, no NVS, no cache disable.
-    (void)enqueueI2STx(SNAPSHOT_MSG,
-                       reinterpret_cast<const uint8_t*>(&snap),
-                       sizeof(snap));
+    return enqueueI2STx(SNAPSHOT_MSG,
+                        reinterpret_cast<const uint8_t*>(&snap),
+                        sizeof(snap));
 }
 
 static void clearFlightSnapshot()
@@ -1821,6 +1850,9 @@ static void pyroPrelaunchContTest(uint32_t /*now_ms*/)
 // channel will leave Idle until an enabled trigger fires). Drives the
 // per-channel ArmSettle → Firing → Done state machine and computes the
 // global ARM-pin level from the union of all channel demands.
+// #1760: a snapshot is owed to the OC since a channel left Idle (loop task only).
+static bool pyro_edge_snapshot_owed = false;
+
 static void servicePyroChannels(uint32_t now_ms)
 {
     // SIM DRY-FIRE gate, decided ONCE per pass and LATCHED for the flight
@@ -1851,6 +1883,7 @@ static void servicePyroChannels(uint32_t now_ms)
 
     bool just_fired[4]  = { false, false, false, false };
     bool pulse_done[4]  = { false, false, false, false };
+    bool left_idle[4]   = { false, false, false, false };   // #1760
 
     portENTER_CRITICAL(&pyro_spinlock);
 
@@ -1903,6 +1936,9 @@ static void servicePyroChannels(uint32_t now_ms)
             if (should_fire) {
                 ch.state          = PyroChState::ArmSettle;
                 ch.phase_start_ms = now_ms;
+                ch.edge_seq       = 0;
+                ch.edge_on_wire   = false;
+                left_idle[i]      = true;
             }
         }
 
@@ -1914,8 +1950,21 @@ static void servicePyroChannels(uint32_t now_ms)
         // the only protection. PYRO_FIRE_TEST (the explicit user ground
         // test) is deliberately NOT gated — that command means "energize
         // this channel now" regardless of sim state.
+        // #1760: and not before the OC holds the snapshot that records this
+        // channel as started — the sender has written it into the DMA ring
+        // and a ring's time has passed — so a fire whose own short resets the
+        // FC is never repeated. Capped (kMaxPulseWaitMs): a stalled link
+        // never holds a deployment back longer.
+        if (ch.state == PyroChState::ArmSettle && ch.edge_seq != 0 && !ch.edge_on_wire &&
+            (int32_t)(i2s_snap_written.load() - ch.edge_seq) >= 0) {
+            ch.edge_on_wire = true;
+            ch.edge_wire_ms = now_ms;
+        }
         if (ch.state == PyroChState::ArmSettle &&
-            (now_ms - ch.phase_start_ms) >= config::PYRO_ARM_SETTLE_MS) {
+            PyroRestorePolicy::pulseMayStart(now_ms - ch.phase_start_ms,
+                                             config::PYRO_ARM_SETTLE_MS,
+                                             ch.edge_on_wire, now_ms - ch.edge_wire_ms,
+                                             i2s_stream.txRingUs() / 1000u + 1u)) {
             if (!dry) {
                 gpio_set_level((gpio_num_t)PYRO_FIRE_PINS[i], 1);
             }
@@ -1972,6 +2021,26 @@ static void servicePyroChannels(uint32_t now_ms)
     pyroSetArmLocked(any_demand && !dry);
 
     portEXIT_CRITICAL(&pyro_spinlock);
+
+    // #1760: tell the OC NOW that a channel has started, off the 10 Hz
+    // cadence, and hold its pulse (above) until that frame is there, so the
+    // OC's snapshot says "started" before the channel's FET turns on, whatever
+    // resets the FC after that — the fire's own short included — and the
+    // restore treats the channel as spent instead of firing it again on every
+    // boot. Non-blocking: an I2S enqueue, as every snapshot; a full queue
+    // refuses it, so it is owed and tried again every pass until taken. Each
+    // channel still settling with no frame yet is recorded against this one.
+    if (PyroRestorePolicy::edgeSnapshotDue(left_idle)) pyro_edge_snapshot_owed = true;
+    if (pyro_edge_snapshot_owed && saveFlightSnapshot(now_ms)) {
+        pyro_edge_snapshot_owed = false;
+        const uint32_t seq = i2s_snap_queued.load();
+        portENTER_CRITICAL(&pyro_spinlock);
+        for (int i = 0; i < 4; ++i) {
+            if (pyro_ch[i].state == PyroChState::ArmSettle && pyro_ch[i].edge_seq == 0)
+                pyro_ch[i].edge_seq = seq;
+        }
+        portEXIT_CRITICAL(&pyro_spinlock);
+    }
 
     for (int i = 0; i < 4; ++i) {
         if (just_fired[i]) {
@@ -2133,6 +2202,7 @@ static inline bool enqueueI2STx(uint8_t type, const uint8_t *payload, size_t len
     if (xQueueSend(i2s_tx_queue, &msg, 0) == pdTRUE)
     {
         i2s_tx_enqueue_ok++;
+        if (type == SNAPSHOT_MSG) i2s_snap_queued.fetch_add(1);   // #1760
         return true;
     }
 
@@ -3474,6 +3544,7 @@ static void i2sSenderTask(void *)
                 if (xQueueReceive(i2s_tx_queue, &msg, 0) == pdTRUE)
                 {
                     err = i2sSendWithStats(msg.type, msg.payload, msg.len);
+                    if (msg.type == SNAPSHOT_MSG) i2s_snap_written.fetch_add(1);   // #1760
                 }
                 break;
             case I2sTxFillPolicy::Step::IdleFill:
@@ -9213,23 +9284,33 @@ static void setup_fc()
                 burnout_time_ms = launch_time_millis + snap.burnout_elapsed_ms;
             }
 
-            // Restore pyro state (safety-critical: no double-fire, no missed fire).
-            // With per-fire arming, ARM is never persistent — any channel
-            // whose trigger condition is still met will re-arm and fire via
-            // servicePyroChannels(). We only need to lock in fired channels
-            // so they aren't re-fired.
+            // Restore pyro state (safety-critical: no double-fire). With
+            // per-fire arming, ARM is never persistent — any channel whose
+            // trigger condition is still met will re-arm and fire via
+            // servicePyroChannels(). A channel the snapshot records as fired,
+            // OR as started (in its settle or pulse when the FC reset), stays
+            // off: #1760, a fire that had started is never repeated, so one
+            // whose own short reset the FC cannot fire again on every boot.
             portENTER_CRITICAL(&pyro_spinlock);
             const uint8_t fired_snap[4] = { snap.pyro1_fired, snap.pyro2_fired,
                                             snap.pyro3_fired, snap.pyro4_fired };
+            bool spent[4] = { false, false, false, false };
             for (int i = 0; i < 4; ++i) {
-                pyro_ch[i].state          = fired_snap[i] ? PyroChState::Done : PyroChState::Idle;
+                spent[i]                  = PyroRestorePolicy::restoredSpent(fired_snap[i]);
+                pyro_ch[i].state          = spent[i] ? PyroChState::Done : PyroChState::Idle;
                 pyro_ch[i].phase_start_ms = 0;
             }
             portEXIT_CRITICAL(&pyro_spinlock);
+            for (int i = 0; i < 4; ++i) {
+                if (PyroRestorePolicy::restoredMidFire(fired_snap[i])) {
+                    ESP_LOGW(TAG, "[RECOVERY] Pyro CH%d was mid-fire at the reset: treated "
+                                  "as fired, not repeated (#1760)", i + 1);
+                }
+            }
             // #1753: the snapshot does not say when a fired channel fired, so
             // the timeout's after-fire hold runs from this boot: a restore
             // under a late main is not declared LANDED in the air.
-            pyro_fired_this_flight = fired_snap[0] || fired_snap[1] || fired_snap[2] || fired_snap[3];
+            pyro_fired_this_flight = spent[0] || spent[1] || spent[2] || spent[3];
             pyro_last_fire_ms      = now_ms;
 
             // #834 item 4: the sensor stack has just come up cold while the
@@ -9604,6 +9685,7 @@ static void resetFlightStateForSim(const char* edge)
     // Also resets GNSS state: the sim injects synthetic GNSS (fix=3, sats=12);
     // a stale copy would otherwise immediately re-trip READY -> PRELAUNCH.
     pyroSafeAll();
+    pyro_edge_snapshot_owed = false;   // #1760
     // #1104: whichever edge brought us here, the flight the sim was driving is
     // over.  Drop the dry-fire latch (the START edge re-sets it right after
     // this returns) and re-sync the edge detector, so the handler in loop_fc()
@@ -10022,6 +10104,7 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     pyro_apogee_detected = false;
     pyro_apogee_time_ms  = 0;
     pyro_fired_this_flight = false;   // #1753: the timeout's after-fire hold is per flight
+    pyro_edge_snapshot_owed = false;  // #1760: a frame owed to a previous flight is not this one's
     pyro_last_fire_ms      = 0;
     // #382: re-arm the per-flight settings snapshot (#165) —
     // without this only the first flight/sim per boot emitted
