@@ -68,6 +68,7 @@ struct board_pins
     // designed. Logging goes to the spiffs partition on U1.
     static constexpr bool HAS_SDMMC    = false;
     static constexpr bool HAS_EXT_NAND = false;
+    static constexpr bool HAS_EXT_NOR  = false;  // a SPI NOR log flash: the Tinker-Base V2 only
     static constexpr int FLASH_SCK  = -1;
     static constexpr int FLASH_MOSI = -1;
     static constexpr int FLASH_CS   = -1;

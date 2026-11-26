@@ -35,6 +35,7 @@ struct board_pins
     // --- Storage: external SPI NAND (FORESEE F35SQB004G) ---
     static constexpr bool HAS_SDMMC    = false;
     static constexpr bool HAS_EXT_NAND = true;
+    static constexpr bool HAS_EXT_NOR  = false;  // a SPI NOR log flash: the Tinker-Base V2 only
     static constexpr int FLASH_SCK  = 4;   // M_SCK
     static constexpr int FLASH_MOSI = 5;   // M_MOSI
     static constexpr int FLASH_CS   = 6;   // M_FLASH_CS

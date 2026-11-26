@@ -29,6 +29,9 @@ idf_component_register(
         vfs
         spi_nand_flash
         spi_nand_flash_fatfs
+        spi_flash            # Tinker-Base V2: esp_flash on the U23 SPI NOR (SPI3_HOST)
+        esp_partition        #   registered as an external data/fat partition
+        wear_levelling       #   and mounted as FAT through wear levelling
 )
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error -Wno-format)
 

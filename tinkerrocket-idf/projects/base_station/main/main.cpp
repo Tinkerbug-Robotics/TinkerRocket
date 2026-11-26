@@ -19,6 +19,9 @@
 #include <driver/spi_common.h>
 #include <driver/spi_master.h>
 #include <esp_vfs_fat_nand.h>
+#include <esp_flash.h>              // Tinker-Base V2: the U23 SPI NOR log flash
+#include <esp_flash_spi_init.h>     //   spi_bus_add_flash_device on SPI3_HOST
+#include <wear_levelling.h>         //   FAT on NOR goes through wear levelling
 #include <driver/i2c_master.h>
 #include <esp_adc/adc_oneshot.h>   // #835 item 2: own-battery divider read
 #include <esp_adc/adc_cali.h>
@@ -282,6 +285,11 @@ static bool using_external_flash = false;   // V2/V3: FAT on the external SPI fl
 static bool storage_demoted      = false;
 static spi_device_handle_t      s_ext_spi = nullptr;
 static spi_nand_flash_device_t *s_nand    = nullptr;
+// HAS_EXT_NOR (the Tinker-Base V2's U23): the esp_flash chip, the partition
+// registered over the whole of it, and the wear-levelling handle FAT sits on.
+static esp_flash_t*             s_nor      = nullptr;
+static const esp_partition_t*   s_nor_part = nullptr;
+static wl_handle_t              s_nor_wl   = WL_INVALID_HANDLE;
 
 // ==========================================================================
 // SECTION: External flash and FAT mount
@@ -299,11 +307,18 @@ enum : uint8_t
     NAND_STEP_READY     = 3,   // RESET + ready poll (below; not in the driver)
     NAND_STEP_NAND_INIT = 4,   // spi_nand_flash_init_device (probe + FTL attach)
     NAND_STEP_FAT_MOUNT = 5,   // esp_vfs_fat_nand_mount
+    // The external SPI NOR (HAS_EXT_NOR) shares the latches; its own steps.
+    // BUS_INIT and ADD_DEV above apply to it too.
+    NOR_STEP_READY      = 6,   // WIP poll on the raw device, before esp_flash
+    NOR_STEP_FLASH_INIT = 7,   // spi_bus_add_flash_device + esp_flash_init
+    NOR_STEP_PART_REG   = 8,   // esp_partition_register_external
+    NOR_STEP_FAT_MOUNT  = 9,   // esp_vfs_fat_spiflash_mount_rw_wl
 };
 static uint8_t   nand_fail_step = NAND_STEP_NONE;  // step that failed on the LAST attempt
 static esp_err_t nand_fail_err  = ESP_OK;          // its error code
 static uint8_t   nand_attempts  = 0;               // attempts actually made
 static uint8_t   nand_mfr_id    = 0x00;            // raw byte from the 9Fh pre-probe
+static uint32_t  nor_jedec_id   = 0;               // NOR: raw 3-byte 9Fh pre-probe (expect 0xC84018)
 
 static const char* nandStepName(uint8_t step)
 {
@@ -314,6 +329,10 @@ static const char* nandStepName(uint8_t step)
         case NAND_STEP_READY:     return "NAND reset/ready poll";
         case NAND_STEP_NAND_INIT: return "spi_nand_flash_init_device";
         case NAND_STEP_FAT_MOUNT: return "esp_vfs_fat_nand_mount";
+        case NOR_STEP_READY:      return "NOR WIP poll";
+        case NOR_STEP_FLASH_INIT: return "esp_flash_init";
+        case NOR_STEP_PART_REG:   return "esp_partition_register_external";
+        case NOR_STEP_FAT_MOUNT:  return "esp_vfs_fat_spiflash_mount_rw_wl";
         default:                  return "none";
     }
 }
@@ -576,6 +595,207 @@ static esp_err_t mountExternalFlashFat()
     ESP_LOGE(TAG, "SPI NAND bring-up failed on all %u attempts; last failing step: %s (0x%x)",
              config::NAND_MOUNT_ATTEMPTS, nandStepName(nand_fail_step), (int)nand_fail_err);
     return e;
+}
+
+// ── External SPI NOR (HAS_EXT_NOR: the Tinker-Base V2's U23) ─────────
+//
+// A GD25Q128E (16 MB) on SPI3_HOST, 1-bit (/WP and /HOLD are pulled up, not
+// wired to the MCU). esp_flash drives the chip; the whole of it is registered
+// as one external data/fat partition; FAT mounts on it through wear levelling
+// (a NOR has no FTL of its own, and FAT rewrites its table and directory
+// sectors on every commit); and the result is /extflash, the NAND's mount
+// point, so everything downstream of the mount is the same code.
+//
+// The bring-up mirrors the NAND's (#761): bounded attempts, each torn back
+// down to a cold bus, format only on the last, the last on the fallback clock.
+static constexpr uint8_t NOR_CMD_RDSR    = 0x05;
+static constexpr uint8_t NOR_CMD_READ_ID = 0x9F;
+static constexpr uint8_t NOR_SR_WIP      = 0x01;   // write/erase in progress
+
+// Wait out an erase or program the chip may still be running: a reset of the
+// MCU alone (the one that follows a flash, a watchdog, a panic) leaves U23
+// powered and can land mid-erase. A NOR ignores
+// everything but RDSR while WIP is set, so esp_flash's first command (READ ID)
+// would read nothing and fail the probe. Waiting lets the erase finish rather
+// than aborting it with a software reset, which would leave a half-erased
+// sector under the wear-levelling layer.
+static esp_err_t norWaitReady()
+{
+    const uint32_t deadline = millis() + config::NOR_READY_TIMEOUT_MS;
+    for (;;)
+    {
+        uint8_t sr = 0xFF;
+        esp_err_t e = nandRawCmd(NOR_CMD_RDSR, 0, 0, &sr, 1);   // raw half-duplex command, no address
+        if (e != ESP_OK) return e;
+        if ((sr & NOR_SR_WIP) == 0) return ESP_OK;
+        if ((int32_t)(millis() - deadline) >= 0) return ESP_ERR_TIMEOUT;
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+// Undo whatever this attempt set up, in reverse order. The FAT/WL mount cleans
+// up after itself when it fails, so it never needs undoing here.
+static void tearDownExtNor(bool bus_up)
+{
+    if (s_nor_part) { esp_partition_deregister_external(s_nor_part); s_nor_part = nullptr; }
+    if (s_nor)      { spi_bus_remove_flash_device(s_nor);            s_nor      = nullptr; }
+    if (s_ext_spi)  { spi_bus_remove_device(s_ext_spi);              s_ext_spi  = nullptr; }
+    if (bus_up) spi_bus_free(SPI3_HOST);
+}
+
+static esp_err_t mountExternalNorFatAttempt(uint8_t attempt, uint32_t clock_hz, bool allow_format)
+{
+    const uint8_t attempts  = config::NAND_MOUNT_ATTEMPTS;
+    const int     clock_mhz = (int)(clock_hz / 1000000);
+
+    spi_bus_config_t buscfg = {};
+    buscfg.mosi_io_num   = config::FLASH_MOSI;
+    buscfg.miso_io_num   = config::FLASH_MISO;
+    buscfg.sclk_io_num   = config::FLASH_SCK;
+    buscfg.quadwp_io_num = -1;   // pulled up on the board (R59), not on the MCU
+    buscfg.quadhd_io_num = -1;   // R60, likewise
+    esp_err_t e = spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO);
+    if (e != ESP_OK)
+    {
+        ESP_LOGW(TAG, "ext-NOR [%u/%u] SPI bus init failed (0x%x)", attempt, attempts, (int)e);
+        nand_fail_step = NAND_STEP_BUS_INIT; nand_fail_err = e;
+        if (e == ESP_ERR_INVALID_STATE) spi_bus_free(SPI3_HOST);   // see the NAND path
+        return e;
+    }
+
+    // A plain device first, for the WIP poll and the raw ID; esp_flash gets the
+    // bus once the chip is idle. Same CS, so the two never coexist.
+    spi_device_interface_config_t devcfg = {};
+    devcfg.clock_speed_hz = clock_mhz * 1000 * 1000;
+    devcfg.mode           = 0;
+    devcfg.spics_io_num   = config::FLASH_CS;
+    devcfg.queue_size     = 1;
+    devcfg.flags          = SPI_DEVICE_HALFDUPLEX;
+    e = spi_bus_add_device(SPI3_HOST, &devcfg, &s_ext_spi);
+    if (e != ESP_OK)
+    {
+        ESP_LOGW(TAG, "ext-NOR [%u/%u] add raw SPI device failed (0x%x)", attempt, attempts, (int)e);
+        nand_fail_step = NAND_STEP_ADD_DEV; nand_fail_err = e;
+        tearDownExtNor(true);
+        return e;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(config::NAND_SETTLE_MS));
+    e = norWaitReady();
+    // The raw ID goes to the log either way: C8 40 18 is the GD25Q128E, and
+    // 00 00 00 / FF FF FF is a floating MISO (absent or unpowered chip, or a
+    // CS/MISO fault), which needs a different fix from a wrong part.
+    uint8_t id[3] = {0, 0, 0};
+    if (e == ESP_OK) nandRawCmd(NOR_CMD_READ_ID, 0, 0, id, 3);
+    nor_jedec_id = ((uint32_t)id[0] << 16) | ((uint32_t)id[1] << 8) | id[2];
+    spi_bus_remove_device(s_ext_spi);
+    s_ext_spi = nullptr;
+    if (e != ESP_OK)
+    {
+        ESP_LOGW(TAG, "ext-NOR [%u/%u] WIP poll failed (0x%x)%s", attempt, attempts, (int)e,
+                 e == ESP_ERR_TIMEOUT ? " -- busy past the longest sector erase (absent, unpowered or wedged)" : "");
+        nand_fail_step = NOR_STEP_READY; nand_fail_err = e;
+        tearDownExtNor(true);
+        return e;
+    }
+
+    esp_flash_spi_device_config_t fcfg = {};
+    fcfg.host_id        = SPI3_HOST;
+    fcfg.cs_io_num      = config::FLASH_CS;
+    fcfg.io_mode        = SPI_FLASH_FASTRD;   // 1-bit, 0Bh with a dummy byte
+    fcfg.input_delay_ns = 0;                   // unknown; 0 is the documented default
+    fcfg.cs_id          = 0;                   // ignored off SPI1
+    fcfg.freq_mhz       = clock_mhz;
+    e = spi_bus_add_flash_device(&s_nor, &fcfg);
+    if (e == ESP_OK) e = esp_flash_init(s_nor);
+    if (e != ESP_OK)
+    {
+        ESP_LOGW(TAG, "ext-NOR [%u/%u] esp_flash init failed (0x%x) -- raw JEDEC id 0x%06lx, expected 0xc84018",
+                 attempt, attempts, (int)e, (unsigned long)nor_jedec_id);
+        nand_fail_step = NOR_STEP_FLASH_INIT; nand_fail_err = e;
+        tearDownExtNor(true);
+        return e;
+    }
+
+    uint32_t size = 0, id_read = 0;
+    esp_flash_get_size(s_nor, &size);
+    esp_flash_read_id(s_nor, &id_read);
+    ESP_LOGI(TAG, "SPI NOR up [%u/%u]: JEDEC 0x%06lx, %lu MB @ %d MHz",
+             attempt, attempts, (unsigned long)id_read,
+             (unsigned long)(size / (1024 * 1024)), clock_mhz);
+    if (size != config::NOR_EXPECTED_BYTES)
+        ESP_LOGW(TAG, "ext-NOR: chip reports %lu bytes, U23 is %lu -- mounting what the chip reports",
+                 (unsigned long)size, (unsigned long)config::NOR_EXPECTED_BYTES);
+
+    e = esp_partition_register_external(s_nor, 0, size, config::NOR_PARTITION_LABEL,
+                                        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT,
+                                        &s_nor_part);
+    if (e != ESP_OK)
+    {
+        ESP_LOGW(TAG, "ext-NOR [%u/%u] partition register failed (0x%x)", attempt, attempts, (int)e);
+        nand_fail_step = NOR_STEP_PART_REG; nand_fail_err = e;
+        s_nor_part = nullptr;
+        tearDownExtNor(true);
+        return e;
+    }
+
+    esp_vfs_fat_mount_config_t mcfg = {};
+    mcfg.format_if_mount_failed = allow_format;
+    mcfg.max_files              = 5;
+    mcfg.allocation_unit_size   = CONFIG_WL_SECTOR_SIZE;   // one cluster per erase sector
+    e = esp_vfs_fat_spiflash_mount_rw_wl("/extflash", config::NOR_PARTITION_LABEL, &mcfg, &s_nor_wl);
+    if (e != ESP_OK)
+    {
+        ESP_LOGW(TAG, "ext-NOR [%u/%u] FAT mount failed (0x%x)%s", attempt, attempts, (int)e,
+                 allow_format ? "" : " -- format withheld until the final attempt");
+        nand_fail_step = NOR_STEP_FAT_MOUNT; nand_fail_err = e;
+        s_nor_wl = WL_INVALID_HANDLE;
+        tearDownExtNor(true);
+        return e;
+    }
+
+    SD_MOUNT_POINT = "/extflash";
+    using_external_flash = true;
+    ESP_LOGI(TAG, "External NOR FAT mounted at %s (wear-levelled, %d KB sectors)",
+             SD_MOUNT_POINT, CONFIG_WL_SECTOR_SIZE / 1024);
+    return ESP_OK;
+}
+
+static esp_err_t mountExternalNorFat()
+{
+    esp_err_t e = ESP_FAIL;
+    for (uint8_t attempt = 1; attempt <= config::NAND_MOUNT_ATTEMPTS; ++attempt)
+    {
+        const auto plan = bs_storage_policy::planAttempt(
+            attempt, config::NAND_MOUNT_ATTEMPTS,
+            config::NOR_CLOCK_HZ, config::NOR_CLOCK_FALLBACK_HZ);
+
+        nand_attempts = attempt;
+        e = mountExternalNorFatAttempt(attempt, plan.clock_hz, plan.allow_format);
+        if (e == ESP_OK)
+        {
+            if (attempt > 1)
+                ESP_LOGW(TAG, "SPI NOR came up on attempt %u/%u (last failure: %s, 0x%x)%s",
+                         attempt, config::NAND_MOUNT_ATTEMPTS,
+                         nandStepName(nand_fail_step), (int)nand_fail_err,
+                         plan.clock_hz != config::NOR_CLOCK_HZ ? " -- on the reduced bring-up clock" : "");
+            return ESP_OK;
+        }
+        if (!plan.is_last) vTaskDelay(pdMS_TO_TICKS(config::NAND_MOUNT_RETRY_DELAY_MS));
+    }
+
+    ESP_LOGE(TAG, "SPI NOR bring-up failed on all %u attempts; last failing step: %s (0x%x)",
+             config::NAND_MOUNT_ATTEMPTS, nandStepName(nand_fail_step), (int)nand_fail_err);
+    return e;
+}
+
+// What the log is on, for the log lines. The storage frame's `backend` says
+// 2 for either external flash: the apps know 0/1/2 only.
+static const char* storageBackendName()
+{
+    if (using_internal_flash) return "Internal flash";
+    if (using_external_flash) return config::HAS_EXT_NOR ? "External NOR" : "External NAND";
+    return "SD card";
 }
 static const char* SPIFFS_PARTITION_LABEL = "spiffs";
 
@@ -1903,7 +2123,7 @@ static void logLoRaPacket(const uint8_t* frame, size_t frame_len,
         if (total > 0 && used > (total * 9 / 10))
         {
             ESP_LOGW(TAG, "[LOG] %s nearly full! %llu/%llu bytes (%.0f%%)",
-                     using_internal_flash ? "Internal flash" : using_external_flash ? "External NAND" : "SD card",
+                     storageBackendName(),
                      (unsigned long long)used, (unsigned long long)total,
                      (double)used * 100.0 / (double)total);
         }
@@ -4737,6 +4957,7 @@ static void setup_bs()
     tzset();
 
     // Initialize storage. V2/V3 -> wear-leveled FAT on the external SPI NAND;
+    // the Tinker-Base V2 -> wear-levelled FAT on its external SPI NOR;
     // V1 -> SD over SDMMC 4-bit. Either way, fall back to SPIFFS on
     // internal flash. Logging is backend-agnostic (uses SD_MOUNT_POINT + the
     // standard file API), so only the mount differs per board.
@@ -4745,6 +4966,10 @@ static void setup_bs()
         if (config::HAS_EXT_NAND)
         {
             ret = mountExternalFlashFat();   // logs its own info; repoints SD_MOUNT_POINT on success
+        }
+        else if (config::HAS_EXT_NOR)
+        {
+            ret = mountExternalNorFat();     // likewise, /extflash on success
         }
         else if (config::HAS_SDMMC)
         {
@@ -4825,17 +5050,25 @@ static void setup_bs()
         // infer it from a backend label, and say it once, loudly, in the boot
         // log with the step that actually failed.
         storage_demoted = bs_storage_policy::demoted(
-            config::HAS_EXT_NAND || config::HAS_SDMMC, using_internal_flash);
+            config::HAS_PRIMARY_STORAGE, using_internal_flash);
         if (storage_demoted)
         {
             ESP_LOGE(TAG, "**** STORAGE DEMOTED: logging to internal flash (~1.9 MB), NOT the "
-                          "%s ****", config::HAS_EXT_NAND ? "512 MB NAND" : "SD card");
+                          "%s ****", config::HAS_EXT_NAND ? "512 MB NAND"
+                                   : config::HAS_EXT_NOR  ? "16 MB NOR log flash" : "SD card");
             if (config::HAS_EXT_NAND)
             {
                 ESP_LOGE(TAG, "**** last failing step: %s (0x%x) after %u attempt(s); "
                               "NAND mfr id read back 0x%02x (expect 0xcd) ****",
                          nandStepName(nand_fail_step), (int)nand_fail_err,
                          nand_attempts, nand_mfr_id);
+            }
+            else if (config::HAS_EXT_NOR)
+            {
+                ESP_LOGE(TAG, "**** last failing step: %s (0x%x) after %u attempt(s); "
+                              "NOR JEDEC id read back 0x%06lx (expect 0xc84018) ****",
+                         nandStepName(nand_fail_step), (int)nand_fail_err,
+                         nand_attempts, (unsigned long)nor_jedec_id);
             }
             ESP_LOGE(TAG, "**** a flight logged in this state truncates at the partition size ****");
         }
@@ -4851,8 +5084,7 @@ static void setup_bs()
                 fprintf(test, "ok\n");
                 fclose(test);
                 remove(test_path);
-                ESP_LOGI(TAG, "Storage write test: OK (%s)",
-                         using_internal_flash ? "internal flash" : using_external_flash ? "external NAND" : "SD card");
+                ESP_LOGI(TAG, "Storage write test: OK (%s)", storageBackendName());
             }
             else
             {
