@@ -244,11 +244,31 @@ bool TR_GNSSAuto::begin(uint8_t update_rate_hz,
     // own, and the probes run (TR_GNSSReceiverUBlox_Serial never tries them)
     ublox_swapped = false;
 #endif
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    // A restored flight with the u-blox or nothing known (#1765): the u-blox's
+    // probes for kBudgetRestoredMs, its driver only if one answered, no search
+    // and no second look -- the flight logic waits on this.
+    const bool restored_flight = !begin_wait_;
+#else
+    constexpr bool restored_flight = false;
+#endif
     gnss_detect::BringUp up;
-    up.start(rememberedType(), ublox_baud, kept_power, ublox_swapped, kLookForPx1105r);
+    up.start(rememberedType(), ublox_baud, kept_power, ublox_swapped, kLookForPx1105r, restored_flight);
+    if (restored_flight)
+    {
+        ESP_LOGW(TAG, "GNSS auto: a restored flight (last boot: %s): the u-blox's probes for %lu s, its driver "
+                      "only if one answers, no search (#1765)",
+                 nameOr(rememberedType(), "nothing known"),
+                 static_cast<unsigned long>(gnss_detect::kBudgetRestoredMs / 1000));
+    }
     ESP_LOGI(TAG, "GNSS auto: which receiver is on J1 (RX=%u TX=%u)? Last boot: %s",
              rx_pin_, tx_pin_, nameOr(rememberedType(), "nothing known"));
-    if (up.plan().n == 0)
+    if (up.plan().n == 0 && restored_flight)
+    {
+        ESP_LOGW(TAG, "GNSS auto: the u-blox driver last found its receiver on swapped wires, which the probes "
+                      "cannot hear: a restored flight does not wait on its search -- GNSS-absent (#1765)");
+    }
+    else if (up.plan().n == 0)
     {
         ESP_LOGI(TAG, "GNSS auto: the u-blox driver last found its receiver on swapped wires: "
                       "straight to it, no probes");
@@ -262,6 +282,7 @@ bool TR_GNSSAuto::begin(uint8_t update_rate_hz,
             case gnss_detect::BringUp::Step::SECOND_LOOK:
             {
                 const bool second = up.step() == gnss_detect::BringUp::Step::SECOND_LOOK;
+                if (second && flightFoundLate(up)) break;
                 runPlan(up.plan());
                 uartClose();
                 if (detector_.found() != GNSS_TYPE_NONE)
@@ -297,7 +318,13 @@ bool TR_GNSSAuto::begin(uint8_t update_rate_hz,
                 // Before the driver runs: a crash inside it must find the
                 // receiver remembered (see the header).
                 storeHint(up.hint());
-                if (up.step() == gnss_detect::BringUp::Step::DONE && up.plan().fallback == GNSS_TYPE_NONE && !second)
+                if (up.step() == gnss_detect::BringUp::Step::DONE && up.restoredFlight() &&
+                    detector_.found() == GNSS_TYPE_NONE)
+                {
+                    ESP_LOGW(TAG, "GNSS auto: no u-blox answered in %lu ms: the restored flight goes on GNSS-absent",
+                             static_cast<unsigned long>(detector_.elapsedMs()));
+                }
+                else if (up.step() == gnss_detect::BringUp::Step::DONE && up.plan().fallback == GNSS_TYPE_NONE && !second)
                 {
                     ESP_LOGW(TAG, "GNSS auto: the mosaic-G5 that was here last boot did not answer in %lu s; "
                                   "continuing without GNSS",
@@ -307,6 +334,8 @@ bool TR_GNSSAuto::begin(uint8_t update_rate_hz,
             }
             case gnss_detect::BringUp::Step::BEGIN_UBLOX:
             {
+                // its 60 s search for nothing proven: not if a flight is in progress after all
+                if (up.proven() == GNSS_TYPE_NONE && flightFoundLate(up)) break;
                 const bool ok = ublox_.begin(ublox_rate_hz_, GNSS_RX, GNSS_TX, reset_n_pin, safeboot_n_pin);
                 up.driverResult(ok);
                 if (!ok && up.step() == gnss_detect::BringUp::Step::SECOND_LOOK)
@@ -455,6 +484,26 @@ bool TR_GNSSAuto::geoidSeparationM(float& sep_m) const
 void TR_GNSSAuto::requestNavResend()
 {
     if (type_ == GNSS_TYPE_MOSAIC) mosaic().requestNavResend();
+}
+
+// A flight in progress found late (#1765): asked (setFlightCheck) only when
+// the boot's own ask had no answer and the bring-up is about to wait on a
+// search or a second look. True ends the bring-up there (BringUp::flightFoundLate).
+bool TR_GNSSAuto::flightFoundLate(gnss_detect::BringUp& up)
+{
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    if (up.restoredFlight() || flight_check_ == nullptr || !flight_check_()) return false;
+    up.flightFoundLate();
+    if (up.step() != gnss_detect::BringUp::Step::DONE) return false;
+    // GNSS-absent from here: the UART as the second look's runPlan would have
+    // left it, not on the u-blox driver's last pin mapping
+    uartClose();
+    ESP_LOGW(TAG, "GNSS auto: a flight in progress after all (the OC answered late): no search -- GNSS-absent (#1765)");
+    return true;
+#else
+    (void)up;
+    return false;
+#endif
 }
 
 #if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW

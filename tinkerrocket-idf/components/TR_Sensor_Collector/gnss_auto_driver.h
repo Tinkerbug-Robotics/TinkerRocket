@@ -102,6 +102,10 @@ public:
     // A restored flight: no probes, the hinted raw receiver's driver at once
     // (its own setBeginWait(false)). Before begin().
     void setBeginWait(bool wait) { begin_wait_ = wait; }
+    // Asked when the boot's own ask had no answer, before the u-blox driver's
+    // search or the second look: is a flight in progress after all (#1765)?
+    // Before begin(); null asks nothing.
+    void setFlightCheck(bool (*check)()) { flight_check_ = check; }
     // Whether the receiver in use gives raw measurements (mosaic-G5, PX1105R,
     // gnss-sdr-dev board): the raw-GNSS filter's receiver.
     bool rawReceiver() const;
@@ -134,6 +138,7 @@ public:
 
 private:
     void runPlan(const gnss_detect::Plan& plan);
+    bool flightFoundLate(gnss_detect::BringUp& up);
     bool uartOpen(uint32_t baud);
     void uartClose();
     void storeHint(uint8_t type);
@@ -172,6 +177,7 @@ private:
     bool                          raw_wanted_ = false;   // enableRawOutputs() came
     bool                          raw_failed_ = false;   // the driver built could not make them
     bool                          begin_wait_ = true;
+    bool                          (*flight_check_)() = nullptr;
     // Build the driver of `type` (mosaic, board, PX1105R) in the block: its
     // PPS pin and its raw outputs as asked before begin(). False for another
     // type once one is built.

@@ -7306,7 +7306,31 @@ struct OcSnapshotAnswer
                                // store still holds it, so the boot clears it
 };
 
-static OcSnapshotAnswer fcAskOcForFlightSnapshot()
+// attempts: 5 (~1.75 s while the OC does not answer) unless a caller asks fewer
+static OcSnapshotAnswer fcAskOcForFlightSnapshot(int attempts = 5);
+
+#if TR_RAW_NAV_AUTO
+// #1765: the GNSS bring-up's late ask (TR_GNSSAuto::setFlightCheck), made only
+// when the boot's early ask had no definitive answer, before the u-blox
+// driver's search and before the second look. One attempt each, so an OC that
+// never answers costs a boot little more than before. A definitive answer
+// stops the asking, and the restore takes it as it takes the early one.
+static bool s_boot_ask_definitive = false;
+static OcSnapshotAnswer s_late_ask = {};
+static bool fcFlightFoundLate()
+{
+    if (s_boot_ask_definitive) return false;
+    const OcSnapshotAnswer a = fcAskOcForFlightSnapshot(1);
+    if (a.valid || a.answered_no_flight)
+    {
+        s_boot_ask_definitive = true;
+        s_late_ask = a;
+    }
+    return a.valid;
+}
+#endif
+
+static OcSnapshotAnswer fcAskOcForFlightSnapshot(int attempts)
 {
     OcSnapshotAnswer answer = {};
     FlightSnapshotData& snap = answer.snap;
@@ -7327,7 +7351,7 @@ static OcSnapshotAnswer fcAskOcForFlightSnapshot()
         // continue. An OC from before that answer stays silent when it
         // holds no flight, so on one every boot still spends the five
         // tries.
-        constexpr int kRecoveryAttempts = 5;
+        const int kRecoveryAttempts = attempts > 0 ? attempts : 5;
         (void)out_ready;   // no longer a precondition — see below
         bool definitive = false;
         for (int attempt = 0; attempt < kRecoveryAttempts && !definitive;
@@ -8122,27 +8146,45 @@ static void setup_fc()
     // crash boot still leaves it out (below). A definitive answer is used
     // again by the restore below; anything else (the OC still booting after a
     // brownout of both) is asked again there, as before. On a pad boot this is
-    // the one I2C exchange the later ask would have made.
+    // the one I2C exchange the later ask would have made when the OC answers;
+    // an OC still starting costs its retries (up to ~1.75 s) here, one try at
+    // each of the GNSS bring-up's late asks on the one image, and the
+    // restore's ask.
 #if TR_RAW_NAV_AUTO
-    // The one image asks when the receiver last boot gave measurements (the
-    // mosaic's and the PX1105R's search, the board's 2 s round: a flight in
-    // progress skips the probes and starts that receiver's driver at once,
-    // TR_GNSSAuto::setBeginWait); with the u-blox or none it boots as the
-    // auto image does, and asks below.
+    // The one image asks whatever the receiver last boot was (#1765). With one
+    // that gave measurements (the mosaic's and the PX1105R's search, the
+    // board's 2 s round) a flight in progress skips the probes and starts that
+    // receiver's driver at once (TR_GNSSAuto::setBeginWait). With the u-blox
+    // or nothing known it used to ask only after the full bring-up: on a silent
+    // J1, probes, the u-blox driver's 60 s search and a second look, about
+    // 70 s with no flight logic. A flight in progress now gets the u-blox's
+    // probes for 3 s and, if one answers, its driver; silent, the flight
+    // resumes GNSS-absent (gnss_detect.h kBudgetRestoredMs).
     const uint8_t raw_boot_hint = sensor_collector_hw.gnssLastBootType();
-    const OcSnapshotAnswer raw_boot_ask = gnssTypeGivesRaw(raw_boot_hint) ? fcAskOcForFlightSnapshot()
-                                                                          : OcSnapshotAnswer{};
-#else
-    const OcSnapshotAnswer raw_boot_ask = fcAskOcForFlightSnapshot();
 #endif
+    const OcSnapshotAnswer raw_boot_ask = fcAskOcForFlightSnapshot();
     const bool raw_boot_ask_definitive = raw_boot_ask.valid || raw_boot_ask.answered_no_flight;
+#if TR_RAW_NAV_AUTO
+    // No answer (the OC still starting after a brownout of both): the
+    // bring-up asks again before the u-blox driver's 60 s search or its
+    // second look, and stops there on a flight in progress (#1765).
+    s_boot_ask_definitive = raw_boot_ask_definitive;
+    sensor_collector_hw.setGnssFlightCheck(fcFlightFoundLate);
+#endif
     if (raw_boot_ask.valid)
     {
         sensor_collector_hw.deferGNSSBringUpThisBoot();
 #if TR_RAW_NAV_AUTO
-        ESP_LOGW(TAG, "[RECOVERY] a flight is in progress: the boot does not wait on the %s -- its GNSS poll task "
-                      "brings it up when it answers, and the flight resumes at once (a crash boot leaves it out)",
-                 gnssTypeName(raw_boot_hint));
+        if (gnssTypeGivesRaw(raw_boot_hint))
+            ESP_LOGW(TAG, "[RECOVERY] a flight is in progress: the boot does not wait on the %s -- its GNSS poll "
+                          "task brings it up when it answers, and the flight resumes at once (a crash boot leaves "
+                          "it out)",
+                     gnssTypeName(raw_boot_hint));
+        else
+            ESP_LOGW(TAG, "[RECOVERY] a flight is in progress, the %s last boot: the u-blox's probes for 3 s, "
+                          "its driver only if one answers, no 60 s search -- silent, the flight resumes "
+                          "GNSS-absent (#1765)",
+                     raw_boot_hint == GNSS_TYPE_UBLOX ? "u-blox" : "receiver unknown");
 #elif TR_RAW_NAV_MOSAIC
         ESP_LOGW(TAG, "[RECOVERY] a flight is in progress: the boot does not wait on the mosaic-G5 -- its GNSS "
                       "poll task brings it up when it answers, and the flight resumes at once (a crash boot "
@@ -9232,7 +9274,13 @@ static void setup_fc()
         bool refused_inflight = false;
 
         {
-#if TR_RAW_NAV_MOSAIC || TR_RAW_NAV_PX1105R
+#if TR_RAW_NAV_AUTO
+            // the boot's early answer, when it was one (after fcRescueTryEnter),
+            // else the GNSS bring-up's late one (#1765), else ask now
+            const OcSnapshotAnswer ask = raw_boot_ask_definitive ? raw_boot_ask
+                                       : s_boot_ask_definitive  ? s_late_ask
+                                                                : fcAskOcForFlightSnapshot();
+#elif TR_RAW_NAV_MOSAIC || TR_RAW_NAV_PX1105R
             // the boot's early answer, when it was one (after fcRescueTryEnter)
             const OcSnapshotAnswer ask = raw_boot_ask_definitive ? raw_boot_ask : fcAskOcForFlightSnapshot();
 #else
