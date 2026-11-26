@@ -278,6 +278,53 @@ PCB caught up with the schematic on 2026-10-30; see *PCB* below.
     change; every other pin keeps its net. ERC loses V1's two `U9` errors (the
     tied VOUT outputs and the open PG) and its `lib_symbol_mismatch`, and gains
     only off-grid wire-end warnings. `U9` sits on a half-grid point, as before.
+- **The BLE antenna is the Molex 47948-0001 again** (2026-11-25, `U15`,
+  `0479480001`), as on the Beetle V2, in place of the Abracon AANI-CH-0070.
+  Molex's "Ground Clearance: None needed" is sales copy. The drawing
+  (PS-479480001 §9.3) wants copper-free board on the antenna's own layer,
+  while inner and opposite-side ground may stay. So the AANI's two all-layer
+  keep-outs are gone. In their place, an F.Cu-only rule area (no pour;
+  tracks and vias allowed) covers `U15`'s courtyard out to the board edge,
+  (47.45, 147.77) to (51.454, 151.48). That matches the B.Cu area under the
+  Beetle V2's `U14`. In1 (GND), In2 (+3V3) and B.Cu (GND) stay solid under
+  the antenna.
+  - **Match:** Molex's L network on the existing pi footprints. `L4` is
+    4.3 nH (`LQW15AN4N3C00D`, the old base station's and the V9's part) to
+    ground. `C7` (5.1 pF) becomes `R61`, a 0 Ω link (`RC0402JR-070RL`), with
+    the same symbol uuid. `C5` stays unfitted as the antenna-side tuning slot.
+  - **Wiring:** fixing pads 1-3 are no-connect, and the ground symbol on the
+    AANI's ground pins is gone. The feed net is now `Net-(U15-Feed)`, and the
+    RF net-class pattern that was `Net-(C5-Pad1)` follows it.
+  - **Placement:** the old base station's spot, nudged 0.12 mm left and
+    0.2 mm down to (49.6, 149.625) to clear `C5`'s and `R61`'s courtyards. It
+    sits at rotation 0, with fixing pads 1 and 2 on the left edge and feed
+    pad 4 inboard, facing `R61`; the body is 0.6 mm from the edge. A straight
+    0.36 mm feed runs up to `R61`. The ground-via fence at x = 51.4 stays.
+  - **Checked:** in the netlist, only the feed net, `U15`'s pads 1-3, `R61`
+    and `L4` change. ERC has no new errors; it gains the Beetle's one warning
+    (the Molex `Feed` pin is "unspecified" against `C5`'s passive pin). DRC is
+    unchanged: 0 errors, 0 unconnected items, 0 parity issues. As on the
+    Beetle, check the match with a VNA on the first article.
+- **`BT2` is MYOUNG's BH-18650-A6AJ012** (2026-11-13, LCSC C19184084), an
+  open-frame holder in the Keystone 1042/1043 outline, in place of the
+  BH-18650-A5BJ001-2D box. It is 77 × 20.7 × 14.9 mm against 77.8 × 20.8 ×
+  21.5 mm, and its housing is PA46, UL94 V-0, where the box was ABS with no
+  flame rating. New symbol `Custom:BH-18650-A6AJ012`, footprint
+  `Footprints:BAT_BH-18650-A6AJ012` and LCSC's 3D model
+  (`3dmodels/BH-18650-A6AJ012.step`). The pins are still P and N, so the
+  nets do not change.
+  - **Land (drawing MY-CP-0373 rev A/0, top view):** terminals 71.45 mm
+    apart, P 35.8 mm and N 35.65 mm from the centre between the posts. Two
+    Ø3.3 mm snap posts sit 27.6 mm along and 8 mm off the axis, on opposite
+    sides, with a Ø2.4 mm key peg 8 mm off the axis beside P. The box's two
+    bosses were on the axis.
+  - **The posts come through:** in LCSC's 3D model they reach 3.43 mm below
+    the housing, about 1.8 mm proud of the top of a 1.6 mm board. The key peg
+    (1.57 mm) does not.
+  - **Not polarized**, like the box. + is at the key-peg end.
+  - **Open underneath:** the box sat the cell on a 3.25 mm floor. Here
+    nothing separates the cell's wrap from the bottom of the board, so `S1`'s
+    trimmed posts and any lead under the holder must stay flush.
 - **Checked:** the netlist differs from V1 only by this change. ERC has
   nothing new. The six new power symbols carry the same `lib_symbol_mismatch`
   as every other power symbol on the board. The `+3V3` net's
@@ -305,9 +352,11 @@ PCB caught up with the schematic on 2026-10-30; see *PCB* below.
       pad 2, the output caps, VOS and the pull-up ends of `R58` and `R59`.
       V_SWITCH takes in PVIN, AVIN, EN, the input caps, `U22`'s outputs
       and `R44`.
-    - **Ground:** the exposed pad has one via to In1, under JLC's exception
-      to the no-via-in-pad rule for QFN ground pads. PGND, FB, AGND and DEF
-      tie to the pad on F.Cu.
+    - **Ground:** PGND, FB, AGND and DEF tie to the exposed pad on F.Cu.
+      Since 2026-11-26 the pad has no via (no via in any pad on this board,
+      owner's rule): two GND vias to In1 sit just outside the package
+      instead, off pin 5 at (48.6, 167.8) and off pin 16 at (53.25, 168.2),
+      0.26 mm and 0.31 mm from the nearest pad.
     - **FSW** has its own via to the In2 `+3V3` plane, 0.145 mm clear of
       In2's VCC trace along the left edge. That trace is why the block sits
       0.5 mm right of the old `U9`.
@@ -338,12 +387,98 @@ PCB caught up with the schematic on 2026-10-30; see *PCB* below.
       existing traces end inside them.
     - **BT2:** pad P is 0.838 mm from J2's copper (the A1/B12 pad), against
       0.834 mm to HRO's shell on V1. The plated shell slots are gone, and with
-      them two BT2 silk warnings.
+      them two BT2 silk warnings. (With the A6AJ012's 2.8 × 3.6 mm slot pad
+      the gap is about 1.08 mm.)
+  - **`BT2` (2026-11-25):** the A6AJ012 is on the bottom at (63.1, 149.13),
+    −90°, on the axis of `J2` and `J8`. Pad P is at (63.1, 184.93) and pad N
+    at (63.1, 113.48). The snap posts are at (71.1, 121.53) and
+    (55.1, 176.73), and the key peg at (71.1, 184.93). The board is re-placed
+    and re-routed around it. DRC finds 0 errors, 0 unconnected items and
+    0 parity issues. It reports 29 warnings: the 26 from before, plus the
+    3 listed below.
+    - **Pad P:** `R14` moves to (60.5, 186.05) and `R15` to (65.65, 185.15).
+      That leaves 1 mm between the pad and `J2`'s pads. In it, D− joins B7
+      and A7 on F.Cu and drops through a via at (62.81, 186.75). D+ drops
+      beside B6 at (63.81, 186.85). Both go round the pad's right side on
+      B.Cu to `CR1`. VBUS rises at 45° from B4/A9 to x = 67.21. The VCC zone
+      wrapped the pad's left and top sides until 2026-11-26, when pad P
+      became `B+` and the zone went (battery-current bullet below).
+    - **Pad N:** `U16` (E220) moves 0.5 mm right, to (70.17, 114.37), and
+      clears the pad by 0.21 mm. Its fan-out moves with it. `C33` and `R55`
+      stand in a column below the pad at x = 63.33. `U14`'s VCC pin reaches
+      them by a trace under the SOT-23 body. `R6` moves to (64.3, 119.04).
+      The B− zone reaches further over the pad and now joins pads solidly:
+      with thermal relief, only one of the two required spokes landed.
+    - **Post at (71.1, 121.53):** `L_CS` and `L_SCK` drop through vias just
+      inside `U16`'s outline. They run down the right side of the hole on
+      B.Cu. `L_MOSI`'s via moves to (69.6, 120.15).
+    - **Post at (55.1, 176.73):** `U22` moves 0.1 mm left and `C88` moves to
+      (54.7, 174.55). `U22`'s ON line goes round under the hole to a via at
+      (58.3, 174.1). On B.Cu, D+ and D− come down at x = 57.0 and 57.23
+      instead of 55.27 and 55.49, and `Volt_Read` turns at y = 174.6.
+    - **Key peg:** `D6` moves 3.36 mm right, to (75.0, 182.05), with `R54`
+      below it. At x = 74, its leads would sit under the holder's side wall
+      (x = 73.45). The `3v3` label is now above `D6` at (74.03, 180.35).
+      BT2's back-side "−" mark is now on the new axis at (63.1, 108.55). The
+      case's green-LED hole has to follow `D6`.
+    - **`U24` (INA230)** was parked on the top side at (59.5, 124.5),
+      unwired. It is now wired and sits beside pad P; see the
+      battery-current bullet below.
+    - **New warnings:** `S1`'s pads 1 and 3 (x = 72.93) sit on BT2's
+      outline, under the holder's right wall; that came with the x = 63.1
+      placement. `U22`'s silk outline touches the hole at (55.1, 176.73),
+      and the fab clips it.
+- **`U24` (INA230) measures the cell's current** (2026-11-26), wired as on
+  the Beetle V2. `R62`, a 20 mΩ 0805 shunt (`PA0805FRE470R02L`, LCSC
+  C723411; the same Yageo PA series as the Beetle's 2 mΩ `R72`), sits between
+  BT2's + pad and VCC. The cell side is a new net, `B+`.
+  Charge current from `U5` and load current both pass through the shunt, in
+  opposite directions, so the INA230 reads the cell's net current.
+  - **Schematic** (`battery.kicad_sch`, "1S Battery Current"): `IN+` is
+    `B+`; `IN−` and `BUS` are VCC. `VS` is +3V3, with `C91` (100 nF) at the
+    pin. `A0` and `A1` are grounded, so the address is 0x40. `ALERT` is open,
+    as on the Beetle. The I²C bus is new on this board: `I2C_SCL` is GPIO10
+    (`U3` pin 15) and `I2C_SDA` is GPIO12 (pin 17). Each has a 5.11 k pull-up
+    to +3V3 (`R63`, `R64`).
+  - **Shunt and taps:** `R62` lies left of pad P at (58.81, 184.31), with
+    its `B+` end 1.07 mm from the pad and joined to it by a 0.8 mm track.
+    `U24` sits above it at (57.56, 181.11), rotated 270°, so its sense pins
+    face the shunt. `IN−` with `BUS`, and `IN+`, reach the shunt's two pads
+    on 0.1 mm tracks that no pour touches. `C91` sits under `VS`, with a
+    +3V3 via beside it. There is no via in the exposed pad. (Positions as
+    saved 2026-11-26 06:22, after the owner moved this group 0.74 mm left
+    and re-routed it.)
+  - **VCC:** the F.Cu VCC zone is gone. A 0.5 mm track runs from the shunt's
+    VCC end to `C42` and `U22`. A via on that track carries VCC on In2 to the
+    via at (62.59, 180.91), which feeds `U5`'s output and `C28` on F.Cu and
+    `R41` on B.Cu. The `U5`-side current is the charge current, at most
+    450 mA.
+  - **I²C route:** each line leaves `U3`'s bottom row through a via just
+    below its pad. The two run south on B.Cu between the ground-via rows and
+    come back up at y ≈ 168.5. From there they run on F.Cu down the channel
+    between `U22`'s ON line and `U5`'s TS line to `U24`. `R63` and `R64` sit
+    on that run.
+  - **Checked:** ERC loses the 19 errors on `U24`'s pins and the 2 on
+    GPIO10/12, and adds only warnings of kinds the sheet already has.
+    The netlist was checked pin by pin. Schematic parity is 0 and
+    `tools/check_board_parity.py` passes with 98 symbols. DRC on the board
+    as saved 2026-11-26 06:32, after the owner's fixes: 0 errors,
+    0 unconnected, and 31 warnings (silkscreen, plus library notes on `J8`
+    and the logo), the same after a zone refill.
+  - **Why 20 mΩ:** the flight computers' 2 mΩ would give 1.25 mA per bit
+    over ±41 A, where the base station draws well under 1 A. 20 mΩ gives
+    0.125 mA per bit over ±4.1 A. It drops 9 mV at the 450 mA charge
+    current and dissipates 4 mW there, against the part's 0.4 W rating.
 - **Not done:**
+  - `FABRICATION-NOTES.md` item 3 and its *Why* paragraph: `U3`'s thermal
+    pad has no vias since 2026-11-26. This board takes no via in any pad
+    (owner), so the nine V1 thermal-pad vias are gone and item 3 needs its
+    V2 rewrite.
   - PCB: the gerbers and the position file are not re-plotted. That waits for
     a V2 order.
-  - Firmware: a 4 MB partition table, and SPIFFS mounted on an external NOR
-    over SPI3.
+  - Firmware: SPIFFS mounted on the external NOR (`U23`) over SPI3. The V2
+    board header (board 5: the 4 MB partition table, and the INA230 at 0x40
+    with a 20 mΩ shunt on GPIO12/GPIO10) is PR #1825, not yet merged.
   - `bom.csv` and `FABRICATION-NOTES.md`, which still describe V1.
 
 ### V1

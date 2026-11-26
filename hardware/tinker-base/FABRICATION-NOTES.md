@@ -12,7 +12,23 @@
 > this line to the block: "U9 must be TPS62152RGTR, LCSC C2070611. Do not
 > substitute TPS62150, TPS62151 or TPS62153: same footprint, wrong output." A
 > V1 board ran its 3.3 V rail at 6.4 V, probably from a TPS63021 fitted in
-> place of the TPS63020. See *Status* in [`README.md`](README.md).
+> place of the TPS63020. `BT2` is now MYOUNG's BH-18650-A6AJ012 (LCSC
+> C19184084), an open frame with two snap posts that come through the board, so
+> rewrite the `BT2` line: + (pad P) is at its key-peg end, still at the USB
+> connector, and the trim-flush note for `S1`'s posts matters more because the
+> cell now sits over the bare board. `U15` is now the Molex 47948-0001. Its
+> void is on F.Cu only: no copper under the antenna out to the board edge, with
+> ground kept on In1, In2 and B.Cu. Rewrite the block's antenna-void warning and
+> section 4 for that top-layer void, in place of the old all-layer window.
+> Replace the `U15` 0.30 mm pad note under *Stencil* with the Molex's 0.86 mm
+> square pads.
+> `C7` is now `R61` (0 Ω) and `L4` is 4.3 nH. `U24` (INA230, 0.5 mm pitch
+> QFN-16) and its 20 mΩ shunt `R62` are new on the top side. `R62` sits
+> about 1 mm from `BT2`'s pad P, so add to the `BT2` line: "solder the + tab with
+> the iron off `R62`". `U3`'s thermal pad has no vias on V2 (no via in any
+> pad on this board), so rewrite item 3 and its *Why* paragraph too. See
+> *Status* in
+> [`README.md`](README.md).
 
 **Paste the block below into the fab's order notes verbatim.**
 
