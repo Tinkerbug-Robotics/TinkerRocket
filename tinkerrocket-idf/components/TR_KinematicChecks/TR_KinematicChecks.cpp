@@ -470,7 +470,8 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                                          bool  imu_healthy,
                                          bool  gnss_may_vote,
                                          bool  baro_reading_fresh,
-                                         const InertialVote* inertial)
+                                         const InertialVote* inertial,
+                                         bool  baro_may_vote)
 {
     // Snapshot apogee_flag so the rising-edge reset below sees the
     // state *before* this tick's apogee voting fires (#192).
@@ -1056,8 +1057,11 @@ void TR_KinematicChecks::kinematicChecks(float pressure_altitude,
                 if (vel_u_apogee_flag) passed++;
             }
 
-            // Baro — excluded during mach lockout or when baro is unhealthy
-            if (!baro_locked_out && baro_healthy)
+            // Baro — excluded during mach lockout or when baro is unhealthy,
+            // and once judged stuck this flight (#1764, baro_may_vote): a
+            // sealed port's flat reading never passes, so counted it held
+            // the vote at one of two with the IMU's voters out.
+            if (!baro_locked_out && baro_healthy && baro_may_vote)
             {
                 available++;
                 if (alt_apogee_flag) passed++;

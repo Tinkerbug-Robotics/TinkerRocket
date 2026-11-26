@@ -9328,6 +9328,9 @@ static void setup_fc()
                      GnssAscentGate::gnssVerticalToEkf(gnss_admit_state)
                          ? "vertical was admitted before the reboot: stays in the EKF"
                          : "vertical held out of the EKF and the apogee vote until it qualifies");
+            if (!GnssAscentGate::baroVotes(gnss_admit_state))
+                ESP_LOGW(TAG, "[RECOVERY] Barometer judged stuck before the reboot: "
+                              "no apogee vote for the rest of the flight (#1764)");
 
             ESP_LOGW(TAG, "[RECOVERY] Pyro: apogee=%d fired=[%d,%d,%d,%d]",
                      pyro_apogee_detected,
@@ -15071,11 +15074,12 @@ static void loop_fc()
                 {
                     if (gnss_admit_state.baro_stuck)
                         ESP_LOGW(TAG, "[BARO] Judged stuck at T+%.2f s: flat while GNSS "
-                                      "climbs at %.1f m/s — the EKF stops fusing it",
+                                      "climbs at %.1f m/s — the EKF stops fusing it, "
+                                      "and it casts no apogee vote for the rest of the flight",
                                  (double)t_flight_s, (double)ga.gnss_vel_u_mps);
                     else
                         ESP_LOGI(TAG, "[BARO] No longer judged stuck at T+%.2f s — "
-                                      "fused again", (double)t_flight_s);
+                                      "fused again (still no apogee vote, #1764)", (double)t_flight_s);
                 }
                 if (was_phase != gnss_admit_state.phase &&
                     gnss_admit_state.phase == GnssAscentGate::Phase::Admitted)
@@ -15190,7 +15194,9 @@ static void loop_fc()
                                        // GnssAscentGate: no apogee vote until admitted
                                        GnssAscentGate::gnssVotes(gnss_admit_state),
                                        baro_reading_fresh,
-                                       &inertial_vote);
+                                       &inertial_vote,
+                                       // #1764: no apogee vote once judged stuck this flight
+                                       GnssAscentGate::baroVotes(gnss_admit_state));
 #if TR_RAW_NAV_RIG_REPLAY
             // The rig replay of the mosaic-only image: the navigation state
             // the voters just read, its attitude too, at the replayed flight's
@@ -15332,13 +15338,17 @@ static void loop_fc()
                                        // GnssAscentGate: no apogee vote until admitted
                                        GnssAscentGate::gnssVotes(gnss_admit_state),
                                        baro_reading_fresh,
-                                       &inertial_vote);
+                                       &inertial_vote,
+                                       // #1764: no apogee vote once judged stuck this flight
+                                       GnssAscentGate::baroVotes(gnss_admit_state));
 #endif
             if (!single_was && kinematics.apogee_single_sensor_flag)
                 ESP_LOGW(TAG, "[APOGEE] called by one sensor alone, none other available: the accelerometer "
-                              "%s (%+.1f m/s), GNSS %+.1f m/s",
+                              "%s (%+.1f m/s), GNSS %+.1f m/s, the barometer %s",
                          inertial_vote.healthy ? "in" : "out", (double)inertial_vote.vz_up_mps,
-                         (double)gnss_latest_si.vel_u);
+                         (double)gnss_latest_si.vel_u,
+                         GnssAscentGate::baroVotes(gnss_admit_state) ? "unhealthy or above its range"
+                                                                     : "judged stuck (#1764)");
 #if ((defined(TR_GNSS_DRIVER_AUTO) && TR_GNSS_DRIVER_AUTO) || (defined(TR_GNSS_DRIVER_SDR) && TR_GNSS_DRIVER_SDR)) && !(defined(TR_BENCH_SDR_AID) && TR_BENCH_SDR_AID)
             // The gnss-sdr-dev board's ignition cue (sdr_phase_policy.h
             // IgnitionCue), on the launch detector's own argument: the

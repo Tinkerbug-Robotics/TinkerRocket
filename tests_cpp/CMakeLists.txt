@@ -223,6 +223,20 @@ target_include_directories(test_kinematic_checks PRIVATE
 target_link_libraries(test_kinematic_checks GTest::gtest_main)
 gtest_discover_tests(test_kinematic_checks)
 
+# ---------- test_baro_stuck_vote ----------
+# #1764: a barometer judged stuck casts no apogee vote for the rest of the
+# flight (GnssAscentGate::baroVotes), with the real TR_KinematicChecks and
+# GnssAscentGate wired as main.cpp's kinematics block wires them.
+add_executable(test_baro_stuck_vote test_baro_stuck_vote.cpp
+    ${LIB_DIR}/TR_KinematicChecks/TR_KinematicChecks.cpp
+)
+target_include_directories(test_baro_stuck_vote PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_KinematicChecks
+)
+target_link_libraries(test_baro_stuck_vote GTest::gtest_main)
+gtest_discover_tests(test_baro_stuck_vote)
+
 # ---------- test_gnss_fix_policy ----------
 # #1763: a receiver that loses its fix but keeps sending records drops out of
 # the apogee vote as a silent one does (flight_computer/main/gnss_fix_policy.h,

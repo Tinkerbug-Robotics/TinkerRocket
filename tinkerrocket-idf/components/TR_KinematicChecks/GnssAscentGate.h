@@ -67,6 +67,14 @@
 //     Without this, a sealed port would leave only the pitch voter standing:
 //     no apogee, no drogue, no main.  A receiver lag reads LOW on a climb, so
 //     it cannot fake the barometer being flat while GNSS climbs.
+//     A barometer once judged stuck also casts no apogee vote for the rest of
+//     the flight (#1764, baroVotes).  Counted, its flat reading never passes,
+//     so with the IMU's voters out (InertialVertical failed in flight, or a
+//     reboot's restored flight) the vote sat at one of two available -- the
+//     barometer and GNSS -- and nothing called apogee.  The fusion's verdict
+//     stays leaky, but the vote's is latched: the verdict needs GNSS climbing,
+//     so it lapses about 2 s after the climb ends -- at apogee, when the vote
+//     needs it.
 //   * Lost to altitude -- a fresh reading under the range's 25 kPa floor,
 //     about 10.4 km (owner's decision, 2026-11-19, #1707): GNSS is admitted
 //     at once, with no cross-check.  With the barometer gone the apogee vote
@@ -174,6 +182,9 @@ struct State {
     // Stuck-barometer accumulator (leaky).
     int32_t  stuck_ms         = 0;
     bool     baro_stuck       = false;
+    // Judged stuck at any time since launch (#1764): latched until the next
+    // launch or reset, for the apogee vote (baroVotes).
+    bool     baro_stuck_seen  = false;
     // Timing.
     bool     seeded           = false;
     uint32_t last_step_ms     = 0;
@@ -197,6 +208,7 @@ inline void onLaunch(State& st, uint32_t now_ms)
     st.agreeing       = false;
     st.stuck_ms       = 0;
     st.baro_stuck     = false;
+    st.baro_stuck_seen = false;
     st.admitted_ms    = 0;
     st.last_step_ms   = now_ms;
     st.seeded         = true;
@@ -214,6 +226,11 @@ inline bool baroFusable(const State& st, bool baro_healthy)
 {
     return baro_healthy && !st.baro_stuck;
 }
+
+// May the barometer cast an apogee vote?  Not once it has been judged stuck
+// this flight (#1764): latched, unlike baroFusable's leaky verdict (see the
+// header).  The caller keeps its health test and its transonic lockout.
+inline bool baroVotes(const State& st) { return !st.baro_stuck_seen; }
 
 inline float band(float ref_agl_m, const Config& cfg)
 {
@@ -277,8 +294,9 @@ inline void step(State& st, const Inputs& in, const Config& cfg = Config{})
         st.stuck_ms += (int32_t)dt_ms;
         if (st.stuck_ms >= (int32_t)cfg.stuck_dwell_ms)
         {
-            st.stuck_ms   = (int32_t)cfg.stuck_dwell_ms;
-            st.baro_stuck = true;
+            st.stuck_ms        = (int32_t)cfg.stuck_dwell_ms;
+            st.baro_stuck      = true;
+            st.baro_stuck_seen = true;
         }
     }
     else
@@ -376,6 +394,8 @@ inline void step(State& st, const Inputs& in, const Config& cfg = Config{})
 //   low nibble: 1 pad, 2 held out, 3 admitted (baro agreed),
 //               4 admitted (filter agreed), 5 admitted (barometer stuck),
 //               6 admitted (barometer lost to altitude, #1707)
+//   bit 6:      the barometer has been judged stuck this flight: no apogee
+//               vote (#1764; 0 from every older writer)
 //   bit 7:      the barometer is judged stuck now (EKF not fusing it)
 // ---------------------------------------------------------------------------
 static constexpr uint8_t CODE_PAD          = 1;
@@ -384,6 +404,7 @@ static constexpr uint8_t CODE_BARO_AGREED  = 3;
 static constexpr uint8_t CODE_EKF_AGREED   = 4;
 static constexpr uint8_t CODE_BARO_STUCK   = 5;
 static constexpr uint8_t CODE_ABOVE_BARO   = 6;
+static constexpr uint8_t CODE_STUCK_SEEN_BIT = 0x40;
 static constexpr uint8_t CODE_STUCK_BIT    = 0x80;
 
 inline uint8_t encode(const State& st)
@@ -398,12 +419,16 @@ inline uint8_t encode(const State& st)
           :                                       CODE_BARO_AGREED;
     }
     if (st.baro_stuck) c |= CODE_STUCK_BIT;
+    if (st.baro_stuck_seen) c |= CODE_STUCK_SEEN_BIT;
     return c;
 }
 
 // Mid-flight reboot: an admission survives the reboot; anything else —
 // including 0 from an older writer — has to qualify again.  The pad offset
-// is not in the snapshot, so a re-qualification runs without it.
+// is not in the snapshot, so a re-qualification runs without it.  The leaky
+// stuck verdict is re-derived, but the vote's (#1764) is restored: past the
+// climb it could not be re-derived.  An older writer's byte has no bit 6, so
+// an admission on a stuck barometer or a stuck bit restores it too.
 inline void restore(State& st, uint8_t code, uint32_t now_ms)
 {
     reset(st);
@@ -417,6 +442,8 @@ inline void restore(State& st, uint8_t code, uint32_t now_ms)
         default: break;   // held out
     }
     if (st.phase == Phase::Admitted) st.admitted_ms = now_ms;
+    st.baro_stuck_seen = (code & (CODE_STUCK_SEEN_BIT | CODE_STUCK_BIT)) != 0 ||
+                         (st.phase == Phase::Admitted && st.reason == Reason::BaroStuck);
 }
 
 }  // namespace GnssAscentGate

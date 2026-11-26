@@ -377,6 +377,67 @@ TEST(GnssAscentGate, TheStuckVerdictIsLeaky)
     EXPECT_EQ(s.st.phase, Phase::Admitted) << "admission stays latched";
 }
 
+// #1764: the vote's verdict is latched for the flight, the fusion's is not.
+TEST(GnssAscentGate, AStuckBarometerLosesItsApogeeVoteForTheFlight)
+{
+    Sim s;
+    s.padThenLaunch();
+    EXPECT_TRUE(baroVotes(s.st));
+    s.in.burnout = true;
+    s.in.gnss_vel_u_mps = 40.0f;
+    s.run(1900);
+    EXPECT_TRUE(baroVotes(s.st)) << "not before the verdict";
+    s.run(200);
+    ASSERT_TRUE(s.st.baro_stuck);
+    EXPECT_FALSE(baroVotes(s.st));
+    s.in.gnss_vel_u_mps = 0.0f;             // the climb ends: the fusion's verdict lapses
+    s.run(2500);
+    ASSERT_FALSE(s.st.baro_stuck);
+    EXPECT_TRUE(baroFusable(s.st, true));
+    EXPECT_FALSE(baroVotes(s.st)) << "the vote's stays";
+    onLaunch(s.st, s.in.now_ms);            // the next flight starts clean
+    EXPECT_TRUE(baroVotes(s.st));
+    reset(s.st);
+    EXPECT_TRUE(baroVotes(s.st));
+}
+
+// A barometer that sticks after GNSS was admitted on agreement (a frozen
+// sensor mid-coast): the admission reason stays BaroAgreed, the vote is lost
+// all the same.
+TEST(GnssAscentGate, ABarometerStuckAfterAdmissionLosesItsVoteToo)
+{
+    Sim s;
+    s.padThenLaunch();
+    s.in.burnout = true;
+    s.in.baro_agl_m = 300.0f;
+    s.in.gnss_agl_m = 305.0f;
+    s.in.baro_rate_mps = 60.0f;
+    s.in.gnss_vel_u_mps = 60.0f;
+    s.run(1500);
+    ASSERT_EQ(s.st.phase, Phase::Admitted);
+    ASSERT_EQ(s.st.reason, Reason::BaroAgreed);
+    EXPECT_TRUE(baroVotes(s.st));
+    s.in.baro_rate_mps = 0.0f;              // frozen while GNSS climbs on
+    s.run(2100);
+    EXPECT_TRUE(s.st.baro_stuck);
+    EXPECT_EQ(s.st.reason, Reason::BaroAgreed);
+    EXPECT_FALSE(baroVotes(s.st));
+}
+
+TEST(GnssAscentGate, AHealthyBarometerKeepsItsVote)
+{
+    Sim s;
+    s.padThenLaunch();
+    s.in.burnout = true;
+    float v = 80.0f;
+    s.run(9000, [&](uint32_t) {
+        v -= 0.0098f;
+        s.in.baro_rate_mps  = v;
+        s.in.gnss_vel_u_mps = v + 5.0f;     // a lagging receiver, as at apogee
+    });
+    EXPECT_TRUE(baroVotes(s.st));
+}
+
 // A receiver lag reads LOW on a climb (Rolly Polly V nose: 3-6 m/s through a
 // J570), so it cannot fake a flat barometer while GNSS climbs.
 TEST(GnssAscentGate, ALaggingReceiverCannotFakeAStuckBarometer)
@@ -442,6 +503,34 @@ TEST(GnssAscentGate, SnapshotByteRoundTrips)
     }
     st.baro_stuck = true;
     EXPECT_EQ(encode(st) & CODE_STUCK_BIT, CODE_STUCK_BIT);
+    EXPECT_EQ(encode(st) & CODE_STUCK_SEEN_BIT, 0) << "bit 6 only from the latch";
+    st.baro_stuck_seen = true;
+    EXPECT_EQ(encode(st) & CODE_STUCK_SEEN_BIT, CODE_STUCK_SEEN_BIT);
+    EXPECT_EQ(encode(st) & 0x0F, CODE_ABOVE_BARO) << "the code is unchanged";
+}
+
+// #1764: after a reboot the barometer's lost vote is restored, not re-derived
+// (past the climb the verdict could not be). An older writer's byte has no
+// bit 6: an admission on a stuck barometer, or the stuck bit, restores it.
+TEST(GnssAscentGate, ARebootKeepsTheBarometersLostVote)
+{
+    struct Case { uint8_t code; bool votes; };
+    for (const Case c : {Case{0, true}, Case{CODE_HELD_OUT, true}, Case{CODE_BARO_AGREED, true},
+                         Case{CODE_EKF_AGREED, true}, Case{CODE_ABOVE_BARO, true},
+                         Case{CODE_BARO_STUCK, false},
+                         Case{uint8_t(CODE_BARO_AGREED | CODE_STUCK_SEEN_BIT), false},
+                         Case{uint8_t(CODE_HELD_OUT | CODE_STUCK_SEEN_BIT), false},
+                         Case{uint8_t(CODE_BARO_AGREED | CODE_STUCK_BIT), false},
+                         Case{uint8_t(CODE_HELD_OUT | CODE_STUCK_BIT), false}})
+    {
+        State st;
+        restore(st, c.code, 1234);
+        EXPECT_EQ(baroVotes(st), c.votes) << int(c.code);
+        EXPECT_FALSE(st.baro_stuck) << "the fusion's verdict is re-derived";
+        State again;
+        restore(again, encode(st), 1234);
+        EXPECT_EQ(baroVotes(again), c.votes) << "round trip " << int(c.code);
+    }
 }
 
 TEST(GnssAscentGate, AnythingButAnAdmissionRequalifiesAfterAReboot)

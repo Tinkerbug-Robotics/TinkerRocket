@@ -311,7 +311,11 @@ public:
         kin_.kinematicChecks(palt_m_, imu_fresh ? acc_norm_ : 0.0f, pos, vel, roll_dps_, baro_new_,
                              static_cast<float>(fix_.alt_m), fix_votes, rpy_[1], burnout_, mach_locked_,
                              static_cast<float>(fix_.vel_u), votes_ok, baro_healthy, imu_fresh,
-                             GnssAscentGate::gnssVotes(gate_));
+                             GnssAscentGate::gnssVotes(gate_), /*baro_reading_fresh*/ false,
+                             /*inertial*/ nullptr,
+                             // #1764: main.cpp's argument, no barometer vote once it was judged
+                             // stuck (the replay votes by filter, with no one-sensor call)
+                             GnssAscentGate::baroVotes(gate_));
         baro_new_ = false;
         fix_new_ = false;
         if (!had_launch && kin_.launch_flag)

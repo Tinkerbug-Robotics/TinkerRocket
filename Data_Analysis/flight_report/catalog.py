@@ -1587,6 +1587,16 @@ _P(
         "between burnout and apogee. None on logs from firmware before the gate.",
 )
 _P(
+    "Snapshot.gnss_baro_stuck_seen", "Barometer judged stuck this flight (no apogee vote)",
+    kind=KIND_BOOL,
+    note=
+        "Set once the flight computer has judged the barometer stuck at any time since launch "
+        "(Snapshot.gnss_baro_stuck); from then on the barometer casts no apogee vote (#1764).",
+    caution=
+        "Latched until the next launch. False on logs from firmware before #1764, which still "
+        "counted a stuck barometer as an apogee voter; None before the gate.",
+)
+_P(
     "Snapshot.flight_elapsed_ms", "Flight elapsed (snapshot)",
     unit="ms", kind=KIND_COUNTER,
     note="Milliseconds since launch detect, as the FC counted them when it built this frame.",
