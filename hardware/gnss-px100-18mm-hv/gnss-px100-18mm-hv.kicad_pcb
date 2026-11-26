@@ -3019,7 +3019,7 @@
 				)
 			)
 		)
-		(property "Value" "TG2520SMN 26 MHz"
+		(property "Value" "TG2016SMN 26 MHz"
 			(at 0 2.2 0)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -3045,7 +3045,7 @@
 				)
 			)
 		)
-		(property "Description" ""
+		(property "Description" "Stand-in for the TG2520SMN 26.000000MHz MCGNNM (not stocked, 2026-11-25): Epson TG2016SMN 26 MHz MCGNNM, same family and data sheet (+/-0.5 ppm -40..85 C, same g-sensitivity data, pin 1 open or GND). 2.0 x 1.6 mm, centred on the 2.5 x 2.0 lands with its long side along board x; use less paste and check after the bake that it has not slid or turned."
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -3058,7 +3058,7 @@
 				)
 			)
 		)
-		(property "MPN" "TG2520SMN 26.000000MHz MCGNNM"
+		(property "MPN" "X1G0054410304"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -3084,7 +3084,7 @@
 				)
 			)
 		)
-		(property "Dist" "DigiKey"
+		(property "Dist" "LCSC"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -3097,7 +3097,7 @@
 				)
 			)
 		)
-		(property "Dist_PN" ""
+		(property "Dist_PN" "C7527385"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -3870,7 +3870,7 @@
 				)
 			)
 		)
-		(property "Value" "TA2471A"
+		(property "Value" "ABSTS5A2-210M011M"
 			(at 0 1.4 180)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -3883,7 +3883,7 @@
 				)
 			)
 		)
-		(property "Datasheet" "https://www.lcsc.com/datasheet/C5975435.pdf"
+		(property "Datasheet" "https://www.lcsc.com/datasheet/C3283473.pdf"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -3896,7 +3896,7 @@
 				)
 			)
 		)
-		(property "Description" "L5 SAW"
+		(property "Description" "L5 SAW. Abracon ABSTS5A2-210M011M, the TA2471A's twin (same data sheet figures and pins: 1 IN, 4 OUT, 2/3/5 GND; 1164-1189 MHz, 1.8/2.4 dB, 849-980 MHz rejection 51 dB min); stand-in from 2026-11-25 as the TA2471A is not stocked."
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -3909,7 +3909,7 @@
 				)
 			)
 		)
-		(property "MPN" "TA2471A"
+		(property "MPN" "ABSTS5A2-210M011M"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -3922,7 +3922,7 @@
 				)
 			)
 		)
-		(property "Mfr" "Tai-Saw (TST)"
+		(property "Mfr" "Abracon"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -3935,7 +3935,7 @@
 				)
 			)
 		)
-		(property "Dist" "LCSC"
+		(property "Dist" "DigiKey"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "F.Fab")
@@ -3948,7 +3948,7 @@
 				)
 			)
 		)
-		(property "Dist_PN" "C5975435"
+		(property "Dist_PN" "535-ABSTS5A2-210M011MCT-ND"
 			(at 0 0 180)
 			(unlocked yes)
 			(layer "F.Fab")
