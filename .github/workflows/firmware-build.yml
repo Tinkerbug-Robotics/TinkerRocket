@@ -100,6 +100,13 @@ jobs:
             project: base_station
             board: V4
             flags: -B build_v4 -DTR_BS_BOARD=4
+          # The Tinker-Base V2 (board_v5.h): the INA230 on the cell over I2C,
+          # and the 4 MB in-package boot flash, so sdkconfig.defaults.flash4mb
+          # and partitions_4mb.csv. Not ordered or built yet.
+          - line: Tinker-Base
+            project: base_station
+            board: V5
+            flags: -B build_v5 -DTR_BS_BOARD=5
           - line: Tinker-Base
             project: base_station
             board: V3

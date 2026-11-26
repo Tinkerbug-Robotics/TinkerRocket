@@ -5,8 +5,9 @@
 
 // --- Board revision (OC #411 pattern) ---
 // Pins + peripheral-presence/topology flags live in the per-board headers
-// (main/board/board_v4.h for the Tinker-Base, board_v3.h for the full base
-// station it forked from, and main/board/legacy/board_v{1,2}.h for the two
+// (main/board/board_v5.h for the Tinker-Base V2, board_v4.h for its V1,
+// board_v3.h for the full base station it forked from, and
+// main/board/legacy/board_v{1,2}.h for the two
 // superseded revisions); everything below is board-independent policy
 // and must not fork per revision. Select with a separate build dir per
 // variant (the flag is cached by CMake):
@@ -14,6 +15,7 @@
 //   V1 original:  idf.py -B build_v1 -DTR_BS_BOARD=1 build
 //   V3 new PCB:   idf.py -B build_v3 -DTR_BS_BOARD=3 build
 //   Tinker-Base:  idf.py -B build_v4 -DTR_BS_BOARD=4 build
+//   Tinker-Base V2: idf.py -B build_v5 -DTR_BS_BOARD=5 build
 // The fuel gauge is still auto-detected at runtime on the board's I2C bus
 // (BQ27Z746 0x55, then MAX17205/MAX17303 0x36 split by DevName), so it does
 // NOT depend on this switch. Pins the silicon can't probe (LoRa topology,
@@ -21,7 +23,9 @@
 #ifndef TR_BS_BOARD
 #define TR_BS_BOARD 2
 #endif
-#if TR_BS_BOARD == 4
+#if TR_BS_BOARD == 5
+#include "board/board_v5.h"
+#elif TR_BS_BOARD == 4
 #include "board/board_v4.h"
 #elif TR_BS_BOARD == 3
 #include "board/board_v3.h"
@@ -30,7 +34,7 @@
 #elif TR_BS_BOARD == 1
 #include "board/legacy/board_v1.h"
 #else
-#error "TR_BS_BOARD must be 1, 2, 3 or 4"
+#error "TR_BS_BOARD must be 1, 2, 3, 4 or 5"
 #endif
 
 struct config : board_pins
@@ -219,6 +223,24 @@ struct config : board_pins
     // EMA weight per battery poll (PWR_UPDATE_PERIOD_MS = 2 s) → ~20 s time
     // constant: rides out LoRa TX current spikes, still tracks a real discharge.
     static constexpr float SOC_FILTER_ALPHA = 0.1f;
+
+    // --- Cell-current monitor (INA230; present only where HAS_CELL_INA230) ---
+    // The Tinker-Base V2's U24 (board_v5.h). Defined on every board, as the
+    // gauge addresses above are, so main.cpp compiles one code path.
+    // A0 = A1 = GND -> 0x40. R62 = 20 mOhm (Yageo PA0805FRE470R02L; it was
+    // 2 mOhm, the Beetle's part, until 2026-11-26).
+    static constexpr uint16_t CELL_INA230_ADDR      = 0x40;
+    static constexpr float    CELL_INA230_SHUNT_OHM = 0.020f;
+    // Current LSB = the shunt ADC's own step: 2.5 uV / 20 mOhm = 0.125 mA.
+    // That makes CAL = 0.00512 / (0.125 mA * 20 mOhm) = 2048 exactly, so
+    // CURRENT = SHUNT * 2048 / 2048 with no rounding inside the part, and the
+    // register's +/-32767 counts span the shunt's whole +/-81.92 mV
+    // (+/-4.096 A, against a base station that draws well under 1 A and a
+    // BQ21040 that charges at most 450 mA). A smaller LSB adds digits, not
+    // resolution: the shunt reading underneath is still 0.125 mA per bit.
+    // CAL must stay at or below 0x7FFF (TR_INA230_Cal.h), which with this
+    // shunt means an LSB of at least 7.82 uA.
+    static constexpr float    CELL_INA230_CURRENT_LSB_A = 0.000125f;
 
     // --- Flight-pack charger (MP2672 on V3; gated by HAS_PACK_CHARGER) ---
     static constexpr uint16_t MP2672_ADDR = 0x4B;

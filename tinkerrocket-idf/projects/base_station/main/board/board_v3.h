@@ -90,6 +90,9 @@ struct board_pins
     // forever behind `if (!fuel_gauge_present) return;`.
     static constexpr bool EXPECT_MAX17303 = false;
     static constexpr bool HAS_FUEL_GAUGE  = false;
+    // No INA230 on the cell; the Tinker-Base V2 (board_v5.h) is the one board
+    // that has it.
+    static constexpr bool HAS_CELL_INA230 = false;
 
     // --- Own-battery voltage sense (net Volt_Read) ---
     // BT2 is a SINGLE 18650 (BH-18650-A5BJ001-2D) charged by U5 BQ21040, a 1S

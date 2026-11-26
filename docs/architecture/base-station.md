@@ -43,12 +43,13 @@ entirely** so it can be tested without hardware.
 
 ## The policy headers
 
-Seven pure-logic headers sit next to `main.cpp`, each extracted so a host-side GoogleTest
+Eight pure-logic headers sit next to `main.cpp`, each extracted so a host-side GoogleTest
 can drive it without a radio, an SD card, or a BLE stack:
 
 | Header | What it decides | Tests |
 |---|---|---|
 | [`bs_battery_soc.h`](../../tinkerrocket-idf/projects/base_station/main/bs_battery_soc.h) | voltage-based state of charge | 21 |
+| [`bs_cell_current.h`](../../tinkerrocket-idf/projects/base_station/main/bs_cell_current.h) | the Tinker-Base V2's INA230 into cell volts and charge-positive mA | 5 |
 | [`bs_pack_sense_policy.h`](../../tinkerrocket-idf/projects/base_station/main/bs_pack_sense_policy.h) | the flight-pack dividers into pack and per-cell voltages | 8 |
 | [`bs_uplink_txwin.h`](../../tinkerrocket-idf/projects/base_station/main/bs_uplink_txwin.h) | when a transmit window is open | 19 |
 | [`bs_uplink_queue.h`](../../tinkerrocket-idf/projects/base_station/main/bs_uplink_queue.h) | uplink command FIFO | 14 |
@@ -56,7 +57,7 @@ can drive it without a radio, an SD card, or a BLE stack:
 | [`bs_download_policy.h`](../../tinkerrocket-idf/projects/base_station/main/bs_download_policy.h) | BLE download chunking | 11 |
 | [`bs_uplink_policy.h`](../../tinkerrocket-idf/projects/base_station/main/bs_uplink_policy.h) | whether an uplink may transmit now | 6 |
 
-That is 83 tests over logic that would otherwise only be exercisable by standing in a
+That is 88 tests over logic that would otherwise only be exercisable by standing in a
 field. Anything in these headers must stay free of ESP-IDF and FreeRTOS dependencies —
 `RocketComputerTypes.h` is allowed because it is pure types and host-compiles, which is
 also how the rocket-side and ground-side rules are kept from drifting apart (both ends
@@ -181,6 +182,14 @@ which reach the app as `pvol` / `pc1` / `pc2` and are drawn as one line under th
 battery row, with the cell difference called out once it passes 0.1 V. A pack that arrives
 at the field imbalanced is visible before it flies.
 
+The Tinker-Base V2 (flag 5) adds an INA230 at 0x40 across a 20 mΩ high-side shunt
+between the cell's + terminal and VCC, so it reads the cell's net current: charge from
+the BQ21040 one way, the base station's draw the other. `bs_cell_current.h` turns its
+registers into the cell's own voltage (bus + shunt drop) and a current in the base
+station's convention, **positive when charging**, the same as the gauges'. The SoC is
+still the voltage curve's. If the INA230 does not answer, or has not finished its first
+2.25 s averaging window, the divider supplies the voltage and the current is NaN.
+
 The superseded boards (flags 1, 2) carry a gauge — MAX17205G, BQ27Z746 or MAX17303, probed
 at runtime — and `maintainBatteryFets()` keeps the BQ27Z746's protection FETs enabled: it
 ships with `FET_EN=0` and reverts to it on reset, so a fresh gauge presents as a dead
@@ -249,7 +258,8 @@ silkscreen reads V1, continues the flag sequence as **`TR_BS_BOARD=4`**:
 | 1 | the original PCB | `main/board/legacy/board_v1.h` |
 | 2 (default) | the V2 PCB, which predates the repo's hardware import | `main/board/legacy/board_v2.h` |
 | 3 | full base station, PCB V5/V6 (`hardware/legacy/base-station`) | `main/board/board_v3.h` |
-| 4 | Tinker-Base, silkscreen V1 (`hardware/tinker-base`) | `main/board/board_v4.h` |
+| 4 | Tinker-Base, silkscreen V1 (tag `tinker-base-v1.0.0`) | `main/board/board_v4.h` |
+| 5 | Tinker-Base, silkscreen V2 (`hardware/tinker-base`) | `main/board/board_v5.h` |
 
 Build the full base station with:
 
@@ -260,6 +270,13 @@ idf.py -B build_v3 -DTR_BS_BOARD=3 build
 and the Tinker-Base with `-B build_v4 -DTR_BS_BOARD=4`. Its map is netlist-verified
 but has not run on hardware; it drives the on-board E220 over SPI (the direct path
 below), has no I²C bus, and reads its cell on V3's divider.
+
+The Tinker-Base V2 builds with `-B build_v5 -DTR_BS_BOARD=5`, also netlist-verified
+and not yet built. Its ESP32-S3FH4R2 boots from the 4 MB in its package, so the
+build takes `sdkconfig.defaults.flash4mb` and `partitions_4mb.csv` (two 1 MB app
+slots, 1.94 MB spiffs). It adds an I²C bus (SDA GPIO12, SCL GPIO10) whose only
+device is an INA230 on the cell (see *Power*), and a 16 MB NOR log flash on
+GPIO4–7 that no firmware drives yet, so it logs to spiffs for now.
 
 A plain `build/` directory defaults to `TR_BS_BOARD=2`, a superseded board. Flashing
 that onto a V6 **boots without a radio**: with `USE_UART_RADIO_MODEM=false` the direct-SPI

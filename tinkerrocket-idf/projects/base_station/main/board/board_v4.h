@@ -3,6 +3,10 @@
 // Tinker-Base pin map + board topology (hardware/tinker-base, silkscreen V1).
 // Selected with TR_BS_BOARD=4:  idf.py -B build_v4 -DTR_BS_BOARD=4 build
 //
+// V1 is tag tinker-base-v1.0.0; hardware/tinker-base now holds V2, whose map
+// is board_v5.h (in-package 4 MB flash, a NOR log flash, an INA230 on the
+// cell over I2C).
+//
 // The build number continues the base-station sequence rather than the
 // silkscreen, as V3 (the PCB V5/V6 full base station) already does: the
 // Tinker-Base's own first revision builds as board 4 and stamps "-v4".
@@ -77,6 +81,9 @@ struct board_pins
     static constexpr int I2C_SDA_PIN = -1;
     static constexpr bool EXPECT_MAX17303 = false;
     static constexpr bool HAS_FUEL_GAUGE  = false;
+    // No INA230 on the cell; the Tinker-Base V2 (board_v5.h) is the one board
+    // that has it.
+    static constexpr bool HAS_CELL_INA230 = false;
 
     // --- Own-battery voltage sense (net Volt_Read) — unchanged from V3 ---
     // BT2, a single 18650 charged by U5 BQ21040 (1S linear), so cells = 1.

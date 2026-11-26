@@ -31,7 +31,7 @@ listed.
 | [`lora-daughterboard/`](lora-daughterboard/) | LoRa daughterboard for Tinker-Mantis | — | Swappable UART radio module | `radio_board` |
 | [`gnss-sam10m8-18mm-hv/`](gnss-sam10m8-18mm-hv/) | GNSS carrier for Tinker-Mantis | — | SAM-M10Q carrier, pack-voltage input | — (module carrier) |
 | [`tinker-beetle/`](tinker-beetle/) | **Tinker-Beetle** | `rocket-computer-mini` | Reduced-capability flight computer: two ESP32-S3s, on-board LoRa and GNSS. Forked from `rocket-computer`, no ongoing link | `flight_computer` + `out_computer`, `-DTR_BOARD_M1=1` |
-| [`tinker-base/`](tinker-base/) | **Tinker-Base** | `base-station-mini` | Ground station with on-board LoRa, the one base station for both computers. Forked from the full base station, no ongoing link | `base_station`, `-DTR_BS_BOARD=4` (`main/board/board_v4.h`) |
+| [`tinker-base/`](tinker-base/) | **Tinker-Base** | `base-station-mini` | Ground station with on-board LoRa, the one base station for both computers. Forked from the full base station, no ongoing link | `base_station`, `-DTR_BS_BOARD=5` for V2 (`main/board/board_v5.h`), `-DTR_BS_BOARD=4` for V1 (`main/board/board_v4.h`) |
 
 Firmware project names are in `tinkerrocket-idf/projects/`; see
 [`tinkerrocket-idf/projects/README.md`](../tinkerrocket-idf/projects/README.md) for

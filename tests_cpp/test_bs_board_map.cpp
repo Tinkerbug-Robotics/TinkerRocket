@@ -2,6 +2,7 @@
 
 #include "bs_storage_policy.h"
 #include "config.h"
+#include <TR_INA230_Cal.h>   // the CAL the Tinker-Base V2's constants program
 
 // #835 items 1, 2 and 4 — board_v3.h described hardware that is not on the
 // board. Netlist-verified against hardware/legacy/base-station (rev V6, electrically
@@ -9,8 +10,9 @@
 //
 // Each of the three was a claim no test could contradict, because nothing
 // asserted the headers against anything. This file is compiled once per board
-// (TR_BS_BOARD=1/2/3/4) so a claim has to survive being stated on every board.
-// Board 4 is the Tinker-Base, netlist-verified against hardware/tinker-base.
+// (TR_BS_BOARD=1/2/3/4/5) so a claim has to survive being stated on every board.
+// Board 4 is the Tinker-Base (tag tinker-base-v1.0.0) and board 5 its V2
+// (hardware/tinker-base), both netlist-verified.
 //
 // The V2 map is deliberately NOT asserted against the netlist: the bench unit
 // is a real board that predates the repo's hardware import (which starts at
@@ -170,6 +172,103 @@ TEST(BsBoardMapV4, ReadsTheCellOnV3sDivider) {
     EXPECT_EQ(config::BATT_VSENSE_GPIO, 1);
     EXPECT_FLOAT_EQ(config::BATT_VSENSE_DIVIDER, 2.0f);
     EXPECT_EQ(config::BATT_VSENSE_ATTEN_DB, 12);
+    EXPECT_FALSE(config::HAS_CELL_INA230);
+}
+
+#elif TR_BS_BOARD == 5  // the Tinker-Base V2
+
+// Netlist-verified 2026-11-26 against hardware/tinker-base, U3 diffed pad by
+// pad against tag tinker-base-v1.0.0: every radio net is where V1 had it.
+TEST(BsBoardMapV5, RadioIsV1sPinForPin) {
+    EXPECT_FALSE(config::USE_UART_RADIO_MODEM);
+    EXPECT_EQ(config::LORA_SPI_SCK, 17);    // L_SCK
+    EXPECT_EQ(config::LORA_SPI_MISO, 33);   // L_MISO
+    EXPECT_EQ(config::LORA_SPI_MOSI, 21);   // L_MOSI
+    EXPECT_EQ(config::LORA_CS_PIN, 18);     // L_CS
+    EXPECT_EQ(config::LORA_DIO1_PIN, 2);    // L_DI01
+    EXPECT_EQ(config::LORA_RST_PIN, 38);    // L_RST
+    EXPECT_EQ(config::LORA_BUSY_PIN, 34);   // L_BUSY
+    EXPECT_EQ(config::LORA_RXEN_PIN, 35);   // L_RXEN
+    EXPECT_EQ(config::LORA_DIO2_PIN, -1);
+    EXPECT_EQ(config::LORA_DIO3_PIN, -1);
+    EXPECT_EQ(config::LORA_UART_TX_PIN, -1);
+    EXPECT_EQ(config::LORA_UART_RX_PIN, -1);
+    EXPECT_EQ(config::LORA_ACT_PIN, -1);
+}
+
+// The new bus: I2C_SCL on GPIO10 (U3 pad 15), I2C_SDA on GPIO12 (pad 17).
+TEST(BsBoardMapV5, I2cIsOnGpio12And10) {
+    EXPECT_EQ(config::I2C_SDA_PIN, 12);
+    EXPECT_EQ(config::I2C_SCL_PIN, 10);
+}
+
+// Every signal the MCU drives or reads, on distinct pins, none on an S3
+// strapping pin (0, 3, 45, 46), the USB pair (19, 20) or the SPI0/1 pins the
+// in-package flash and PSRAM use (26-32).
+TEST(BsBoardMapV5, SignalsAreDistinctAndOffReservedPins) {
+    const int pins[] = {config::LORA_SPI_SCK, config::LORA_SPI_MISO, config::LORA_SPI_MOSI,
+                        config::LORA_CS_PIN, config::LORA_DIO1_PIN, config::LORA_RST_PIN,
+                        config::LORA_BUSY_PIN, config::LORA_RXEN_PIN,
+                        config::I2C_SDA_PIN, config::I2C_SCL_PIN,
+                        config::FLASH_SCK, config::FLASH_MOSI, config::FLASH_CS, config::FLASH_MISO,
+                        config::BATT_VSENSE_GPIO};
+    const size_t n = sizeof(pins) / sizeof(pins[0]);
+    for (size_t i = 0; i < n; ++i) {
+        const int p = pins[i];
+        EXPECT_NE(p, 0);  EXPECT_NE(p, 3);  EXPECT_NE(p, 45); EXPECT_NE(p, 46);
+        EXPECT_NE(p, 19); EXPECT_NE(p, 20);
+        EXPECT_FALSE(p >= 26 && p <= 32) << "GPIO" << p << " is an SPI0/1 flash/PSRAM pin";
+        for (size_t j = i + 1; j < n; ++j)
+            EXPECT_NE(p, pins[j]) << "two signals on GPIO" << p;
+    }
+}
+
+// U23 is a NOR on GPIO4-7, not a NAND: the NAND path must not run on it, and
+// with no NAND declared, spiffs is the intended backing, not a demotion.
+TEST(BsBoardMapV5, LogFlashPinsNamedButNotTreatedAsNand) {
+    EXPECT_FALSE(config::HAS_EXT_NAND);
+    EXPECT_FALSE(config::HAS_SDMMC);
+    EXPECT_EQ(config::FLASH_SCK, 4);    // M_SCK
+    EXPECT_EQ(config::FLASH_MOSI, 5);   // M_MOSI
+    EXPECT_EQ(config::FLASH_CS, 6);     // M_FLASH_CS
+    EXPECT_EQ(config::FLASH_MISO, 7);   // M_MISO
+    EXPECT_FALSE(bs_storage_policy::demoted(config::HAS_EXT_NAND, /*on_spiffs=*/true));
+}
+
+// The bus carries the INA230 and nothing else: no gauge, no pack charger.
+TEST(BsBoardMapV5, HasTheCellIna230AndNoGauge) {
+    EXPECT_TRUE(config::HAS_CELL_INA230);
+    EXPECT_EQ(config::CELL_INA230_ADDR, 0x40);              // A0 = A1 = GND
+    EXPECT_FLOAT_EQ(config::CELL_INA230_SHUNT_OHM, 0.020f); // R62 20 mOhm
+    EXPECT_FALSE(config::HAS_FUEL_GAUGE);
+    EXPECT_FALSE(config::EXPECT_MAX17303);
+    EXPECT_FALSE(config::HAS_PACK_CHARGER);
+    EXPECT_EQ(config::PACK_VSENSE_GPIO, -1);
+    EXPECT_EQ(config::PACK_MID_VSENSE_GPIO, -1);
+}
+
+// The current LSB is the shunt ADC's own step, 2.5 uV / 20 mOhm = 0.125 mA,
+// so CAL is exactly 2048 (in range, no clamp) and the CURRENT register's full
+// span is the shunt's +/-81.92 mV, +/-4.096 A.
+TEST(BsBoardMapV5, Ina230CalIsExactAndInRange) {
+    uint16_t cal = 0;
+    ASSERT_TRUE(tr_ina230::computeCalibration(config::CELL_INA230_SHUNT_OHM,
+                                              config::CELL_INA230_CURRENT_LSB_A, cal));
+    EXPECT_EQ(cal, 2048u);
+    EXPECT_LE(cal, 0x7FFFu);
+    EXPECT_NEAR(2.5e-6 / config::CELL_INA230_SHUNT_OHM, config::CELL_INA230_CURRENT_LSB_A, 1e-9);
+    EXPECT_NEAR(32767 * config::CELL_INA230_CURRENT_LSB_A, 0.08192 / config::CELL_INA230_SHUNT_OHM, 0.001);
+    EXPECT_NEAR(0.08192 / config::CELL_INA230_SHUNT_OHM, 4.096, 1e-3);
+    // Headroom over the most the cell carries: the BQ21040's 450 mA charge,
+    // or the base station's draw, well under 1 A.
+    EXPECT_GT(0.08192 / config::CELL_INA230_SHUNT_OHM, 1.0);
+}
+
+// The divider stays, as the fallback: same nets as V1.
+TEST(BsBoardMapV5, KeepsTheDividerAsTheFallback) {
+    EXPECT_EQ(config::BATT_VSENSE_GPIO, 1);
+    EXPECT_FLOAT_EQ(config::BATT_VSENSE_DIVIDER, 2.0f);
+    EXPECT_EQ(config::BATT_VSENSE_ATTEN_DB, 12);
 }
 
 #else  // V1 / V2 — gauged boards
@@ -180,6 +279,7 @@ TEST(BsBoardMapV4, ReadsTheCellOnV3sDivider) {
 TEST(BsBoardMapGauged, DeclaresAFuelGauge) {
     EXPECT_TRUE(config::HAS_FUEL_GAUGE);
     EXPECT_EQ(config::BATT_VSENSE_GPIO, -1) << "no divider on a gauged board";
+    EXPECT_FALSE(config::HAS_CELL_INA230);
 }
 
 // #714: no charger jack on the gauged boards, so no pack dividers — the
@@ -191,6 +291,17 @@ TEST(BsBoardMapGauged, HasNoFlightPackDividers) {
 }
 
 #endif
+
+// The INA230 runs on the gauge-less path in updateBattery() and is probed in
+// place of the gauges, so a board may have one or the other, and an INA230
+// needs a bus to sit on.
+TEST(BsBoardMapAll, CellIna230OnlyOnAGaugelessBoardWithABus) {
+    if (config::HAS_CELL_INA230) {
+        EXPECT_FALSE(config::HAS_FUEL_GAUGE);
+        EXPECT_GE(config::I2C_SDA_PIN, 0);
+        EXPECT_GE(config::I2C_SCL_PIN, 0);
+    }
+}
 
 // True on every board: the two must agree, or main.cpp's `if constexpr`
 // selects a path the hardware cannot serve.
