@@ -2508,3 +2508,42 @@ TEST(EkfPadHeading1578, TheMagIsUsedBeforeLaunchUnderTheCanopyAndAfterLanding) {
     ASSERT_TRUE(ekf.underCanopy());
     EXPECT_EQ(run(true, 1.0, 100), 100u) << "under the canopy, and on through landing";
 }
+
+// ── #1762: the time-0 fix a degraded start's filter is handed ──────────
+//
+// main.cpp hands the classic filter EkfGNSSDataLLA{} (time 0) while a
+// degraded start stands, relying on the filter skipping a fix whose time is
+// its last fix's: the degraded seed's is 0 (#1107). A filter that started on
+// a fix has that fix's time, so the same time-0 fix is new to it, and it is
+// fused: a fix at 0 N 0 E. So main.cpp clears gnss_absent_flight on every
+// start on a fix (a degraded start's filter cleared on the pad that starts
+// again on one), which the merged #1762 did not.
+
+TEST(EkfDegradedStart, ATimeZeroFixIsSkippedAfterTheDegradedSeed) {
+    GpsInsEKF ekf;
+    EkfGNSSDataLLA seed = makeStationaryGNSS(0);   // the degraded seed: time 0
+    ekf.init(makeStationaryIMU(0), seed, makeStationaryMag(0));
+    double p0[3];
+    ekf.getPosEst(p0);
+    for (uint32_t t = 2000; t <= 2000000; t += 2000)
+        ekf.update(true, makeStationaryIMU(t), EkfGNSSDataLLA{}, makeStationaryMag(t));
+    double p[3];
+    ekf.getPosEst(p);
+    EXPECT_NEAR(p[0], p0[0], 1e-6) << "latitude stays at the seed";
+    EXPECT_NEAR(p[1], p0[1], 1e-6) << "longitude stays at the seed";
+}
+
+TEST(EkfDegradedStart, ATimeZeroFixIsFusedByAFilterStartedOnAFix) {
+    // The hazard the clear prevents: the filter at the pad, started on a fix
+    // at 1 s, handed the time-0 fix.
+    GpsInsEKF ekf;
+    ekf.init(makeStationaryIMU(1000000), makeStationaryGNSS(1000000), makeStationaryMag(1000000));
+    double p0[3];
+    ekf.getPosEst(p0);
+    for (uint32_t t = 1002000; t <= 3000000; t += 2000)
+        ekf.update(true, makeStationaryIMU(t), EkfGNSSDataLLA{}, makeStationaryMag(t));
+    double p[3];
+    ekf.getPosEst(p);
+    const double moved = std::hypot(p[0] - p0[0], p[1] - p0[1]);
+    EXPECT_GT(moved, 1e-6) << "the fix at 0 N 0 E was fused (" << moved << " rad)";
+}

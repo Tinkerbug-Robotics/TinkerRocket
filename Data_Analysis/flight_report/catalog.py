@@ -1749,6 +1749,15 @@ _P(
             "uncertain — filter it before plotting any of them.",
 )
 _P(
+    "Snapshot.snap_nav_without_gnss", "Filter started without GNSS (snapshot)",
+    kind=KIND_BOOL,
+    note="The filter's start was degraded: the IMU and the barometer, GNSS held out (#557, #1762), "
+         "from the pad datum or, with none, a pad-relative 0 N 0 E. A rebooted FC keeps it so for "
+         "the flight.",
+    caution="Its EKF position is pad-relative, not the receiver's; written from #1762's follow-up "
+            "on (older snapshots read false).",
+)
+_P(
     "Snapshot.snap_guidance_enabled", "Guidance enabled (snapshot)",
     kind=KIND_BOOL,
     note="Guidance armed at snapshot time; the 10 Hz twin of NonSensor.guidance_enabled.",
