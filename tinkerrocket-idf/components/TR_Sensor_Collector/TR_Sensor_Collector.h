@@ -294,6 +294,10 @@ public:
     // measurements, the same: no probes, the raw receiver it flew with
     // (TR_GNSSAuto::setBeginWait).
     void deferGNSSBringUpThisBoot() { gnss_defer_ = true; }
+    // Asked by the bring-up, when the boot's own ask had no answer, before the
+    // u-blox driver's search or the second look: a flight in progress after
+    // all (#1765, TR_GNSSAuto::setFlightCheck)? Before begin().
+    void setGnssFlightCheck(bool (*check)()) { gnss_flight_check_ = check; }
 #elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
     // The mosaic-only image, on a reboot in flight: begin() starts looking for
     // the receiver but does not wait for it (up to 30 s with no flight logic);
@@ -581,6 +585,9 @@ private:
 #if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
     // deferGNSSBringUpThisBoot(): the poll task brings the receiver up
     bool gnss_defer_ = false;
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+    bool (*gnss_flight_check_)() = nullptr;   // setGnssFlightCheck
+#endif
 #elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
     bool gnss_defer_ = false;
 #endif

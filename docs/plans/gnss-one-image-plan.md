@@ -33,7 +33,12 @@ The receiver is chosen once, at boot, before the filter starts, and holds for th
   a PX1105R or mosaic still booting): its driver listens and the raw filter starts degraded, as
   each dedicated image does; a u-blox or no hint: the auto image's path (GpsInsEKF, GNSS-absent);
 - a restored flight: no probes, straight to the hinted driver (setBeginWait off), as the mosaic
-  and PX1105R images do today;
+  and PX1105R images do today. With a u-blox hint or none (#1765): the u-blox's probes for 3 s (a
+  reset drops GPS_ACT, so the receiver boots with the FC), its driver if one answered, no 60 s
+  search and no second look; silent, the flight resumes GNSS-absent. The OC is asked before the
+  bring-up whatever the hint; when that ask gets no answer (the OC still starting after a
+  brownout of both), the bring-up asks again before the u-blox search and the second look and
+  stops there on a flight in progress. An OC that answers neither still costs the pad boot's ~70 s;
 - a PX1105R hint and nothing answering in 6 s of rounds: the gnss-sdr-dev board's driver, not the
   PX1105R's. A PX1105R answers within seconds (board 1 booting with the FC: 1.3 s), so one this
   silent is not on J1; the board, silent until its receiver starts and streaming from its first

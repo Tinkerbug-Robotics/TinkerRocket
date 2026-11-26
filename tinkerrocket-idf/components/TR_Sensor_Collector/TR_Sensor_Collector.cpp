@@ -769,6 +769,9 @@ void SensorCollector::begin(uint8_t imu_execution_core)
 #if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
         // a reboot in flight: look for it, but leave the rest to the poll task
         gnss_receiver.setBeginWait(!gnss_defer_);
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+        gnss_receiver.setFlightCheck(gnss_flight_check_);   // #1765
+#endif
 #elif defined(TR_GNSS_DRIVER_PX1105R) && TR_GNSS_DRIVER_PX1105R
         gnss_receiver.setBeginWait(!gnss_defer_);
 #endif
@@ -796,7 +799,13 @@ void SensorCollector::begin(uint8_t imu_execution_core)
             // found: 18 Hz for the u-blox, 20 for the mosaic-G5.
             GNSS_UPDATE_RATE = gnss_receiver.updateRateHz();
 #endif
-#if (defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC) || (defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW)
+#if defined(TR_GNSS_AUTO_RAW) && TR_GNSS_AUTO_RAW
+            // a raw receiver's driver brings it up from the poll task; a
+            // restored flight's u-blox came up in begin() (#1765)
+            if (gnss_defer_ && gnss_receiver.rawReceiver())
+                ESP_LOGW(SC_TAG, "GNSS bring-up left to the poll task: the receiver comes up when it answers");
+            else
+#elif defined(TR_GNSS_DRIVER_MOSAIC) && TR_GNSS_DRIVER_MOSAIC
             if (gnss_defer_)
                 ESP_LOGW(SC_TAG, "GNSS bring-up left to the poll task: the receiver comes up when it answers");
             else

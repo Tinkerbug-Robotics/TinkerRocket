@@ -137,6 +137,20 @@ static constexpr uint32_t kBudgetPx1105rMs = 6000;
 static constexpr uint32_t kBudgetBoardMs = 4000;
 static constexpr uint32_t kBudgetSecondLookRawMs = 3000;
 
+// A restored flight (#1765): an FC reset in flight, the OC holding the flight.
+// The flight logic resumes only once setup is done, so the bring-up of a
+// receiver the last boot found as the u-blox, or found nothing, never runs the
+// u-blox driver's 60 s search or the second look there: the u-blox's own
+// probes, round and round for this long, then its driver (as on any boot) only
+// if one answered; a silent J1 flies GNSS-absent. (The raw receivers' hints
+// never come here: their drivers start without waiting,
+// TR_GNSSAuto::beginHintedRaw.) The budget is for a u-blox booting with the
+// FC: a reset drops GPS_ACT (not held across it), so the receiver restarts at
+// its factory 38400 alongside the FC, and one probe round (~0.7 s) heard it
+// only if it was already up. Not yet measured on a board: GPS_ACT to the
+// first MON-VER reply.
+static constexpr uint32_t kBudgetRestoredMs = 3000;
+
 // What proved the receiver.
 enum class Proof : uint8_t { NONE, SBF_BLOCK, PROMPT, REPLY, UBX_FRAME, NMEA, RTCM_TR, SKYTRAQ_FRAME };
 const char* proofName(Proof p);
@@ -185,6 +199,12 @@ Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power, b
 // mosaic-G5, which a minute on has finished booting if it is there at all,
 // and for the gnss-sdr-dev board, which may have its first fix by then.
 Plan secondLookPlan(bool px1105r = false);
+
+// A restored flight's (#1765): the u-blox's probes alone, in planFor's order,
+// round and round for kBudgetRestoredMs; nothing answering is GNSS-absent
+// (fallback GNSS_TYPE_NONE).
+// px1105r as planFor's: NMEA at the PX1105R's factory baud is not the u-blox's.
+Plan restoredFlightPlan(uint32_t ublox_last_baud, bool receiver_kept_power, bool px1105r = false);
 
 // UBX-MON-VER poll and the CR, as the probes send them.
 extern const uint8_t kUbxMonVerPoll[8];
@@ -347,10 +367,21 @@ public:
     // straight to the u-blox driver, which knows the wiring, unless a mosaic
     // or the gnss-sdr-dev board was found since. px1105r: the PX1105R is
     // looked for too, and a hint of it kept (TR_GNSS_AUTO_RAW).
+    // restored_flight (#1765): an FC reset in flight with the flight to
+    // resume -- restoredFlightPlan, no u-blox search (a u-blox the probes
+    // proved still gets its driver), no second look, and the hint kept as it
+    // was. Swapped wires (which the probes cannot hear) fly GNSS-absent.
     void start(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power,
-               bool ublox_wires_swapped = false, bool px1105r = false);
+               bool ublox_wires_swapped = false, bool px1105r = false, bool restored_flight = false);
     void detected(uint8_t found);
     void driverResult(bool ok);
+    // A flight in progress found late (#1765): the boot's early ask had no
+    // answer (the OC still starting after a brownout of both) and a later one,
+    // made before the u-blox driver's search or the second look, found the
+    // flight. From here it is a restored flight: about to search for nothing
+    // proven, or to look a second time, the bring-up ends, GNSS-absent, the
+    // hint kept. A u-blox the probes proved still gets its driver.
+    void flightFoundLate();
 
     Step        step() const       { return step_; }
     const Plan& plan() const       { return plan_; }
@@ -360,6 +391,7 @@ public:
     uint8_t     proven() const     { return proven_; }    // what the first round of probes proved
     bool        secondLookRan() const { return second_look_; }
     uint32_t    mosaicTimeoutMs() const { return second_look_ ? kMosaicLateTimeoutMs : kMosaicTimeoutMs; }
+    bool        restoredFlight() const { return restored_; }
 
 private:
     Step    step_ = Step::DONE;
@@ -370,6 +402,7 @@ private:
     uint8_t active_ = GNSS_TYPE_NONE;
     bool    second_look_ = false;
     bool    px1105r_ = false;
+    bool    restored_ = false;
 };
 
 }  // namespace gnss_detect

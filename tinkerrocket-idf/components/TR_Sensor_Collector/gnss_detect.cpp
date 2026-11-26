@@ -96,12 +96,13 @@ static void addPx1105r(Plan& p, bool first)
     }
 }
 
-Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power, bool px1105r)
+namespace
 {
-    // The u-blox, where it most likely is first: still at the run baud when
-    // it kept its power, else where its driver found it last, then the two
-    // factory rates (38400 is the M10's; the bench SAM-M10Q comes up at 9600).
-    uint32_t ub[4] = {};
+// The u-blox, where it most likely is first: still at the run baud when it
+// kept its power, else where its driver found it last, then the two factory
+// rates (38400 is the M10's; the bench SAM-M10Q comes up at 9600).
+size_t ubloxBauds(uint32_t ublox_last_baud, bool receiver_kept_power, uint32_t (&ub)[4])
+{
     size_t nub = 0;
     auto add = [&](uint32_t b) {
         if (!isUbloxBaud(b) || nub >= 4) return;
@@ -116,6 +117,26 @@ Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power, b
     add(38400U);
     add(9600U);
     add(kUbloxRunBaud);
+    return nub;
+}
+}  // namespace
+
+Plan restoredFlightPlan(uint32_t ublox_last_baud, bool receiver_kept_power, bool px1105r)
+{
+    uint32_t ub[4] = {};
+    const size_t nub = ubloxBauds(ublox_last_baud, receiver_kept_power, ub);
+    Plan p;
+    for (size_t i = 0; i < nub; i++) p.probes[p.n++] = Probe{ub[i], GNSS_TYPE_UBLOX, ubloxListenMs(ub[i])};
+    p.budget_ms = kBudgetRestoredMs; // for a u-blox booting with the FC
+    p.fallback = GNSS_TYPE_NONE;     // silent: GNSS-absent, no search
+    p.px1105r = px1105r;
+    return p;
+}
+
+Plan planFor(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power, bool px1105r)
+{
+    uint32_t ub[4] = {};
+    const size_t nub = ubloxBauds(ublox_last_baud, receiver_kept_power, ub);
 
     Plan p;
     auto addMosaic = [&]() {
@@ -474,8 +495,9 @@ void Detector::onSkyTraqFrame()
 // ── BringUp ─────────────────────────────────────────────────────────────
 
 void BringUp::start(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_power,
-                    bool ublox_wires_swapped, bool px1105r)
+                    bool ublox_wires_swapped, bool px1105r, bool restored_flight)
 {
+    restored_ = restored_flight;
     // Only the receivers J1 takes are hints; anything else (a blank or
     // corrupt record) is nothing known. The PX1105R only where it is looked
     // for.
@@ -488,13 +510,16 @@ void BringUp::start(uint8_t hint, uint32_t ublox_last_baud, bool receiver_kept_p
     proven_ = GNSS_TYPE_NONE;
     active_ = GNSS_TYPE_NONE;
     second_look_ = false;
-    plan_ = planFor(hint_in_, ublox_last_baud, receiver_kept_power, px1105r);
+    plan_ = restored_ ? restoredFlightPlan(ublox_last_baud, receiver_kept_power, px1105r)
+                      : planFor(hint_in_, ublox_last_baud, receiver_kept_power, px1105r);
     if (ublox_wires_swapped && hint_in_ != GNSS_TYPE_MOSAIC && hint_in_ != GNSS_TYPE_SDR &&
         hint_in_ != GNSS_TYPE_PX1105R)
     {
         plan_.n = 0;   // nothing to probe: detected(NONE) runs the u-blox driver
         plan_.budget_ms = 0;
-        plan_.fallback = GNSS_TYPE_UBLOX;
+        // (a restored flight's: nothing can prove it, and its driver's search
+        // is what a restored flight must not wait on -- GNSS-absent)
+        plan_.fallback = restored_ ? GNSS_TYPE_NONE : GNSS_TYPE_UBLOX;
     }
     step_ = Step::DETECT;
 }
@@ -527,8 +552,10 @@ void BringUp::detected(uint8_t found)
         else
         {
             // The mosaic hint and no answer: forget it, so a board whose
-            // receiver changed is not held to the mosaic plan for good.
-            hint_ = GNSS_TYPE_NONE;
+            // receiver changed is not held to the mosaic plan for good. A
+            // restored flight's silence changes no hint (#1765): the next
+            // pad boot looks as this flight's did.
+            if (!restored_) hint_ = GNSS_TYPE_NONE;
             active_ = GNSS_TYPE_NONE;
             step_ = Step::DONE;
         }
@@ -559,6 +586,19 @@ void BringUp::detected(uint8_t found)
     }
 }
 
+void BringUp::flightFoundLate()
+{
+    restored_ = true;
+    // still probing: nothing proven is GNSS-absent, not the u-blox search
+    if (step_ == Step::DETECT) plan_.fallback = GNSS_TYPE_NONE;
+    if ((step_ == Step::BEGIN_UBLOX && proven_ == GNSS_TYPE_NONE) || step_ == Step::SECOND_LOOK)
+    {
+        // the hint is still the one the boot started with: nothing proven
+        active_ = GNSS_TYPE_NONE;
+        step_ = Step::DONE;
+    }
+}
+
 void BringUp::driverResult(bool ok)
 {
     if (step_ == Step::BEGIN_UBLOX)
@@ -581,7 +621,8 @@ void BringUp::driverResult(bool ok)
         }
         else
         {
-            // A UBX frame proved the u-blox; no mosaic is on J1.
+            // A UBX frame proved the u-blox; no mosaic is on J1. (A restored
+            // flight, #1765, runs the driver only for a u-blox proven so.)
             active_ = GNSS_TYPE_NONE;
             step_ = Step::DONE;
         }

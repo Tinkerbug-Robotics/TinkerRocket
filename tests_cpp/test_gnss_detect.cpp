@@ -1018,6 +1018,176 @@ TEST(GnssBringUp, EveryPathFinishesWellInsideTheSetupWatchdog)
     EXPECT_LT(worst(GNSS_TYPE_SDR), 5000u);   // then its driver, which only listens
 }
 
+// ── A restored flight (#1765) ───────────────────────────────────────────
+// An FC reset in flight with the OC holding the flight: setup_fc() and so the
+// flight logic wait on this bring-up. The raw receivers' hints never come
+// here (TR_GNSSAuto::beginHintedRaw starts their drivers without waiting).
+// The reset drops GPS_ACT, so the u-blox boots with the FC at its factory
+// 38400.
+
+TEST(GnssBringUpRestored, OnlyTheUbloxIsLookedForForThreeSeconds)
+{
+    for (const bool kept : {true, false})
+    {
+        const Plan p = restoredFlightPlan(460800, kept);
+        ASSERT_GT(p.n, 0u);
+        EXPECT_EQ(p.budget_ms, kBudgetRestoredMs);
+        EXPECT_EQ(p.fallback, GNSS_TYPE_NONE);
+        uint32_t round = 0;
+        for (size_t i = 0; i < p.n; i++)
+        {
+            EXPECT_EQ(p.probes[i].asks, GNSS_TYPE_UBLOX) << i;
+            round += p.probes[i].listen_ms;
+        }
+        EXPECT_LT(round, 1000u) << kept;
+        // the bauds planFor tries for it, in its order
+        const Plan full = planFor(GNSS_TYPE_UBLOX, 460800, kept, true);
+        for (size_t i = 0; i < p.n; i++) EXPECT_EQ(p.probes[i].baud, full.probes[i].baud) << i;
+    }
+}
+
+TEST(GnssBringUpRestored, ASilentJ1FliesGnssAbsentAndKeepsTheHint)
+{
+    for (const uint8_t hint : {GNSS_TYPE_UBLOX, GNSS_TYPE_NONE})
+    {
+        BringUp b;
+        b.start(hint, 460800, true, false, true, /*restored_flight*/ true);
+        EXPECT_TRUE(b.restoredFlight());
+        b.detected(GNSS_TYPE_NONE);
+        EXPECT_EQ(b.step(), Step::DONE) << int(hint);   // no u-blox search, no second look
+        EXPECT_EQ(b.active(), GNSS_TYPE_NONE);
+        EXPECT_FALSE(b.hintChanged()) << "the next pad boot looks as this flight's did";
+        EXPECT_FALSE(b.secondLookRan());
+    }
+}
+
+TEST(GnssBringUpRestored, AProvenUbloxGetsItsDriverAndNoSecondLook)
+{
+    BringUp b;
+    b.start(GNSS_TYPE_UBLOX, 460800, false, false, true, true);
+    b.detected(GNSS_TYPE_UBLOX);
+    EXPECT_EQ(b.step(), Step::BEGIN_UBLOX);
+    b.driverResult(true);
+    EXPECT_EQ(b.step(), Step::DONE);
+    EXPECT_EQ(b.active(), GNSS_TYPE_UBLOX);
+
+    BringUp c;   // nothing known last boot, a u-blox on J1 now
+    c.start(GNSS_TYPE_NONE, 0, false, false, true, true);
+    c.detected(GNSS_TYPE_UBLOX);
+    EXPECT_EQ(c.step(), Step::BEGIN_UBLOX);
+    c.driverResult(false);
+    EXPECT_EQ(c.step(), Step::DONE);
+    EXPECT_EQ(c.active(), GNSS_TYPE_NONE);
+    EXPECT_FALSE(c.secondLookRan());
+}
+
+TEST(GnssBringUpRestored, SwappedWiresFlyGnssAbsent)
+{
+    // The probes cannot hear a u-blox on swapped wires (the V9's older
+    // wiring; the V10's J1 has none), and its driver's search is what a
+    // restored flight must not wait on.
+    BringUp b;
+    b.start(GNSS_TYPE_UBLOX, 9600, false, true, false, true);
+    EXPECT_EQ(b.plan().n, 0u);
+    b.detected(GNSS_TYPE_NONE);
+    EXPECT_EQ(b.step(), Step::DONE);
+    EXPECT_EQ(b.active(), GNSS_TYPE_NONE);
+    // a pad boot still goes straight to its driver
+    BringUp pad;
+    pad.start(GNSS_TYPE_UBLOX, 9600, false, true, false);
+    pad.detected(GNSS_TYPE_NONE);
+    EXPECT_EQ(pad.step(), Step::BEGIN_UBLOX);
+}
+
+// A real receiver on the simulated line: a u-blox restarting with the FC
+// (factory 38400 NMEA, up some time after the probes start), and nothing.
+TEST(GnssBringUpRestored, AUbloxBootingWithTheFcIsFound)
+{
+    // at its factory 38400 (the M10's) or 9600 (the bench SAM-M10Q's), and
+    // with the FC's kept_power true too: a crash reset keeps the FC's view of
+    // the rail, but GPS_ACT drops with it, so the receiver restarted anyway
+    for (const uint32_t baud : {38400u, 9600u})
+        for (const bool kept : {false, true})
+            for (const uint32_t late_ms : {0u, 500u, 1500u, 2500u})
+            {
+                FakeUblox cycled;
+                cycled.baud = baud;
+                cycled.boots_at_ms = 4000 + late_ms;   // the probes start at 4000
+                const Result r = detect(&cycled, restoredFlightPlan(38400, kept, true));
+                EXPECT_EQ(r.found, GNSS_TYPE_UBLOX) << baud << " " << kept << " " << late_ms;
+                EXPECT_LT(r.ms, late_ms + 1200u) << baud << " " << kept << " " << late_ms;
+            }
+    FakeUblox kept;   // set up at 460800, its rail held
+    kept.baud = 460800;
+    kept.set_up = true;
+    const Result rk = detect(&kept, restoredFlightPlan(460800, true));
+    EXPECT_EQ(rk.found, GNSS_TYPE_UBLOX);
+    EXPECT_LT(rk.ms, 500u);
+}
+
+TEST(GnssBringUpRestored, ThePx1105rsNmeaIsNoUbloxProof)
+{
+    // the one image looks for the PX1105R: its NMEA at its factory baud is not
+    // the u-blox's, on a restored flight as on a pad boot
+    BringUp b;
+    b.start(GNSS_TYPE_NONE, 115200, false, false, /*px1105r*/ true, /*restored_flight*/ true);
+    EXPECT_TRUE(b.plan().px1105r);
+    EXPECT_FALSE(restoredFlightPlan(115200, false).px1105r);
+}
+
+TEST(GnssBringUpRestored, ASilentJ1CostsTheBudgetAndARound)
+{
+    // against the pad boot's ~70 s for the same hints (probes, the u-blox
+    // driver's 60 s search, the second look)
+    const Result r = detect(nullptr, restoredFlightPlan(38400, false));
+    EXPECT_EQ(r.found, GNSS_TYPE_NONE);
+    EXPECT_TRUE(r.done);
+    EXPECT_GE(r.ms, kBudgetRestoredMs);
+    EXPECT_LT(r.ms, kBudgetRestoredMs + 1000u);
+}
+
+// The early ask had no answer (the OC still starting after a brownout of
+// both); a later one, before the u-blox search or the second look, finds the
+// flight.
+TEST(GnssBringUpRestored, AFlightFoundLateStopsTheSearchAndTheSecondLook)
+{
+    BringUp b;   // a pad plan: nothing proven, the u-blox search next
+    b.start(GNSS_TYPE_UBLOX, 460800, false, false, true);
+    b.detected(GNSS_TYPE_NONE);
+    ASSERT_EQ(b.step(), Step::BEGIN_UBLOX);
+    b.flightFoundLate();
+    EXPECT_TRUE(b.restoredFlight());
+    EXPECT_EQ(b.step(), Step::DONE);
+    EXPECT_EQ(b.active(), GNSS_TYPE_NONE);
+    EXPECT_FALSE(b.hintChanged());
+
+    BringUp c;   // the search ran and failed: the second look next
+    c.start(GNSS_TYPE_NONE, 0, false, false, true);
+    c.detected(GNSS_TYPE_NONE);
+    c.driverResult(false);
+    ASSERT_EQ(c.step(), Step::SECOND_LOOK);
+    c.flightFoundLate();
+    EXPECT_EQ(c.step(), Step::DONE);
+    EXPECT_EQ(c.active(), GNSS_TYPE_NONE);
+
+    BringUp e;   // asked while still probing (no caller does): nothing proven ends there
+    e.start(GNSS_TYPE_UBLOX, 460800, false, false, true);
+    e.flightFoundLate();
+    EXPECT_EQ(e.step(), Step::DETECT);
+    e.detected(GNSS_TYPE_NONE);
+    EXPECT_EQ(e.step(), Step::DONE);
+    EXPECT_EQ(e.active(), GNSS_TYPE_NONE);
+    EXPECT_FALSE(e.hintChanged());
+
+    BringUp d;   // a u-blox the probes proved keeps its driver
+    d.start(GNSS_TYPE_UBLOX, 460800, false, false, true);
+    d.detected(GNSS_TYPE_UBLOX);
+    d.flightFoundLate();
+    EXPECT_EQ(d.step(), Step::BEGIN_UBLOX);
+    d.driverResult(false);
+    EXPECT_EQ(d.step(), Step::DONE);   // and no second look after it
+}
+
 // ── The gnss-sdr-dev board ──────────────────────────────────────────────
 
 TEST(GnssDetectSdr, StreamingBoardIsFoundByListeningAlone)
