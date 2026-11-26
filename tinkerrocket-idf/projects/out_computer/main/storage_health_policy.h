@@ -48,6 +48,14 @@
 //     operator and the scorecard stayed green on an 8x-shrunk shock absorber.
 //     Same DEGRADED-not-BAD reasoning as #826, and the same class of quiet
 //     downgrade the #566 and #826 fold-ins were written for.
+//   - #1758: the room a flight gets UNBROKEN. A flight is one contiguous range
+//     and nothing evicts in flight, so its log ends at the next stored flight
+//     or the region end whatever the region's total says. Room under the
+//     prealloc cannot start a flight (BAD); under the room target the arm
+//     clears, a long flight's log can be cut (DEGRADED). Both this and the
+//     free count are what the next arm will leave after its planned
+//     evictions (TR_FlightLog::flightRoom()), so a full card in READY no
+//     longer reads BAD when the arm will make room.
 namespace StorageHealthPolicy {
 
 struct Inputs
@@ -56,6 +64,8 @@ struct Inputs
     bool     recovery_failed       = false;  // TR_FlightLog::recoveryFailed() (#1127)
     uint32_t region_free_blocks    = 0;      // TR_FlightLog::regionFreeBlocks() (#1235 item 3)
     uint32_t prealloc_blocks       = 0;      // Config::prealloc_blocks — one flight's reservation
+    uint32_t flight_room_blocks    = 0;      // TR_FlightLog::flightRoom().room_blocks (#1758)
+    uint32_t room_target_blocks    = 0;      // Config::auto_evict_target_room_blocks; 0 = none
     uint32_t nand_prog_fail        = 0;      // TR_LogToFlashStats::nand_prog_fail, this session
     size_t   index_used            = 0;      // FlightIndex::size()
     size_t   index_capacity        = 0;      // FlightIndex::MAX_ENTRIES
@@ -83,6 +93,12 @@ inline SensorHealthState verdict(const Inputs& in)
     SensorHealthState st = shStorageState(in.region_free_blocks,
                                           in.prealloc_blocks,
                                           in.nand_prog_fail);
+    // #1758: the room the next (or the active) flight has, unbroken.
+    if (st != SH_NA)
+    {
+        if (in.flight_room_blocks < in.prealloc_blocks) st = SH_BAD;
+        else if (in.flight_room_blocks < in.room_target_blocks && st == SH_OK) st = SH_DEGRADED;
+    }
     // #281: the index limit.
     if (in.index_used >= in.index_capacity) st = SH_BAD;
     else if (in.index_used + kIndexHeadroomEntries >= in.index_capacity && st == SH_OK)

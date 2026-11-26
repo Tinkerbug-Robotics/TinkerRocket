@@ -540,12 +540,15 @@ bool TR_FlightLog::evictOldestLocked() {
     // Skip the active flight defensively: it is never appended to the index
     // until finalizeFlight, so in practice there is nothing to skip here, but
     // the guard documents that an in-progress allocation is never a candidate.
+    // Among equal ids (a flight armed before the deferred recovery adopted an
+    // orphan shares its id), the first in the index: planEvictionsLocked()
+    // plans in exactly this order (#1758).
     size_t   best_idx = index_.size();
     uint32_t best_id  = UINT32_MAX;
     for (size_t i = 0; i < index_.size(); ++i) {
         const FlightIndexEntry& e = index_.at(i);
         if (flight_active_ && e.flight_id == active_flight_id_) continue;
-        if (e.flight_id < best_id) { best_id = e.flight_id; best_idx = i; }
+        if (best_idx == index_.size() || e.flight_id < best_id) { best_id = e.flight_id; best_idx = i; }
     }
     if (best_idx >= index_.size()) return false;  // nothing eligible to evict
 
@@ -568,41 +571,133 @@ uint32_t TR_FlightLog::regionFreeBlocks() const {
         BLOCK_FREE, cfg_.flight_region_start, cfg_.flight_region_end));
 }
 
-uint32_t TR_FlightLog::evictOldestToTargetLocked() {
-    // Cap the requested headroom at the region size so a mis-set target can't
-    // spin the loop forever trying to free more blocks than the region holds.
-    const uint32_t region_blocks =
-        static_cast<uint32_t>(cfg_.flight_region_end - cfg_.flight_region_start);
+TR_FlightLog::FlightRoom TR_FlightLog::planEvictionsLocked() const {
+    const uint32_t rs = cfg_.flight_region_start;
+    const uint32_t re = cfg_.flight_region_end;
+    // Cap the requested headroom and room at the region size so a mis-set
+    // target can't plan more space than the region holds.
+    const uint32_t region_blocks = re - rs;
     uint32_t target_free = cfg_.auto_evict_target_free_blocks;
     if (target_free > region_blocks) target_free = region_blocks;
+    uint32_t target_room = cfg_.auto_evict_target_room_blocks;
+    if (target_room > region_blocks) target_room = region_blocks;
 
-    // Free blocks WITHIN the flight region — not bitmap_.countInState(BLOCK_FREE),
-    // which also counts the always-free pre-region (LFS) and metadata blocks and
-    // would let the target be met without ever evicting. Scoped so the headroom
-    // floor is measured against the space this layer actually manages
-    // (regionFreeBlocks() — the same count the OC's storage verdict uses since
-    // #1235 item 3, so the two can never disagree about "room for a flight").
+    // The plan runs on a copy, freed the way deleteFlightLocked frees. Free
+    // blocks are counted WITHIN the flight region — not countInState(FREE),
+    // which also counts the always-free pre-region (LFS) and metadata blocks
+    // and would let the target be met without ever evicting (the count
+    // regionFreeBlocks() and the OC's storage verdict use, #1235 item 3).
+    BlockStateBitmap bm = bitmap_;
+    bool taken[FlightIndex::MAX_ENTRIES] = {};
+    const size_t n = index_.size() < FlightIndex::MAX_ENTRIES ? index_.size()
+                                                              : FlightIndex::MAX_ENTRIES;
+    // Frees the next oldest eligible flight on `bm`, in evictOldestLocked's
+    // order: the smallest flight_id, the first in the index among equals (the
+    // active flight is never in the index). False when none remains.
+    auto evictNext = [&]() -> bool {
+        size_t next = n;
+        for (size_t i = 0; i < n; ++i) {
+            if (taken[i]) continue;
+            const FlightIndexEntry& e = index_.at(i);
+            if (flight_active_ && e.flight_id == active_flight_id_) continue;
+            if (next == n || e.flight_id < index_.at(next).flight_id) next = i;
+        }
+        if (next == n) return false;
+        taken[next] = true;
+        bm.markFreeRange(index_.at(next).start_block, index_.at(next).n_blocks);
+        return true;
+    };
 
-    uint32_t evicted = 0;
-    while (true) {
-        // All three goals must hold for the pending flight to record cleanly:
+    FlightRoom best;                // the fewest evictions giving the most room
+    bool       have_best = false;
+    FlightRoom first;               // no evictions at all
+    for (uint32_t k = 0;; ++k) {
+        // Every goal must hold for the pending flight to record cleanly:
         //  - a contiguous prealloc run exists (else prepareFlight returns NoSpace)
         //  - an index slot is free (else finalizeFlight can't append the entry)
         //  - free-block headroom is at/above the rolling-buffer floor
-        uint32_t start = 0;
-        const bool have_run = bitmap_.findContiguousFree(
-            cfg_.prealloc_blocks, cfg_.flight_region_start,
-            cfg_.flight_region_end, start);
-        const bool index_room = index_.size() < FlightIndex::MAX_ENTRIES;
-        const bool meets_target = regionFreeBlocks() >= target_free;
-        if (have_run && index_room && meets_target) break;
-
-        // Reclaim one more oldest flight; stop if the index holds nothing
-        // eligible (prepareFlight then still fails loudly with NoSpace).
-        if (!evictOldestLocked()) break;
-        ++evicted;
+        //  - #1758: the stretch the flight starts in holds the room target. A
+        //    flight is one contiguous range and nothing evicts in flight, so
+        //    the total-free floor alone let a long flight's log end at the next
+        //    stored flight, wherever eviction's hole happened to end.
+        uint32_t start = 0, room = 0;
+        const bool have_run   = bm.findRoomiestFree(cfg_.prealloc_blocks, rs, re, start, &room);
+        const bool index_room = index_.size() - k < FlightIndex::MAX_ENTRIES;
+        FlightRoom here;
+        here.evictions          = k;
+        here.room_blocks        = have_run ? room : 0;
+        here.region_free_blocks = static_cast<uint32_t>(bm.countInStateRange(BLOCK_FREE, rs, re));
+        if (k == 0) first = here;
+        if (!cfg_.auto_evict_oldest) return here;
+        if (have_run && index_room) {
+            if (here.region_free_blocks >= target_free && here.room_blocks >= target_room) return here;
+            if (!have_best || here.room_blocks > best.room_blocks) { best = here; have_best = true; }
+        }
+        if (!evictNext()) break;
     }
+    // Every eligible flight planned away and the goals still unmet (more BAD
+    // blocks than the target leaves, or orphaned runs not yet recovered split
+    // the region): delete only the oldest flights that buy the most room
+    // there is, and none if no flight can start even on an empty index (the
+    // arm then fails loudly with NoSpace and keeps the flights).
+    return have_best ? best : first;
+}
+
+uint32_t TR_FlightLog::evictOldestToTargetLocked() {
+    // The plan (made in its own frame, so its bitmap copy is off the stack
+    // before the deletes run), then that many of the oldest: the same order
+    // and the same block frees, so the flight lands where the plan put it.
+    const uint32_t planned = planEvictionsLocked().evictions;
+    uint32_t evicted = 0;
+    while (evicted < planned && evictOldestLocked()) ++evicted;
     return evicted;
+}
+
+uint32_t TR_FlightLog::planKeyLocked() const {
+    // FNV-1a over the bitmap and the index entries' ranges: everything the
+    // plan reads that can change at run time.
+    uint32_t h = bitmap_.fingerprint();
+    auto mix = [&h](uint32_t v) {
+        for (int i = 0; i < 4; ++i) { h ^= (v >> (8 * i)) & 0xFFu; h *= 16777619u; }
+    };
+    mix(static_cast<uint32_t>(index_.size()));
+    for (size_t i = 0; i < index_.size(); ++i) {
+        const FlightIndexEntry& e = index_.at(i);
+        mix(e.flight_id);
+        mix((static_cast<uint32_t>(e.start_block) << 16) | e.n_blocks);
+    }
+    return h;
+}
+
+TR_FlightLog::FlightRoom TR_FlightLog::flightRoom() {
+    FlightLogLockGuard guard(mutex_);
+    FlightRoom r;
+    if (!initialized_ || recovery_failed_) return r;
+    if (flight_active_) {
+        // The range it holds (less its BAD blocks), plus the FREE blocks
+        // extendActiveRange can still take before a stored flight or the end.
+        const uint32_t range_end = active_start_block_ + active_n_blocks_;
+        uint32_t room = active_n_blocks_ -
+            static_cast<uint32_t>(bitmap_.countInStateRange(BLOCK_BAD, active_start_block_, range_end));
+        for (uint32_t b = range_end; b < cfg_.flight_region_end; ++b) {
+            const BlockState st = bitmap_.get(b);
+            if (st == BLOCK_BAD) continue;
+            if (st != BLOCK_FREE) break;
+            ++room;
+        }
+        r.room_blocks        = room;
+        r.region_free_blocks = regionFreeBlocks();
+        return r;
+    }
+    // The OC asks several times a second; the plan only changes when the
+    // bitmap or the index does.
+    const uint32_t key = planKeyLocked();
+    if (!room_cache_valid_ || key != room_cache_key_) {
+        room_cache_       = planEvictionsLocked();
+        room_cache_key_   = key;
+        room_cache_valid_ = true;
+    }
+    return room_cache_;
 }
 
 Status TR_FlightLog::prepareFlight(uint32_t& flight_id_out) {
@@ -617,10 +712,11 @@ Status TR_FlightLog::prepareFlightLocked(uint32_t& flight_id_out) {
 
     // #315: rolling-buffer auto-eviction. Before picking a range, reclaim space
     // by deleting the oldest finalized flight(s) — enough for this prealloc to
-    // fit, for an index slot to be free, and to restore the free-block headroom
-    // floor. Off by default (opt-in). No flight is active here (guarded above),
+    // fit, for an index slot to be free, to restore the free-block headroom
+    // floor, and (#1758) to give the flight its room target unbroken. Off by
+    // default (opt-in). No flight is active here (guarded above),
     // so eviction can never touch an in-progress allocation. Best-effort: if the
-    // index holds nothing eligible the findContiguousFree below still fails
+    // index holds nothing eligible the findRoomiestFree below still fails
     // loudly with NoSpace rather than arming a flight that can't be logged.
     if (cfg_.auto_evict_oldest) {
         evictOldestToTargetLocked();
@@ -662,8 +758,6 @@ Status TR_FlightLog::prepareFlightLocked(uint32_t& flight_id_out) {
 
 bool TR_FlightLog::extendActiveRange() {
     const uint32_t ext_start = active_start_block_ + active_n_blocks_;
-    const uint32_t ext_end   = ext_start + cfg_.extend_blocks;
-    if (ext_end > cfg_.flight_region_end) return false;
 
     // Require contiguous FREE blocks — keeps the flight as a single range
     // so FlightIndexEntry's start_block + n_blocks model stays valid.  A BAD
@@ -671,14 +765,23 @@ bool TR_FlightLog::extendActiveRange() {
     // writer, the reader and recovery already step over a block that goes bad
     // mid-flight (V10 pre-flight review, 2026-11-18: one factory-bad block in
     // the way used to end the log for the rest of the flight).
-    uint32_t usable = 0;
-    for (uint32_t b = ext_start; b < ext_end; ++b) {
+    //
+    // #1758: the window is up to extend_blocks FREE blocks, BAD ones stepped
+    // over without counting, and it stops short at a stored flight or the
+    // region end instead of being refused whole. Refusing it left up to
+    // extend_blocks - 1 FREE blocks unused before either one, and a run of
+    // extend_blocks BAD blocks ended the log; both are room flightRoom() and
+    // findRoomiestFree count. A trailing BAD block is left out of the range.
+    uint32_t ext_end = ext_start;   // one past the last FREE block taken
+    uint32_t taken   = 0;
+    for (uint32_t b = ext_start; b < cfg_.flight_region_end && taken < cfg_.extend_blocks; ++b) {
         const BlockState st = bitmap_.get(b);
         if (st == BLOCK_BAD) continue;
-        if (st != BLOCK_FREE) return false;
-        ++usable;
+        if (st != BLOCK_FREE) break;
+        ext_end = b + 1;
+        ++taken;
     }
-    if (usable == 0) return false;
+    if (ext_end == ext_start) return false;
     for (uint32_t b = ext_start; b < ext_end; ++b) {
         if (bitmap_.get(b) == BLOCK_BAD) continue;
         if (!nand_->eraseBlock(b)) {
@@ -688,9 +791,10 @@ bool TR_FlightLog::extendActiveRange() {
             return false;
         }
     }
-    bitmap_.markAllocatedRange(ext_start, cfg_.extend_blocks);   // skips BAD
+    const uint32_t n = ext_end - ext_start;
+    bitmap_.markAllocatedRange(ext_start, n);   // skips BAD
     persistBitmap();
-    active_n_blocks_ += cfg_.extend_blocks;
+    active_n_blocks_ += n;
     ++extension_count_;
     return true;
 }

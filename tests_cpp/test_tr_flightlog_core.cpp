@@ -1175,27 +1175,36 @@ TEST(TRFlightLogWrite, OverflowExtendFailsWhenRegionExhausted) {
 }
 
 TEST(TRFlightLogWrite, OverflowExtendFailsWhenAdjacentAllocated) {
+    // A stored flight right after the active range: extension has no
+    // contiguous room. (#1758: BAD blocks used to stand in for one here; the
+    // extension now steps over them, as ARunOfBadBlocksLongerThanAnExtension
+    // IsSteppedOver shows.)
     FakeNandBackend nand;
     MemoryBitmapStore store;
     TR_FlightLog fl;
     TR_FlightLog::Config cfg;
-    cfg.prealloc_blocks = 4;
-    cfg.extend_blocks   = 2;
+    cfg.prealloc_blocks     = 4;
+    cfg.extend_blocks       = 2;
+    cfg.flight_region_start = 32;
+    cfg.flight_region_end   = 40;   // two 4-block flights
     ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
 
-    // Reserve blocks adjacent to the flight region so extension has no
-    // contiguous room. The first prepareFlight will pick blocks 32..35; mark
-    // blocks 36..37 as BAD (same effect as allocated for extension).
-    ASSERT_EQ(fl.markBlockBad(cfg.flight_region_start + cfg.prealloc_blocks), Status::Ok);
-    ASSERT_EQ(fl.markBlockBad(cfg.flight_region_start + cfg.prealloc_blocks + 1), Status::Ok);
-
-    uint32_t id = 0;
-    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
     std::vector<uint8_t> buf(NAND_PAGE_SIZE, 0x33);
-    for (int i = 0; i < 4 * static_cast<int>(NAND_PAGES_PER_BLK); ++i) {
-        ASSERT_EQ(fl.writePage(buf.data()), Status::Ok);
+    const int pages = 4 * static_cast<int>(NAND_PAGES_PER_BLK);
+    uint32_t id = 0;
+    for (const char* name : {"a.bin", "b.bin"}) {   // [32, 36) and [36, 40), kept whole
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+        for (int i = 0; i < pages; ++i) ASSERT_EQ(fl.writePage(buf.data()), Status::Ok);
+        ASSERT_EQ(fl.finalizeFlight(name, (uint32_t)pages * (NAND_PAGE_SIZE - 16)), Status::Ok);
     }
+    ASSERT_EQ(fl.deleteFlight("a.bin"), Status::Ok);
+
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    ASSERT_EQ(fl.activeStartBlock(), 32u);
+    for (int i = 0; i < pages; ++i) ASSERT_EQ(fl.writePage(buf.data()), Status::Ok);
     EXPECT_EQ(fl.writePage(buf.data()), Status::NoSpace);
+    EXPECT_EQ(fl.overflowExtensionCount(), 0u);
+    EXPECT_EQ(fl.index().findByFilename("b.bin")->start_block, 36u) << "b is untouched";
 }
 
 TEST(TRFlightLogPrepare, PicksNextRangeAfterFirstAllocation) {
@@ -1941,6 +1950,553 @@ TEST(TRFlightLogAutoEvict, EvictionPersistsAcrossReboot) {
     EXPECT_NE(fl2.index().findByFilename("flight_004.bin"), nullptr);
     EXPECT_EQ(fl2.index().size(), 3u);
     EXPECT_EQ(fl2.autoEvictedCount(), 0u);  // per-session counter resets on begin
+}
+
+// ================================================================
+// #1758: the room a flight gets. A flight is one contiguous range and nothing
+// evicts in flight, so on a card that has filled, its log ends at the next
+// stored flight or the region end. The arm now clears a room target unbroken
+// (oldest first), the last extension takes the blocks short of a stored
+// flight or the region end, and flightRoom() predicts the arm exactly.
+// ================================================================
+
+namespace {
+// The OC's configuration (out_computer main.cpp) on this geometry.
+TR_FlightLog::Config ocCfg() {
+    TR_FlightLog::Config cfg;
+    cfg.prealloc_blocks   = 80;
+    cfg.flight_region_end = static_cast<uint16_t>(NAND_BLOCK_COUNT - 4);
+    for (int i = 0; i < 4; ++i)
+        cfg.metadata_blocks[i] = static_cast<uint16_t>(NAND_BLOCK_COUNT - 4 + i);
+    const uint32_t region = cfg.flight_region_end - cfg.flight_region_start;
+    cfg.auto_evict_oldest             = true;
+    cfg.auto_evict_target_free_blocks = static_cast<uint16_t>(region * 10u / 100u);
+    cfg.auto_evict_target_room_blocks = static_cast<uint16_t>(region / 5u);
+    return cfg;
+}
+
+// The page these harnesses write. writePage() runs the same allocation path as
+// writeFrame() (writePageLocked: extensions, NoSpace) without the per-page
+// CRC, which dominates a card-sized run in a Debug build.
+const std::vector<uint8_t>& roomPage() {
+    static const std::vector<uint8_t> page(NAND_PAGE_SIZE, 0x5A);
+    return page;
+}
+
+// One flight as the flush task logs it: arm, write pages until `blocks` worth
+// are in or the log refuses one, finalize. Returns the pages logged.
+uint32_t logFlight(TR_FlightLog& fl, uint32_t blocks, const char* name) {
+    uint32_t id = 0;
+    if (fl.prepareFlight(id) != Status::Ok) return 0;
+    const uint32_t want = blocks * NAND_PAGES_PER_BLK;
+    uint32_t pages = 0;
+    while (pages < want && fl.writePage(roomPage().data()) == Status::Ok) ++pages;
+    EXPECT_EQ(fl.finalizeFlight(name, pages * PAYLOAD_PER_PAGE), Status::Ok);
+    return pages;
+}
+
+// Flies the card through `fills` region-fulls of flights whose sizes `next()`
+// gives, checking at every arm that flightRoom() predicted it. Returns how
+// many flights logged fewer pages than they wanted.
+template <class Next>
+uint32_t flyCard(TR_FlightLog& fl, uint32_t fills, Next next, uint32_t* flights_out = nullptr) {
+    const auto& cfg = fl.config();
+    const uint32_t region = cfg.flight_region_end - cfg.flight_region_start;
+    uint32_t written = 0, flights = 0, cut = 0;
+    while (written < fills * region) {
+        const uint32_t blocks = next();
+        const TR_FlightLog::FlightRoom planned = fl.flightRoom();
+        const uint32_t evicted_before = fl.autoEvictedCount();
+        uint32_t id = 0;
+        if (fl.prepareFlight(id) != Status::Ok) { ADD_FAILURE() << "arm refused"; break; }
+        EXPECT_EQ(fl.autoEvictedCount() - evicted_before, planned.evictions) << "flight " << flights;
+        const TR_FlightLog::FlightRoom actual = fl.flightRoom();
+        EXPECT_EQ(actual.room_blocks, planned.room_blocks) << "flight " << flights;
+        EXPECT_EQ(fl.regionFreeBlocks() + cfg.prealloc_blocks, planned.region_free_blocks)
+            << "flight " << flights;
+        const uint32_t want = blocks * NAND_PAGES_PER_BLK;
+        uint32_t pages = 0;
+        while (pages < want && fl.writePage(roomPage().data()) == Status::Ok) ++pages;
+        char name[24];
+        std::snprintf(name, sizeof(name), "f%04u.bin", (unsigned)flights);
+        EXPECT_EQ(fl.finalizeFlight(name, pages * PAYLOAD_PER_PAGE), Status::Ok);
+        if (pages < want) {
+            ++cut;
+            // a cut flight still filled every block of its room
+            EXPECT_EQ(pages, actual.room_blocks * NAND_PAGES_PER_BLK) << "flight " << flights;
+        }
+        written += (pages + NAND_PAGES_PER_BLK - 1) / NAND_PAGES_PER_BLK;
+        ++flights;
+    }
+    if (flights_out) *flights_out = flights;
+    return cut;
+}
+}  // namespace
+
+TEST(TRFlightLogRoom, OnAFullCardEveryFlightWithinItsRoomIsLoggedWhole) {
+    // Random flights up to the room target, two region-fulls: the card fills,
+    // eviction rolls, and every flight lands whole.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, ocCfg(), &store), Status::Ok);
+    const uint32_t target = fl.config().auto_evict_target_room_blocks;
+    uint32_t seed = 1758;
+    uint32_t flights = 0;
+    const uint32_t cut = flyCard(fl, 2, [&] {
+        seed = seed * 1103515245u + 12345u;
+        return 1u + (seed >> 8) % target;
+    }, &flights);
+    EXPECT_EQ(cut, 0u);
+    EXPECT_GT(fl.autoEvictedCount(), 0u) << "the card never filled";
+    EXPECT_GT(flights, 6u);
+}
+
+TEST(TRFlightLogRoom, TheIssuesShortThenLongFlightsAreLoggedWhole) {
+    // #1758's case: a 10 MB flight, then a long one, over and over (on the V10
+    // board 77 and ~335 blocks, inside its 402-block room). Each long one used
+    // to stop where eviction's hole ended.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, ocCfg(), &store), Status::Ok);
+    const uint32_t region = fl.config().flight_region_end - fl.config().flight_region_start;
+    bool longer = false;
+    const uint32_t cut = flyCard(fl, 2, [&] { longer = !longer; return longer ? 77u : region / 6u; });
+    EXPECT_EQ(cut, 0u);
+}
+
+TEST(TRFlightLogRoom, BeforeThisFixFlightsWithinTheRoomWereCut) {
+    // The first test's flights with only the 10% total floor (the room target
+    // off): the harness reproduces #1758. With it on, none is cut.
+    for (bool room_target : {false, true}) {
+        FakeNandBackend nand;
+        MemoryBitmapStore store;
+        TR_FlightLog fl;
+        auto cfg = ocCfg();
+        const uint32_t target = cfg.auto_evict_target_room_blocks;
+        if (!room_target) cfg.auto_evict_target_room_blocks = 0;
+        ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+        uint32_t seed = 1758;
+        const uint32_t cut = flyCard(fl, 2, [&] {
+            seed = seed * 1103515245u + 12345u;
+            return 1u + (seed >> 8) % target;
+        });
+        if (room_target) EXPECT_EQ(cut, 0u);
+        else             EXPECT_GT(cut, 0u);
+    }
+}
+
+TEST(TRFlightLogRoom, AFlightLongerThanItsRoomFillsEveryBlockOfIt) {
+    // A full card, then a flight longer than anything: it gets the room the arm
+    // promised and logs into every block of it, the last short window included.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, ocCfg(), &store), Status::Ok);
+    uint32_t seed = 7;
+    const uint32_t target = fl.config().auto_evict_target_room_blocks;
+    flyCard(fl, 1, [&] { seed = seed * 1103515245u + 12345u; return 1u + (seed >> 8) % target; });
+    for (int i = 0; i < 2; ++i) {
+        const uint32_t room = fl.flightRoom().room_blocks;
+        ASSERT_GE(room, target);
+        char name[24];
+        std::snprintf(name, sizeof(name), "long%d.bin", i);
+        EXPECT_EQ(logFlight(fl, 2 * fl.config().flight_region_end, name), room * NAND_PAGES_PER_BLK);
+    }
+}
+
+TEST(TRFlightLogRoom, TheArmClearsItsRoomOldestFirst) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    {
+        TR_FlightLog fl;
+        auto cfg = smallRegionCfg(4, 6);   // six full 4-block flights fill it
+        ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+        for (int i = 1; i <= 6; ++i) {
+            char name[24];
+            std::snprintf(name, sizeof(name), "flight_%03d.bin", i);
+            ASSERT_EQ(flyFullFlight(fl, name), Status::Ok);
+        }
+    }
+    TR_FlightLog fl;
+    auto cfg = smallRegionCfg(4, 6);
+    cfg.auto_evict_oldest             = true;
+    cfg.auto_evict_target_room_blocks = 10;   // three flights' worth, unbroken
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    const TR_FlightLog::FlightRoom planned = fl.flightRoom();
+    EXPECT_EQ(planned.evictions, 3u);
+    EXPECT_EQ(planned.room_blocks, 12u);
+    EXPECT_EQ(fl.index().size(), 6u) << "planning deletes nothing";
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    EXPECT_EQ(fl.autoEvictedCount(), 3u);
+    EXPECT_EQ(fl.lastEvictedFlightId(), 3u);
+    EXPECT_NE(fl.index().findByFilename("flight_004.bin"), nullptr);
+    EXPECT_EQ(fl.activeStartBlock(), cfg.flight_region_start);
+    EXPECT_EQ(fl.flightRoom().room_blocks, 12u);
+}
+
+TEST(TRFlightLogRoom, ARoomTargetPastTheRegionIsClamped) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    auto cfg = smallRegionCfg(4, 6);
+    cfg.auto_evict_oldest             = true;
+    cfg.auto_evict_target_room_blocks = 60000;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    for (int i = 1; i <= 3; ++i) {
+        char name[24];
+        std::snprintf(name, sizeof(name), "flight_%03d.bin", i);
+        ASSERT_EQ(flyFullFlight(fl, name), Status::Ok) << "each arm clears the whole region";
+    }
+    EXPECT_EQ(fl.index().size(), 1u);
+}
+
+TEST(TRFlightLogRoom, FlightRoomWithoutEvictionIsTheRoomiestStretch) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    auto cfg = smallRegionCfg(4, 6);
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    EXPECT_EQ(fl.flightRoom().room_blocks, 24u);
+    ASSERT_EQ(flyFullFlight(fl, "a.bin"), Status::Ok);
+    const TR_FlightLog::FlightRoom r = fl.flightRoom();
+    EXPECT_EQ(r.room_blocks, 20u);
+    EXPECT_EQ(r.region_free_blocks, 20u);
+    EXPECT_EQ(r.evictions, 0u);
+}
+
+TEST(TRFlightLogRoom, FlightRoomIsZeroBeforeBegin) {
+    TR_FlightLog fl;
+    const TR_FlightLog::FlightRoom r = fl.flightRoom();
+    EXPECT_EQ(r.room_blocks, 0u);
+    EXPECT_EQ(r.region_free_blocks, 0u);
+    EXPECT_EQ(r.evictions, 0u);
+}
+
+TEST(TRFlightLogRoom, TwoFlightsSharingAnIdArePlannedInTheArmsOrder) {
+    // A flight armed before the deferred recovery adopted an orphan shares the
+    // orphan's id. The plan must take them in evictOldestLocked's order (the
+    // first in the index), or flightRoom() promises a room the arm misses: at
+    // a 12-block target, taking the orphan first plans 12 blocks where the arm,
+    // deleting a.bin, gets 16.
+    const auto base = [] {
+        auto cfg = smallRegionCfg(4, 7);   // [32, 60)
+        cfg.extend_blocks = 4;
+        return cfg;
+    };
+    for (uint16_t target : {8, 12, 16, 20}) {
+        FakeNandBackend nand;
+        MemoryBitmapStore store;
+        {
+            TR_FlightLog fl;
+            ASSERT_EQ(fl.begin(nand, base(), &store), Status::Ok);
+            for (const char* name : {"x.bin", "y.bin", "z.bin", "w.bin"})
+                ASSERT_EQ(logFlight(fl, 4, name), 4u * NAND_PAGES_PER_BLK);
+            uint32_t id = 0;
+            ASSERT_EQ(fl.prepareFlight(id), Status::Ok);   // id 5: cut off by a reboot
+            std::vector<uint8_t> frame(PAYLOAD_PER_PAGE, 0x33);
+            for (uint32_t p = 0; p < 4 * NAND_PAGES_PER_BLK; ++p)
+                ASSERT_EQ(fl.writeFrame(frame.data(), frame.size()), Status::Ok);
+        }
+        {
+            TR_FlightLog fl;
+            auto cfg = base();
+            cfg.defer_recovery = true;
+            ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+            ASSERT_EQ(fl.deleteFlight("x.bin"), Status::Ok);
+            ASSERT_EQ(fl.deleteFlight("y.bin"), Status::Ok);
+            ASSERT_EQ(logFlight(fl, 8, "a.bin"), 8u * NAND_PAGES_PER_BLK);   // id 5 again, [32, 40)
+            ASSERT_EQ(fl.runDeferredRecovery(), Status::Ok);                 // the orphan, id 5, [48, 52)
+            ASSERT_EQ(logFlight(fl, 4, "b.bin"), 4u * NAND_PAGES_PER_BLK);
+            size_t fives = 0;
+            for (size_t i = 0; i < fl.index().size(); ++i) fives += fl.index().at(i).flight_id == 5u;
+            ASSERT_EQ(fives, 2u) << "the layout this test needs";
+        }
+        TR_FlightLog fl;
+        auto cfg = base();
+        cfg.auto_evict_oldest             = true;
+        cfg.auto_evict_target_room_blocks = target;
+        ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+        const TR_FlightLog::FlightRoom planned = fl.flightRoom();
+        uint32_t id = 0;
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+        EXPECT_EQ(fl.autoEvictedCount(), planned.evictions) << "target " << target;
+        EXPECT_EQ(fl.flightRoom().room_blocks, planned.room_blocks) << "target " << target;
+    }
+}
+
+TEST(TRFlightLogRoom, AnUnmetTargetDeletesOnlyWhatBuysRoom) {
+    // An orphaned run the deferred recovery has not adopted yet splits the
+    // region: a 12-block hole below it, the two stored flights above it with 4
+    // free blocks past them. No eviction can reach a 20-block room, and
+    // deleting both flights would only give 12, which the hole already does:
+    // the arm deletes nothing and starts the flight in the hole.
+    const auto base = [] {
+        auto cfg = smallRegionCfg(4, 7);   // [32, 60)
+        cfg.extend_blocks  = 4;
+        cfg.defer_recovery = true;
+        return cfg;
+    };
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    {
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, base(), &store), Status::Ok);
+        for (const char* name : {"x.bin", "y.bin", "z.bin"})   // [32, 44)
+            ASSERT_EQ(logFlight(fl, 4, name), 4u * NAND_PAGES_PER_BLK);
+        uint32_t id = 0;
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);           // [44, 48), cut off by a reboot
+        std::vector<uint8_t> frame(PAYLOAD_PER_PAGE, 0x33);
+        for (uint32_t p = 0; p < 4 * NAND_PAGES_PER_BLK; ++p)
+            ASSERT_EQ(fl.writeFrame(frame.data(), frame.size()), Status::Ok);
+    }
+    {
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, base(), &store), Status::Ok);
+        ASSERT_EQ(logFlight(fl, 4, "a.bin"), 4u * NAND_PAGES_PER_BLK);   // [48, 52)
+        ASSERT_EQ(logFlight(fl, 4, "b.bin"), 4u * NAND_PAGES_PER_BLK);   // [52, 56)
+        for (const char* name : {"x.bin", "y.bin", "z.bin"}) ASSERT_EQ(fl.deleteFlight(name), Status::Ok);
+        ASSERT_EQ(fl.index().size(), 2u);
+        ASSERT_EQ(fl.index().at(0).start_block, 48u);
+    }
+    TR_FlightLog fl;
+    auto cfg = base();
+    cfg.auto_evict_oldest             = true;
+    cfg.auto_evict_target_room_blocks = 20;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    const TR_FlightLog::FlightRoom planned = fl.flightRoom();
+    EXPECT_EQ(planned.evictions, 0u);
+    EXPECT_EQ(planned.room_blocks, 12u);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    EXPECT_EQ(fl.autoEvictedCount(), 0u);
+    EXPECT_EQ(fl.activeStartBlock(), 32u);
+    EXPECT_EQ(fl.index().size(), 2u) << "both stored flights kept";
+}
+
+TEST(TRFlightLogRoom, NoFlightIsDeletedWhenNoneCouldStartAnyway) {
+    // Every other block bad: no 4-block run exists even on an empty region, so
+    // deleting the stored flights could not help. The arm fails and keeps them.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    auto cfg = smallRegionCfg(4, 6);   // [32, 56)
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "a.bin"), Status::Ok);   // [32, 36)
+    for (uint32_t b = 37; b < 56; b += 2) ASSERT_EQ(fl.markBlockBad(b), Status::Ok);
+    ASSERT_EQ(fl.markBlockBad(33), Status::Ok);   // a's own range too, once it is freed
+    TR_FlightLog fl2;
+    auto cfg2 = cfg;
+    cfg2.auto_evict_oldest = true;
+    ASSERT_EQ(fl2.begin(nand, cfg2, &store), Status::Ok);
+    EXPECT_EQ(fl2.flightRoom().evictions, 0u);
+    uint32_t id = 0;
+    EXPECT_EQ(fl2.prepareFlight(id), Status::NoSpace);
+    EXPECT_NE(fl2.index().findByFilename("a.bin"), nullptr) << "kept";
+}
+
+TEST(TRFlightLogRoom, FlightRoomFollowsADeleteAndABadBlock) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    ASSERT_EQ(fl.begin(nand, smallRegionCfg(4, 6), &store), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "a.bin"), Status::Ok);
+    EXPECT_EQ(fl.flightRoom().room_blocks, 20u);
+    EXPECT_EQ(fl.flightRoom().room_blocks, 20u) << "the same answer twice";
+    ASSERT_EQ(fl.deleteFlight("a.bin"), Status::Ok);
+    EXPECT_EQ(fl.flightRoom().room_blocks, 24u);
+    ASSERT_EQ(fl.markBlockBad(50), Status::Ok);
+    EXPECT_EQ(fl.flightRoom().room_blocks, 23u);
+}
+
+TEST(TRFlightLogRoom, ThePlanMatchesTheArmOnRoughCards) {
+    // Bad blocks appearing over the card's life, manual deletes and random
+    // sizes: at every arm the plan said what the arm did.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    auto cfg = smallRegionCfg(4, 30);   // [32, 152)
+    cfg.extend_blocks                 = 4;
+    cfg.auto_evict_oldest             = true;
+    cfg.auto_evict_target_free_blocks = 12;
+    cfg.auto_evict_target_room_blocks = 24;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    uint32_t seed = 99;
+    const auto rnd = [&](uint32_t n) { seed = seed * 1103515245u + 12345u; return (seed >> 8) % n; };
+    for (int arm = 0; arm < 120; ++arm) {
+        if (rnd(4) == 0) {   // a block goes bad somewhere free
+            const uint32_t b = 32 + rnd(120);
+            if (fl.bitmap().get(b) == BLOCK_FREE) ASSERT_EQ(fl.markBlockBad(b), Status::Ok);
+        }
+        if (rnd(5) == 0 && fl.index().size() > 2) {   // the operator deletes one
+            char name[28];
+            std::strncpy(name, fl.index().at(rnd((uint32_t)fl.index().size())).filename, sizeof(name));
+            name[sizeof(name) - 1] = '\0';
+            ASSERT_EQ(fl.deleteFlight(name), Status::Ok);
+        }
+        const TR_FlightLog::FlightRoom planned = fl.flightRoom();
+        const uint32_t evicted_before = fl.autoEvictedCount();
+        uint32_t id = 0;
+        if (fl.prepareFlight(id) != Status::Ok) {
+            EXPECT_EQ(planned.room_blocks, 0u) << "arm " << arm;
+            continue;
+        }
+        EXPECT_EQ(fl.autoEvictedCount() - evicted_before, planned.evictions) << "arm " << arm;
+        const uint32_t room = fl.flightRoom().room_blocks;
+        EXPECT_EQ(room, planned.room_blocks) << "arm " << arm;
+        const uint32_t want = (1 + rnd(30)) * NAND_PAGES_PER_BLK;
+        uint32_t pages = 0;
+        while (pages < want && fl.writePage(roomPage().data()) == Status::Ok) ++pages;
+        EXPECT_EQ(pages, want < room * NAND_PAGES_PER_BLK ? want : room * NAND_PAGES_PER_BLK) << "arm " << arm;
+        char name[24];
+        std::snprintf(name, sizeof(name), "r%03d.bin", arm);
+        ASSERT_EQ(fl.finalizeFlight(name, pages * PAYLOAD_PER_PAGE), Status::Ok);
+    }
+    EXPECT_GT(fl.autoEvictedCount(), 10u);
+}
+
+namespace {
+// A 14-block region holding stored flights A [32,36), B [36,40), C [40,44)
+// and a 2-block tail; A and B are then deleted, so a new flight starts at 32
+// with eight blocks before C.
+void layoutBeforeC(FakeNandBackend& nand, MemoryBitmapStore& store, TR_FlightLog& fl,
+                   uint16_t extend) {
+    auto cfg = smallRegionCfg(4, 3);
+    cfg.flight_region_end = 32 + 14;
+    cfg.extend_blocks     = extend;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "a.bin"), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "b.bin"), Status::Ok);
+    ASSERT_EQ(flyFullFlight(fl, "c.bin"), Status::Ok);
+    ASSERT_EQ(fl.index().findByFilename("c.bin")->start_block, 40u);
+    ASSERT_EQ(fl.deleteFlight("a.bin"), Status::Ok);
+    ASSERT_EQ(fl.deleteFlight("b.bin"), Status::Ok);
+}
+}  // namespace
+
+TEST(TRFlightLogExtend, TheLastExtensionStopsShortAtAStoredFlight) {
+    // 4 prealloc + 3 + the 1 block before C: the window [39, 42) used to be
+    // refused whole, and block 39 never used.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    layoutBeforeC(nand, store, fl, 3);
+    EXPECT_EQ(fl.flightRoom().room_blocks, 8u);
+    EXPECT_EQ(logFlight(fl, 20, "d.bin"), 8u * NAND_PAGES_PER_BLK);
+    const FlightIndexEntry* c = fl.index().findByFilename("c.bin");
+    ASSERT_NE(c, nullptr);
+    EXPECT_EQ(c->start_block, 40u);
+    EXPECT_EQ(fl.bitmap().get(40), BLOCK_ALLOCATED) << "C is untouched";
+    EXPECT_EQ(fl.index().findByFilename("d.bin")->n_blocks, 8u);
+}
+
+TEST(TRFlightLogExtend, TheLastExtensionStopsShortAtTheRegionEnd) {
+    // A fresh 10-block region with 4-block extensions: 4 + 4 + the last 2.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    auto cfg = smallRegionCfg(4, 3);
+    cfg.flight_region_end = 32 + 10;
+    cfg.extend_blocks     = 4;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    EXPECT_EQ(logFlight(fl, 20, "d.bin"), 10u * NAND_PAGES_PER_BLK);
+}
+
+TEST(TRFlightLogExtend, TheShortWindowStepsOverABadBlockAndLeavesATrailingOne) {
+    // Block 37 goes bad inside the path and 39, just before C, too: the flight
+    // steps over 37 and stops at 38, leaving 39 out of its range. (With 4-block
+    // extensions the old whole-window rule took [36, 40), 39 included.)
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    layoutBeforeC(nand, store, fl, 4);
+    ASSERT_EQ(fl.markBlockBad(37), Status::Ok);
+    ASSERT_EQ(fl.markBlockBad(39), Status::Ok);
+    EXPECT_EQ(fl.flightRoom().room_blocks, 6u);
+    EXPECT_EQ(logFlight(fl, 20, "d.bin"), 6u * NAND_PAGES_PER_BLK);
+    EXPECT_EQ(fl.index().findByFilename("d.bin")->n_blocks, 7u) << "[32, 39): 37 inside, 39 outside";
+}
+
+TEST(TRFlightLogExtend, ARunOfBadBlocksLongerThanAnExtensionIsSteppedOver) {
+    // Four bad blocks in a row ahead of the flight, with 2-block extensions:
+    // the window counts FREE blocks only, so the run no longer ends the log
+    // short of the room flightRoom() promised.
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    auto cfg = smallRegionCfg(4, 5);   // [32, 52)
+    cfg.extend_blocks = 2;
+    ASSERT_EQ(fl.begin(nand, cfg, &store), Status::Ok);
+    for (uint32_t b = 36; b < 40; ++b) ASSERT_EQ(fl.markBlockBad(b), Status::Ok);
+    EXPECT_EQ(fl.flightRoom().room_blocks, 16u);
+    EXPECT_EQ(logFlight(fl, 40, "d.bin"), 16u * NAND_PAGES_PER_BLK);
+}
+
+TEST(TRFlightLogExtend, AShortWindowReadsBackAndSurvivesABrownout) {
+    // writeFrame (headers, CRC) through the short last window: the stored
+    // flight reads back to its last byte, and a flight cut off by a reboot is
+    // recovered with the same span.
+    const auto cfgFor = [] {
+        auto cfg = smallRegionCfg(4, 3);
+        cfg.flight_region_end = 32 + 10;   // 4 + 4 + a 2-block last window
+        cfg.extend_blocks     = 4;
+        return cfg;
+    };
+    std::vector<uint8_t> frame(PAYLOAD_PER_PAGE);
+    const uint32_t pages = 10 * NAND_PAGES_PER_BLK;
+    {
+        FakeNandBackend nand;
+        MemoryBitmapStore store;
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, cfgFor(), &store), Status::Ok);
+        uint32_t id = 0;
+        ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+        for (uint32_t p = 0; p < pages; ++p) {
+            std::memset(frame.data(), (int)(p & 0xFF), frame.size());
+            ASSERT_EQ(fl.writeFrame(frame.data(), frame.size()), Status::Ok) << "page " << p;
+        }
+        EXPECT_EQ(fl.writeFrame(frame.data(), frame.size()), Status::NoSpace);
+        ASSERT_EQ(fl.finalizeFlight("d.bin", pages * PAYLOAD_PER_PAGE), Status::Ok);
+        std::vector<uint8_t> buf(PAYLOAD_PER_PAGE);
+        size_t got = 0;
+        ASSERT_EQ(fl.readFlightPage("d.bin", (pages - 1) * PAYLOAD_PER_PAGE, buf.data(), buf.size(), got),
+                  Status::Ok);
+        ASSERT_EQ(got, (size_t)PAYLOAD_PER_PAGE);
+        EXPECT_EQ(buf[0], (uint8_t)((pages - 1) & 0xFF));
+        EXPECT_EQ(buf[PAYLOAD_PER_PAGE - 1], (uint8_t)((pages - 1) & 0xFF));
+    }
+    {
+        FakeNandBackend nand;
+        MemoryBitmapStore store;
+        {
+            TR_FlightLog fl;
+            ASSERT_EQ(fl.begin(nand, cfgFor(), &store), Status::Ok);
+            uint32_t id = 0;
+            ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+            for (uint32_t p = 0; p < pages; ++p)
+                ASSERT_EQ(fl.writeFrame(frame.data(), frame.size()), Status::Ok);
+        }   // power lost before finalizeFlight
+        TR_FlightLog fl;
+        ASSERT_EQ(fl.begin(nand, cfgFor(), &store), Status::Ok);
+        ASSERT_EQ(fl.index().size(), 1u);
+        EXPECT_EQ(fl.index().at(0).start_block, 32u);
+        EXPECT_EQ(fl.index().at(0).n_blocks, 10u);
+        EXPECT_EQ(fl.index().at(0).final_bytes, pages * PAYLOAD_PER_PAGE);
+    }
+}
+
+TEST(TRFlightLogExtend, FlightRoomWhileFlyingIsTheRangePlusWhatItCanStillTake) {
+    FakeNandBackend nand;
+    MemoryBitmapStore store;
+    TR_FlightLog fl;
+    layoutBeforeC(nand, store, fl, 3);
+    uint32_t id = 0;
+    ASSERT_EQ(fl.prepareFlight(id), Status::Ok);
+    EXPECT_EQ(fl.flightRoom().room_blocks, 8u);
+    ASSERT_EQ(fl.markBlockBad(38), Status::Ok);   // a block ahead of it goes bad
+    EXPECT_EQ(fl.flightRoom().room_blocks, 7u);
 }
 
 // ================================================================
@@ -3164,3 +3720,26 @@ TEST(TRFlightLogRegionFree, ReadsZeroWhenTheRegionIsFullWhileTheDieCountStillRea
     uint32_t id = 0;
     EXPECT_EQ(fl.prepareFlight(id), Status::NoSpace);   // the region agrees with itself
 }
+
+// #1758: the room is what lies after the start the search picks.
+TEST(BlockStateBitmap, FindRoomiestFreeChoosesByTheRoomFromItsStart) {
+    BlockStateBitmap bm;
+    bm.markAllocatedRange(0, 100);
+    bm.markFreeRange(10, 20);    // stretch [10, 30) ...
+    bm.set(12, BLOCK_BAD);       // ... whose first 4-run starts at 13: 17 blocks of room
+    bm.markFreeRange(40, 18);    // stretch [40, 58): 18 blocks of room
+    uint32_t start = 0, room = 0;
+    ASSERT_TRUE(bm.findRoomiestFree(4, 0, 100, start, &room));
+    EXPECT_EQ(start, 40u) << "19 FREE in the first stretch, but only 17 after its start";
+    EXPECT_EQ(room, 18u);
+}
+
+TEST(BlockStateBitmap, FindRoomiestFreeLeavesTheRoomAloneWhenNothingFits) {
+    BlockStateBitmap bm;
+    bm.markAllocatedRange(0, NAND_BLOCK_COUNT_MAX);
+    uint32_t start = 5, room = 99;
+    EXPECT_FALSE(bm.findRoomiestFree(4, 0, 100, start, &room));
+    EXPECT_EQ(room, 99u);
+    EXPECT_EQ(start, 5u);
+}
+

@@ -28,6 +28,7 @@ namespace {
 // plenty of room.  Every test starts here and changes one thing.
 constexpr uint32_t kPrealloc = 80;
 constexpr size_t   kIndexCap = 64;
+constexpr uint32_t kRoomTarget = 402;   // a fifth of the V10 board's 2012-block region (#1758)
 
 Inputs healthy()
 {
@@ -36,6 +37,8 @@ Inputs healthy()
     in.recovery_failed       = false;
     in.region_free_blocks    = 1000;
     in.prealloc_blocks       = kPrealloc;
+    in.flight_room_blocks    = 1000;
+    in.room_target_blocks    = kRoomTarget;
     in.nand_prog_fail        = 0;
     in.index_used            = 3;
     in.index_capacity        = kIndexCap;
@@ -205,3 +208,51 @@ TEST(StorageHealthPolicy, UnconfiguredPreallocIsNa)
     in.prealloc_blocks = 0;
     EXPECT_EQ(verdict(in), SH_NA);
 }
+
+// ── #1758: the room the next (or the active) flight has, unbroken ────────────
+
+TEST(StorageHealthPolicy, RoomUnderThePreallocIsBad)
+{
+    // flightRoom() plans the arm's evictions; under the prealloc the arm fails.
+    Inputs in = healthy();
+    in.flight_room_blocks = kPrealloc - 1;  EXPECT_EQ(verdict(in), SH_BAD);
+    in.flight_room_blocks = 0;              EXPECT_EQ(verdict(in), SH_BAD);
+}
+
+TEST(StorageHealthPolicy, RoomUnderTheTargetIsDegradedNotBad)
+{
+    // A flight starts and logs, but a long one can be cut at the next stored
+    // flight: amber, not red.
+    Inputs in = healthy();
+    in.flight_room_blocks = kPrealloc;        EXPECT_EQ(verdict(in), SH_DEGRADED);
+    in.flight_room_blocks = kRoomTarget - 1;  EXPECT_EQ(verdict(in), SH_DEGRADED);
+    in.flight_room_blocks = kRoomTarget;      EXPECT_EQ(verdict(in), SH_OK);
+}
+
+TEST(StorageHealthPolicy, WithoutARoomTargetOnlyThePreallocCounts)
+{
+    Inputs in = healthy();
+    in.room_target_blocks = 0;
+    in.flight_room_blocks = kPrealloc;      EXPECT_EQ(verdict(in), SH_OK);
+    in.flight_room_blocks = kPrealloc - 1;  EXPECT_EQ(verdict(in), SH_BAD);
+}
+
+TEST(StorageHealthPolicy, ShortRoomNeverLiftsAWorseVerdict)
+{
+    Inputs in = healthy();
+    in.nand_prog_fail     = 1;
+    in.flight_room_blocks = kRoomTarget - 1;
+    EXPECT_EQ(verdict(in), SH_BAD);
+    in.nand_prog_fail     = 0;
+    in.index_used         = kIndexCap;
+    EXPECT_EQ(verdict(in), SH_BAD);
+}
+
+TEST(StorageHealthPolicy, AnUnconfiguredPreallocStaysNaWhateverTheRoom)
+{
+    Inputs in = healthy();
+    in.prealloc_blocks    = 0;
+    in.flight_room_blocks = 0;
+    EXPECT_EQ(verdict(in), SH_NA);
+}
+
