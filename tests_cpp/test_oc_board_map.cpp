@@ -14,6 +14,7 @@
 #include <SPI.h>       // host shim: SPI_MODE0, which the OC config.h names
 #include "config.h"    // the SHIPPED pins for this board (TR_BOARD_* from CMake)
 #include <BoardIdentity.h>
+#include "pyro_fault_trip_policy.h"   // the INA230 Mask/Enable words this board writes
 #include <cstdio>
 #include <set>
 #include <string>
@@ -83,6 +84,52 @@ TEST(OcBoardMap, OnlyTheBeetleV2HasALinkNetOnThePadTheChipPullsUp)
 #else
     // setup_oc()'s block is `if constexpr` on this: false means no code.
     EXPECT_FALSE(config::LINK_NET_ON_MTCK);
+#endif
+}
+
+TEST(OcBoardMap, OnlyTheBeetleV3sAlertDrivesTheArmTrip)
+{
+    // Q15/Q16 pull U9's gate low on INA_ALERT (branch
+    // hardware/pyro-pfet-alert-trip). The Mantis V11 has the trip too, and
+    // builds with the V10 target until it has one of its own.
+#if TR_BOARD_M2 && TR_BEETLE_V3
+    EXPECT_TRUE(config::INA_ALERT_DRIVES_ARM_TRIP);
+    EXPECT_EQ(config::INA_ALERT_PIN, -1) << "the V3's ALERT reaches the trip, not an S3 pin";
+#else
+    EXPECT_FALSE(config::INA_ALERT_DRIVES_ARM_TRIP);
+#endif
+    if (config::INA_ALERT_DRIVES_ARM_TRIP)
+        EXPECT_GE(config::ARM_CONSENT_PIN, 0);
+}
+
+TEST(OcBoardMap, TheInaWordsForThisBoardKeepCnvrOffATripAlert)
+{
+    using namespace PyroFaultTrip;
+    constexpr bool wired = config::INA_ALERT_PIN >= 0;
+    constexpr bool trips = config::INA_ALERT_DRIVES_ARM_TRIP;
+    const uint16_t words[] = {
+        solMaskEnable(wired, trips),          // pyroFaultGuard(true)
+        idleMaskEnable(wired, trips),         // pyroFaultGuard(false)
+        bootMaskEnable(0x0000, wired, trips), // setup_oc, register at power-on
+        bootMaskEnable(0xFFFF, wired, trips), // setup_oc, anything left in it
+    };
+    for (uint16_t w : words)
+    {
+        if (trips)
+            EXPECT_EQ(w & kMeCnvr, 0u) << "CNVR on ALERT would hold U9 off: 0x" << std::hex << w;
+    }
+    // SOL is what the guard arms on every board with a consent stage.
+    if (config::ARM_CONSENT_PIN >= 0)
+        EXPECT_NE(solMaskEnable(wired, trips) & kMeSol, 0u);
+#if TR_BOARD_M2 && !TR_BEETLE_V3
+    // The Beetle V2 as ordered: exactly the words it has always written.
+    EXPECT_EQ(solMaskEnable(wired, trips), (uint16_t)(kMeSol | kMeCnvr));
+    EXPECT_EQ(idleMaskEnable(wired, trips), kMeCnvr);
+    EXPECT_EQ(bootMaskEnable(0x0000, wired, trips), kMeCnvr);
+#endif
+#if TR_BOARD_V10
+    EXPECT_EQ(solMaskEnable(wired, trips), kMeSol);
+    EXPECT_EQ(idleMaskEnable(wired, trips), kMeCnvr);
 #endif
 }
 
@@ -199,6 +246,22 @@ TEST(OcBoardM2, TheHoldUpSenseStaysOnAdc1)
     EXPECT_LE(config::SCAP_ADC_PIN, 10);
 }
 
+#if TR_BEETLE_V3
+
+TEST(OcBoardM2, TheV3NamesItselfM3)
+{
+    // A V3 image says so in the log and the flight log, and a board provisioned
+    // as a V2 does not match it (the OTA suffix "-m3" is CMake's, beside this).
+    char norm[board_identity::kMaxRev + 1];
+    board_identity::normalizeRev(TR_BOARD_REV_STR, norm, sizeof(norm));
+    EXPECT_STREQ(norm, "M3");
+    EXPECT_EQ(board_identity::encodeRevCode(TR_BOARD_REV_STR, true), 0xA3);
+    EXPECT_TRUE(board_identity::revsMatch(TR_BOARD_REV_STR, "M3"));
+    EXPECT_FALSE(board_identity::revsMatch(TR_BOARD_REV_STR, "M2"));
+}
+
+#else
+
 TEST(OcBoardM2, TheBoardNameReducesToM2)
 {
     char norm[board_identity::kMaxRev + 1];
@@ -211,6 +274,8 @@ TEST(OcBoardM2, TheBoardNameReducesToM2)
     EXPECT_TRUE(board_identity::revsMatch(TR_BOARD_REV_STR, "M2"));
     EXPECT_FALSE(board_identity::revsMatch(TR_BOARD_REV_STR, "M1"));
 }
+
+#endif   // TR_BEETLE_V3
 
 #endif   // TR_BOARD_M2
 

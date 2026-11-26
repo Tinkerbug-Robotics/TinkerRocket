@@ -88,6 +88,14 @@ jobs:
             project: out_computer
             board: M2
             flags: -B build_m2 -DTR_BOARD_M2=1
+          # Tinker-Beetle V3 (in work): the M2 map, but U23's INA230 ALERT drives
+          # the hardware arm trip (Q15/Q16 -> U9), so its out computer never puts
+          # CNVR on ALERT (board_m2.h, INA_ALERT_DRIVES_ARM_TRIP). Stamped "-m3".
+          # Only this processor differs so far; the flight computer stays M2.
+          - line: Tinker-Beetle
+            project: out_computer
+            board: M3
+            flags: -B build_m3 -DTR_BOARD_M2=1 -DTR_BEETLE_V3=1
           # Tinker-Base (hardware/tinker-base) runs base_station with its own map,
           # board_v4.h (-DTR_BS_BOARD=4): the on-board radio over SPI, no I2C, no
           # pack charger. Netlist-verified, not yet run on hardware — so until a

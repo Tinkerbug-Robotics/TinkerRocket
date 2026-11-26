@@ -49,6 +49,16 @@
 #ifndef TR_BOARD_M2
 #define TR_BOARD_M2 0
 #endif
+// TR_BEETLE_V3=1, with TR_BOARD_M2=1, builds the Tinker-Beetle V3 (in work):
+// the V2 map, but U23's ALERT drives a hardware arm trip, so the INA230 must
+// never put CNVR on it (board_m2.h, INA_ALERT_DRIVES_ARM_TRIP). It is a
+// variant of M2 and means nothing on any other board.
+#ifndef TR_BEETLE_V3
+#define TR_BEETLE_V3 0
+#endif
+#if TR_BEETLE_V3 && !TR_BOARD_M2
+#error "TR_BEETLE_V3 selects the Tinker-Beetle V3 variant of the M2 map: build it with -DTR_BOARD_M2=1 -DTR_BEETLE_V3=1."
+#endif
 // No default (#834 sweep). main/CMakeLists.txt raises the same error with a
 // friendlier message; this is the backstop for anything that includes config.h
 // without going through it.
@@ -70,7 +80,11 @@
 #define TR_BOARD_REV_STR "V10"
 #elif TR_BOARD_M2
 #include "board/board_m2.h"
+#if TR_BEETLE_V3
+#define TR_BOARD_REV_STR "M3 (Tinker-Beetle V3)"
+#else
 #define TR_BOARD_REV_STR "M2 (Tinker-Beetle V2)"
+#endif
 #elif TR_BOARD_V7
 #include "board/legacy/board_v7.h"
 #define TR_BOARD_REV_STR "V7"
@@ -186,6 +200,18 @@ static_assert(board_pins::SCAP_FROM_FC,
 // with no consent pin to drop.
 static_assert(board_pins::INA_ALERT_PIN < 0 || board_pins::ARM_CONSENT_PIN >= 0,
               "INA_ALERT_PIN is the fault-current trip's input: it needs ARM_CONSENT_PIN (#1553)");
+// A hardware arm trip on ALERT sits on a board with the two-processor arm (U9
+// behind OC_ARM_EN): the consent stage is what puts the guard, and with it SOL,
+// on the pin while the arm is up.
+static_assert(!board_pins::INA_ALERT_DRIVES_ARM_TRIP || board_pins::ARM_CONSENT_PIN >= 0,
+              "INA_ALERT_DRIVES_ARM_TRIP: the hardware trip needs the consent stage that arms SOL (ARM_CONSENT_PIN)");
+#if TR_BOARD_M2
+// The Beetle V3's ALERT drives the arm trip and the V2's is open: the variant
+// flag and the board fact must agree, or a V3 image runs V2's SOL | CNVR guard
+// and holds its own arm off.
+static_assert(board_pins::INA_ALERT_DRIVES_ARM_TRIP == (TR_BEETLE_V3 != 0),
+              "board_m2.h: INA_ALERT_DRIVES_ARM_TRIP is true on the Beetle V3 (TR_BEETLE_V3) and false on the V2");
+#endif
 // The consent output must not be an ESP32-S3 strapping pad (GPIO0, 3, 45, 46):
 // setup_oc drives it low, and a strap held at a level by the arm chain could
 // change how the board boots.

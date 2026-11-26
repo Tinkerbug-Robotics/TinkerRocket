@@ -5,6 +5,15 @@
 // Tinker-Beetle V2 pin map for the OUT COMPUTER (ESP32-S3FH4R2, U15).
 // Selected with TR_BOARD_M2=1:  idf.py -B build_m2 -DTR_BOARD_M2=1 build
 //
+// The Beetle V3 (in work) is this map plus one difference that changes what
+// this processor may write: U23's ALERT drives a hardware arm trip
+// (INA_ALERT_DRIVES_ARM_TRIP below). Its image adds TR_BEETLE_V3=1:
+//   idf.py -B build_m3 -DTR_BOARD_M2=1 -DTR_BEETLE_V3=1 build
+// It names itself M3 (TR_BOARD_REV_STR) and stamps "-m3" (version and OTA
+// suffix), so a V2 image is refused over the air on a V3 and the reverse.
+// No S3 pad moved between V2 and V3 as of 2026-11-26; walk the V3 netlist
+// again before a V3 image goes on a board, as for V2 below.
+//
 // Board files: hardware/tinker-beetle/, title block V2. V2 is IN WORK, not
 // ordered. Every constant below was taken on 2026-11-21 from a kicad-cli
 // netlist export of the working schematic, by walking U15's
@@ -195,7 +204,21 @@ struct board_pins
     static constexpr int ARM_CONSENT_PIN = 11;   // OC_ARM_EN (CONFIRMED)
     // U23's ALERT (pin 3) is still not connected on V2, so the fault-current
     // trip (pyro_fault_trip_policy.h) polls the shunt register, as on rev1.
+    // On the V3 it is wired, but to the hardware arm trip only, not to this
+    // processor: the poll stays this processor's half there too.
     static constexpr int INA_ALERT_PIN = -1;     // U23 ALERT open (CONFIRMED)
+    // V3 (TR_BEETLE_V3): ALERT drives the hardware arm trip. R150 (100 k)
+    // pulls it up; low turns on Q15, and Q16 pulls U9's gate low (branch
+    // hardware/pyro-pfet-alert-trip, replacing the TPS2HC16 channel switches
+    // with the V10's P-FETs). Anything the INA230 puts on ALERT then holds U9
+    // off, so this image must never route CNVR there: with it in the guard
+    // (V2's word, SOL | CNVR) a V3 could not fire. The V2 as ordered keeps its
+    // TPS2HC16s and an open ALERT, and its words do not change.
+#if TR_BEETLE_V3
+    static constexpr bool INA_ALERT_DRIVES_ARM_TRIP = true;    // Q15/Q16 -> U9 (V3)
+#else
+    static constexpr bool INA_ALERT_DRIVES_ARM_TRIP = false;   // ALERT open (V2)
+#endif
     // No eFuse power-good line to this processor, and VBUCK_OK goes to the
     // flight computer (its GPIO3), not here.
     static constexpr int PG_RAIL_PIN = -1;

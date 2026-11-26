@@ -2797,6 +2797,26 @@ static void ina230ConfigureForRailOn()
     ina_continuous = false;
 }
 
+// The boot path's Mask/Enable write (pyro_fault_trip_policy.h, bootMaskEnable):
+// CNVR OR'd into what the register holds, as TR_INA230::enableConversionReadyAlert
+// did, on every board but one whose ALERT drives the hardware arm trip, which
+// gets the whole word, nothing on the pin, whatever the register held. The
+// INA230 is on the always-on rail and keeps the register across our resets.
+static void ina230BootMaskEnable()
+{
+    using namespace PyroFaultTrip;
+    constexpr bool kAlertWired = config::INA_ALERT_PIN >= 0;
+    constexpr bool kAlertTrips = config::INA_ALERT_DRIVES_ARM_TRIP;
+    uint16_t me = 0;
+    const bool me_ok = ina230.readMaskEnable(&me) == TR_INA230_OK;
+    if (!bootWritesMaskEnable(me_ok, kAlertTrips)) return;
+    if (ina230.writeRegister(INA230_Reg::MASK_ENABLE,
+                             bootMaskEnable(me_ok ? me : 0, kAlertWired, kAlertTrips)) != TR_INA230_OK &&
+        kAlertTrips)
+        ESP_LOGE("PWR", "INA230 Mask/Enable not cleared — whatever it holds is on the ALERT "
+                        "that trips the arm");
+}
+
 static void readINA230Power()
 {
     // #1166: the hold-up cap rides this tick (one read a second of it), on
@@ -4770,6 +4790,7 @@ static void pyroFaultGuard(bool on)
     if (on == ina_guard) return;
     ina_guard = on;
     constexpr bool kAlertWired = config::INA_ALERT_PIN >= 0;
+    constexpr bool kAlertTrips = config::INA_ALERT_DRIVES_ARM_TRIP;   // Beetle V3, Mantis V11
 
     if constexpr (kAlertWired)
     {
@@ -4778,10 +4799,19 @@ static void pyroFaultGuard(bool on)
     if (ina230_ok)
     {
         // SOL while consent is up; #1409's function, when it exists, takes the
-        // pin back only here, on the way down (alertOwner()).
-        bool ok = ina230.writeRegister(INA230_Reg::MASK_ENABLE,
-                                       on ? solMaskEnable(kAlertWired) : kMeCnvr) == TR_INA230_OK;
-        ok = ina230.writeRegister(INA230_Reg::ALERT_LIMIT, on ? kSolAlertLimit : 0) == TR_INA230_OK && ok;
+        // pin back only here, on the way down (alertOwner()). Where ALERT
+        // drives the arm trip neither word carries CNVR (the policy header's
+        // Mask/Enable). The limit goes in before SOL is enabled and is cleared
+        // after it is disabled, so SOL never compares against a limit of 0:
+        // on a board whose ALERT holds U9 off that would be a trip of its own.
+        bool ok = true;
+        if (on)
+            ok = ina230.writeRegister(INA230_Reg::ALERT_LIMIT, kSolAlertLimit) == TR_INA230_OK;
+        ok = ina230.writeRegister(INA230_Reg::MASK_ENABLE,
+                                  on ? solMaskEnable(kAlertWired, kAlertTrips)
+                                     : idleMaskEnable(kAlertWired, kAlertTrips)) == TR_INA230_OK && ok;
+        if (!on)
+            ok = ina230.writeRegister(INA230_Reg::ALERT_LIMIT, 0) == TR_INA230_OK && ok;
         // Guard or rail-on; with the rail off the low-power branch puts its
         // own averaging back on its next pass (ina_continuous is cleared).
         ina230ConfigureForRailOn();
@@ -11789,6 +11819,11 @@ static void setup_oc()
     }
     if (ina230_bus != nullptr && ina230.begin(ina230_bus, 400000) == TR_INA230_OK)
     {
+        // Where ALERT drives the hardware arm trip, empty Mask/Enable before
+        // anything below can fail: a calibrate failure leaves ina230_ok false,
+        // and then nothing else writes the register, so a CNVR an older image
+        // left would hold U9 off for the whole boot.
+        if constexpr (config::INA_ALERT_DRIVES_ARM_TRIP) ina230BootMaskEnable();
         // Start in power-down mode (0.5 uA): the rail is off at boot, and
         // low-power mode switches to its own 1024-sample averaging on its
         // first pass. Powering the rail on selects the continuous rail-on
@@ -11802,7 +11837,9 @@ static void setup_oc()
         // an "OK" status.
         if (ina230.calibrate(INA230_R_SHUNT_OHM, INA230_CURRENT_LSB_A) == TR_INA230_OK)
         {
-            ina230.enableConversionReadyAlert(true);  // enable CVRF bit for polling
+            // CNVR onto ALERT, as every board has run it (CVRF is polled either
+            // way). Where ALERT drives the arm trip this already ran above.
+            if constexpr (!config::INA_ALERT_DRIVES_ARM_TRIP) ina230BootMaskEnable();
             ina230_ok = true;
             ESP_LOGI("PWR", "INA230 OK (continuous while the rail is on, CVRF-checked)");
         }

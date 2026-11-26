@@ -58,6 +58,8 @@ struct board_pins
     // (GPIO34); all four are in board_v10.h (#1593). This header must not
     // claim them: on the V9 those pads are bare.
     static constexpr int INA_ALERT_PIN = -1;
+    // No hardware arm trip either (Beetle V3 / Mantis V11 only).
+    static constexpr bool INA_ALERT_DRIVES_ARM_TRIP = false;
     static constexpr int PG_RAIL_PIN = -1;
     static constexpr int VBUCK_OK_PIN = -1;
 

@@ -59,6 +59,13 @@ struct board_pins
     // takes the falling edge in pyroFaultAlertIsr and drops OC_ARM_EN at once;
     // the shunt poll stays as the backstop.
     static constexpr int INA_ALERT_PIN = 18;     // INA_ALERT
+    // The V10 as ordered has no hardware arm trip on ALERT. The V11 adds one
+    // (Q15/Q16 pull U9's gate low on INA_ALERT; branch
+    // hardware/pyro-pfet-alert-trip), and an image that puts CNVR on ALERT
+    // outside the guard holds U9 off there; harmless with consent down, which
+    // is the only time this target does it (pyro_fault_trip_policy.h,
+    // Mask/Enable). A V11 target sets this true.
+    static constexpr bool INA_ALERT_DRIVES_ARM_TRIP = false;
 
     // --- Supply status inputs (#1409, #1593) ---
     // Read as plain inputs, no internal pulls (each has its own), and reported

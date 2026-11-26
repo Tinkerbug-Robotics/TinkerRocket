@@ -34,7 +34,12 @@ string(TIMESTAMP TR_BUILD_DATE "%Y%m%d-%H%M" UTC)
 # matters at runtime and not only for provenance: the two select different
 # headers (V9/V10 has no MRAM), so a "-v8" image on V9 hardware is a real
 # misconfiguration, not just a mislabel.
-if(TR_BOARD_M2)
+# TR_BEETLE_V3 (with TR_BOARD_M2) is the Tinker-Beetle V3: "-m3", so the OTA
+# receiver refuses a V2 image on a V3 (whose INA230 guard would put CNVR on the
+# ALERT that holds its arm off) and a V3 image on a V2.
+if(TR_BOARD_M2 AND TR_BEETLE_V3)
+    set(TR_BOARD_SUFFIX "-m3")
+elseif(TR_BOARD_M2)
     set(TR_BOARD_SUFFIX "-m2")
 elseif(TR_BOARD_V10)
     set(TR_BOARD_SUFFIX "-v10")

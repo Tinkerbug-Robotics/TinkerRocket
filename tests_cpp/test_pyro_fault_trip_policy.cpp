@@ -10,6 +10,9 @@
 //     pack still reads over the limit; a dead INA230 never holds it low;
 //   - while consent is up SOL owns the INA230's alert pin; #1409's function
 //     only gets it while consent is down;
+//   - where ALERT drives the hardware arm trip (Beetle V3, Mantis V11) no
+//     Mask/Enable word the OC writes carries CNVR, at boot, in the guard or
+//     outside it, and SOL is still armed in the guard;
 //   - a config that can put 3+ channels in Firing at once is flagged;
 //   - after a stuck reading's release the poll leaves the pin alone, so consent
 //     is not chopped at the loop rate (#1757). OcPin below drives the pin the
@@ -596,14 +599,146 @@ TEST(PyroFaultTripAlert, BrownoutGetsThePinOnlyWhileConsentIsDown) {
 
 TEST(PyroFaultTripAlert, ConversionReadyStaysOffAWiredAlertPin) {
     // With CNVR on, ALERT asserts once per conversion: on a wired pin that is
-    // a trip every 280 us.
-    EXPECT_EQ(solMaskEnable(true), kMeSol);
-    EXPECT_EQ(solMaskEnable(true) & kMeCnvr, 0u);
-    // Unwired (the Beetle): keep the CNVR bit the rail-on path has always run with.
-    EXPECT_EQ(solMaskEnable(false), (uint16_t)(kMeSol | kMeCnvr));
+    // a trip every 280 us. The Mantis V10: wired, no hardware trip.
+    EXPECT_EQ(solMaskEnable(true, false), kMeSol);
+    EXPECT_EQ(solMaskEnable(true, false) & kMeCnvr, 0u);
+    // Unwired (the Beetle V2): keep the CNVR bit the rail-on path has always run with.
+    EXPECT_EQ(solMaskEnable(false, false), (uint16_t)(kMeSol | kMeCnvr));
     // Transparent, active low: LEN (bit 0) and APOL (bit 1) clear either way.
-    EXPECT_EQ(solMaskEnable(true) & 0x3u, 0u);
-    EXPECT_EQ(solMaskEnable(false) & 0x3u, 0u);
+    EXPECT_EQ(solMaskEnable(true, false) & 0x3u, 0u);
+    EXPECT_EQ(solMaskEnable(false, false) & 0x3u, 0u);
+}
+
+// ---------------------------------------------------------------------------
+// ALERT driving the hardware arm trip (Beetle V3, Mantis V11)
+// ---------------------------------------------------------------------------
+// On these boards low on ALERT turns on Q15, and Q16 pulls U9's gate low. CNVR
+// in the guard would hold U9 off while consent is up, so the board could not
+// fire; no word the OC writes may carry it, in any state.
+
+namespace {
+// A model of the INA230's Mask/Enable register through the writes main.cpp
+// makes: the boot path (setup_oc) and pyroFaultGuard(on / off).
+struct MaskEnableReg
+{
+    uint16_t value   = 0;      // 0 at the part's power-on
+    bool     read_ok = true;   // false: the boot path's read fails
+
+    void boot(bool wired, bool trips)
+    {
+        const uint16_t now = read_ok ? value : 0;
+        if (bootWritesMaskEnable(read_ok, trips)) value = bootMaskEnable(now, wired, trips);
+    }
+    void guard(bool on, bool wired, bool trips)
+    {
+        value = on ? solMaskEnable(wired, trips) : idleMaskEnable(wired, trips);
+    }
+};
+
+// Register contents an earlier image or an earlier boot can leave behind: the
+// INA230 is on the always-on rail and no boot resets it.
+constexpr uint16_t kLeftovers[] = {
+    0x0000,
+    kMeCnvr,                          // any image's boot or idle word
+    (uint16_t)(kMeSol | kMeCnvr),     // a V2 image's guard (out computer reset mid-guard)
+    kMeSol,                           // a V10 image's guard
+    0xFC03,                           // every function bit, LEN and APOL
+    0xFFFF,
+};
+}   // namespace
+
+TEST(PyroFaultTripArmTrip, NoWordCarriesCnvrWhereAlertDrivesTheTrip) {
+    for (bool wired : {false, true})   // Beetle V3: not to an S3; Mantis V11: also to GPIO18
+    {
+        SCOPED_TRACE(wired ? "ALERT also on an S3 pin" : "ALERT on no S3 pin");
+        for (bool guard : {false, true})
+            EXPECT_FALSE(cnvrAllowed(guard, wired, true));
+        EXPECT_EQ(solMaskEnable(wired, true) & kMeCnvr, 0u);
+        EXPECT_EQ(idleMaskEnable(wired, true) & kMeCnvr, 0u);
+        for (uint16_t now : kLeftovers)
+            EXPECT_EQ(bootMaskEnable(now, wired, true) & kMeCnvr, 0u) << "register held 0x"
+                                                                        << std::hex << now;
+    }
+}
+
+TEST(PyroFaultTripArmTrip, TheGuardStillArmsSolAndNothingElse) {
+    // The hardware trip is SOL on the pin; it must stay armed while consent is up.
+    EXPECT_EQ(solMaskEnable(false, true), kMeSol);
+    EXPECT_EQ(solMaskEnable(true, true), kMeSol);
+    // Transparent, active low: the trip releases on its own once the current
+    // has gone, and a low pin is what turns Q15 on.
+    EXPECT_EQ(solMaskEnable(false, true) & 0x3u, 0u);
+    EXPECT_EQ(solMaskEnable(true, true) & 0x3u, 0u);
+}
+
+TEST(PyroFaultTripArmTrip, OutsideTheGuardNothingIsOnThePin) {
+    EXPECT_EQ(idleMaskEnable(false, true), 0u);
+    EXPECT_EQ(idleMaskEnable(true, true), 0u);
+}
+
+TEST(PyroFaultTripArmTrip, BootClearsWhateverTheRegisterHeld) {
+    // An older image's CNVR, or the SOL of a guard an out computer reset
+    // interrupted: the whole word is written, and it is empty.
+    for (bool wired : {false, true})
+        for (uint16_t now : kLeftovers)
+            EXPECT_EQ(bootMaskEnable(now, wired, true), 0u);
+    // Even when the read before it fails: the word does not depend on it.
+    EXPECT_TRUE(bootWritesMaskEnable(false, true));
+    EXPECT_TRUE(bootWritesMaskEnable(true, true));
+}
+
+TEST(PyroFaultTripArmTrip, NoStateOfTheRegisterEverHoldsCnvr) {
+    // Boot, arm, stand down, arm again, an out computer reset mid-guard, and a
+    // boot whose read fails: the register never holds CNVR.
+    for (bool wired : {false, true})
+        for (uint16_t left : kLeftovers)
+            for (bool read_ok : {true, false})
+            {
+                SCOPED_TRACE(::testing::Message() << "wired " << wired << ", left 0x" << std::hex
+                                                  << left << ", read_ok " << read_ok);
+                MaskEnableReg reg;
+                reg.value   = left;
+                reg.read_ok = read_ok;
+                reg.boot(wired, true);
+                EXPECT_EQ(reg.value & kMeCnvr, 0u);
+                for (bool on : {true, false, true})
+                {
+                    reg.guard(on, wired, true);
+                    EXPECT_EQ(reg.value & kMeCnvr, 0u);
+                    EXPECT_EQ((reg.value & kMeSol) != 0, on) << "SOL armed exactly while consent is up";
+                }
+                reg.read_ok = true;
+                reg.boot(wired, true);   // the out computer resets with the guard up
+                EXPECT_EQ(reg.value, 0u);
+            }
+}
+
+TEST(PyroFaultTripArmTrip, BoardsWithoutTheTripWriteWhatTheyAlwaysHave) {
+    // The Beetle V2 (open ALERT) and the Mantis V10 (ALERT on GPIO18, no
+    // hardware trip): the words main.cpp wrote before the flag existed.
+    for (bool wired : {false, true})
+    {
+        SCOPED_TRACE(wired ? "Mantis V10" : "Beetle V2");
+        // Guard down: kMeCnvr, as pyroFaultGuard(false) always wrote.
+        EXPECT_EQ(idleMaskEnable(wired, false), kMeCnvr);
+        // Boot: TR_INA230::enableConversionReadyAlert(true) — CNVR OR'd into
+        // what was read, and no write when the read fails.
+        for (uint16_t now : kLeftovers)
+            EXPECT_EQ(bootMaskEnable(now, wired, false), (uint16_t)(now | kMeCnvr));
+        EXPECT_FALSE(bootWritesMaskEnable(false, false));
+        EXPECT_TRUE(bootWritesMaskEnable(true, false));
+    }
+    EXPECT_EQ(solMaskEnable(false, false), (uint16_t)(kMeSol | kMeCnvr));   // V2
+    EXPECT_EQ(solMaskEnable(true, false), kMeSol);                          // V10
+
+    // The V2's whole sequence, from power-on.
+    MaskEnableReg v2;
+    v2.boot(false, false);
+    EXPECT_EQ(v2.value, kMeCnvr);
+    v2.guard(true, false, false);
+    EXPECT_EQ(v2.value, (uint16_t)(kMeSol | kMeCnvr));
+    v2.guard(false, false, false);
+    EXPECT_EQ(v2.value, kMeCnvr);
 }
 
 // ---------------------------------------------------------------------------
