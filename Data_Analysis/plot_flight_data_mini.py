@@ -2077,10 +2077,16 @@ def parse_binary_file(filepath):
                         "apogee_elapsed_ms":    f[6],
                         "burnout_elapsed_ms":   f[7],
                         "pyro_apogee_detected": bool(f[8]),
+                        # #1760: 1 fired, 2 started (mid-fire); both are spent
+                        # on a restore, so "fired" here means "will not fire again".
                         "snap_pyro1_fired":     bool(f[9]),
                         "snap_pyro2_fired":     bool(f[10]),
                         "snap_pyro3_fired":     bool(f[11]),
                         "snap_pyro4_fired":     bool(f[12]),
+                        "snap_pyro1_mid_fire":  f[9] == 2,
+                        "snap_pyro2_mid_fire":  f[10] == 2,
+                        "snap_pyro3_mid_fire":  f[11] == 2,
+                        "snap_pyro4_mid_fire":  f[12] == 2,
                         "b2r_code":             b2r_code,
                         "b2r_mode":             b2r_mode,
                         "thrust_axis_disproved": thrust_disproved,

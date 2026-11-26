@@ -1489,6 +1489,18 @@ target_include_directories(test_pyro_fault_trip_policy PRIVATE
 target_link_libraries(test_pyro_fault_trip_policy pyro_timing_fc GTest::gtest_main)
 gtest_discover_tests(test_pyro_fault_trip_policy)
 
+# ---------- test_pyro_restore_policy (#1760) ----------
+# A channel that had started to fire when the FC reset is spent: the snapshot
+# records it as started from its settle on (sent on the pass it leaves Idle),
+# and the restore keeps it off. Pinned to the FC's own settle and pulse.
+add_executable(test_pyro_restore_policy test_pyro_restore_policy.cpp)
+target_include_directories(test_pyro_restore_policy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_link_libraries(test_pyro_restore_policy pyro_timing_fc GTest::gtest_main)
+gtest_discover_tests(test_pyro_restore_policy)
+
 # ---------- test_flush_iter_ledger (#510) ----------
 # Host-side test for the flush-task per-iteration accounting: section sums,
 # clamped unaccounted/drain-other arithmetic, and the WARN/INFO classification
