@@ -64,6 +64,25 @@
 //            inflate.  This bounds the true fire altitude to [val, val+2*margin]
 //            rather than pushing it below val, which matters most at the
 //            apps' shipped default of 100 m.
+//            #1761: and its own persistence, the GNSS half of the barometer's
+//            re-acquire dwell.  It acted on the latest fix alone, so with the
+//            barometer untrusted ONE 3D fix reading low — the first solution
+//            after a receiver restart or lost lock, or a glitch mid-stream —
+//            fired the main hundreds of metres high.  The backstop now needs a
+//            run of consistent fixes: gnss_reacquire_ms and at least
+//            gnss_reacquire_fixes of them, ended by a gap (no good fix for
+//            gnss_gap_ms) and restarted by any fix whose altitude steps away
+//            from the one before it by more than the two fixes' own Doppler
+//            predicts (gnss_step_tol_m + gnss_step_tol_mps per second between
+//            them).  A short burst of no-solution records (a receiver's
+//            invalid epoch, gnss_ok false for a tick) does not end the run:
+//            the next good fix is judged against the last one instead, so a
+//            receiver that drops an epoch every second still deploys.
+//            The tolerance is wide on purpose: the bad fixes this is for are
+//            hundreds of metres out, and a tolerance tight enough to trip on
+//            receiver noise would keep restarting the run and starve the
+//            backstop on the flight it exists for.  A run lasts the whole
+//            descent on a healthy stream, so this costs nothing there.
 //
 // NOT DONE, deliberately: GNSS never pre-empts a trusted barometer.  A
 // GNSS-vs-baro disagreement demotes the PAIR (Layer 1); it never authorises
@@ -109,6 +128,24 @@ struct Config {
     // noise on a landed vehicle, which matters because impact_flag no longer
     // inhibits this path (see Inputs) and quiescent_flag can take ~30 s.
     float    gnss_min_descent_mps = 1.0f;
+    // #1761: the backstop's run of consistent fixes (see Layer 2).  A restart
+    // costs the fix that restarted it plus the longer of this dwell and one
+    // more fix: ~1.1 s on a 10-20 Hz receiver (~22 m at a drogue's 20 m/s,
+    // inside the late-biased margin), ~2 s at 1 Hz (the gnss-sdr-dev board's
+    // own fix rate: ~40 m at 20 m/s), more on a fast ballistic descent.
+    uint32_t gnss_reacquire_ms    = 1000;
+    uint8_t  gnss_reacquire_fixes = 2;
+    // A run ends when no good fix has come for this long: past the 2 s
+    // staleness bound main.cpp puts on gnss_ok, so one dropped fix at 1 Hz
+    // (a 2 s hole) does not end it.  It also caps the fix-to-fix tolerance
+    // (tol_m + tol_mps x 2.5 s = 62.5 m), which is why a long gap must end it.
+    uint32_t gnss_gap_ms          = 2500;
+    // Fix-to-fix consistency: |altitude - (previous + mean Doppler x dt)| must
+    // stay within tol_m + tol_mps x dt.  50 m is past any receiver's
+    // fix-to-fix noise (the gnss-sdr-dev board passes fixes with up to 10 m of
+    // residual), far inside the errors this catches.
+    float    gnss_step_tol_m      = 50.0f;
+    float    gnss_step_tol_mps    = 5.0f;
 };
 
 struct State {
@@ -120,6 +157,14 @@ struct State {
     uint32_t resume_ms       = 0;
     bool     after_reboot    = false;
     uint32_t last_step_ms    = 0;
+    // #1761: the GNSS backstop's run of consistent fixes.
+    bool     gnss_run          = false;   // a run is open (gnss_ok since it began)
+    uint32_t gnss_run_since_ms = 0;       // when its first fix arrived
+    uint8_t  gnss_run_fixes    = 0;       // fixes in it, saturating
+    uint32_t gnss_last_fix_id  = 0;
+    uint32_t gnss_last_fix_ms  = 0;       // when the previous fix was taken
+    float    gnss_last_agl_m   = 0.0f;    // its AGL, at its own time
+    float    gnss_last_vel_mps = 0.0f;
 };
 
 struct Inputs {
@@ -149,6 +194,12 @@ struct Inputs {
     bool     gnss_ok         = false;  // 3D + sats + fresh + converged datum
     float    gnss_agl_m      = 0.0f;   // (alt - ref_alt_m), Doppler-propagated
     float    gnss_vel_u_mps  = 0.0f;   // up-positive; descent is negative
+    // #1761: which fix this is, and how old.  gnss_fix_id is any value that
+    // changes with each new fix (the FC passes the fix's receive timestamp);
+    // gnss_fix_age_ms is how long before now_ms it was taken, the age the
+    // propagation above used.
+    uint32_t gnss_fix_id     = 0;
+    uint32_t gnss_fix_age_ms = 0;
 };
 
 // Call at enterInflight() and on the reboot-recovery restore.  after_reboot
@@ -184,6 +235,45 @@ inline void step(State& st, const Inputs& in, const Config& cfg = Config{})
     // Re-acquire dwell: restart the clock on every unhealthy -> healthy edge.
     if (in.baro_healthy && !st.baro_ok_prev) st.baro_ok_since_ms = in.now_ms;
     st.baro_ok_prev = in.baro_healthy;
+
+    // #1761: the GNSS backstop's run of consistent fixes.  A gap ends it (no
+    // good fix for gnss_gap_ms; a short burst of invalid records does not); a
+    // new fix extends it, or restarts it from this fix when its altitude steps
+    // away from the previous one's by more than their Doppler predicts.
+    if (!in.gnss_ok)
+    {
+        if (st.gnss_run && (uint32_t)(in.now_ms - st.gnss_last_fix_ms) > cfg.gnss_gap_ms)
+            st.gnss_run = false;
+    }
+    else if (!st.gnss_run || in.gnss_fix_id != st.gnss_last_fix_id)
+    {
+        const uint32_t fix_ms  = in.now_ms - in.gnss_fix_age_ms;
+        const float    fix_agl = in.gnss_agl_m -
+                                 in.gnss_vel_u_mps * ((float)in.gnss_fix_age_ms * 1e-3f);
+        bool consistent = false;
+        if (st.gnss_run)
+        {
+            const float dt_s      = (float)(uint32_t)(fix_ms - st.gnss_last_fix_ms) * 1e-3f;
+            const float predicted = st.gnss_last_agl_m +
+                                    0.5f * (st.gnss_last_vel_mps + in.gnss_vel_u_mps) * dt_s;
+            consistent = fabsf(fix_agl - predicted) <=
+                         cfg.gnss_step_tol_m + cfg.gnss_step_tol_mps * dt_s;
+        }
+        if (consistent)
+        {
+            if (st.gnss_run_fixes < 255) ++st.gnss_run_fixes;
+        }
+        else
+        {
+            st.gnss_run          = true;
+            st.gnss_run_since_ms = in.now_ms;
+            st.gnss_run_fixes    = 1;
+        }
+        st.gnss_last_fix_id  = in.gnss_fix_id;
+        st.gnss_last_fix_ms  = fix_ms;
+        st.gnss_last_agl_m   = fix_agl;
+        st.gnss_last_vel_mps = in.gnss_vel_u_mps;
+    }
 
     // Stuck-port cross-check.  Only meaningful when both sensors are answering
     // and we are past apogee (on the pad both rates are legitimately ~0, and
@@ -224,6 +314,14 @@ inline bool baroTrusted(const State& st, const Inputs& in,
     return true;
 }
 
+// #1761: has the GNSS stream been consistent long enough to authorise a deploy?
+inline bool gnssSettled(const State& st, const Inputs& in, const Config& cfg = Config{})
+{
+    return st.gnss_run &&
+           st.gnss_run_fixes >= cfg.gnss_reacquire_fixes &&
+           (uint32_t)(in.now_ms - st.gnss_run_since_ms) >= cfg.gnss_reacquire_ms;
+}
+
 // Per-channel decision.  Const — call after step().
 inline Source evaluate(const State& st, const Inputs& in, float threshold_m,
                        const Config& cfg = Config{})
@@ -246,6 +344,7 @@ inline Source evaluate(const State& st, const Inputs& in, float threshold_m,
 
     // Barometer not trusted — GNSS backstop.
     if (!in.gnss_ok) return Source::None;
+    if (!gnssSettled(st, in, cfg)) return Source::None;   // #1761
     if (st.after_reboot &&
         (uint32_t)(in.now_ms - st.resume_ms) < cfg.resume_dwell_ms)
         return Source::None;
