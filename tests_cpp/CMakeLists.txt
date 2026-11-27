@@ -2773,6 +2773,22 @@ target_include_directories(test_recovery_arm_gate PRIVATE
 target_link_libraries(test_recovery_arm_gate GTest::gtest_main)
 gtest_discover_tests(test_recovery_arm_gate)
 
+# ---------- test_restored_burnout (#1776) ----------
+# A flight restored from a snapshot with no burnout (the flight token's
+# launch-edge frame, #1717) latches burnout once the recovery arm gate is Open
+# and this boot's own sensors show it past thrust, so a section hanging nose-up
+# under the drogue reaches the apogee vote. Driven with the real kinematic
+# checks, the live burnout detector and the main-deploy gate at 1 kHz.
+add_executable(test_restored_burnout test_restored_burnout.cpp
+    ${LIB_DIR}/TR_KinematicChecks/TR_KinematicChecks.cpp
+)
+target_include_directories(test_restored_burnout PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_KinematicChecks
+)
+target_link_libraries(test_restored_burnout GTest::gtest_main)
+gtest_discover_tests(test_restored_burnout)
+
 # ---------- test_modem_config_ack (#835 item 7) ----------
 add_executable(test_modem_config_ack test_modem_config_ack.cpp)
 target_include_directories(test_modem_config_ack PRIVATE

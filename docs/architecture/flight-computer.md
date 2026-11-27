@@ -445,6 +445,38 @@ would suppress `PRELAUNCH → INFLIGHT` and pyro servicing for an entire flight 
 drogue, no main, ballistic return. Launch detection now clears any active test as a
 failsafe (#363). A bench false positive merely drops you back into `READY`, which is safe.
 
+**A restored flight can come back with burnout unset, and the apogee vote waits for
+burnout.** When the Out Computer boots from a power loss with no RAM copy of the
+snapshot and no NAND frame (#1717), it serves the flight token's frame. That frame is
+copied once, on the `PRELAUNCH → INFLIGHT` edge, so it says launch, no burnout, no apogee.
+The live burnout detector (`BurnoutDetector.h`) needs 50 ms of negative axial specific
+force. Drag in the coast gives it, and so does a section hanging nose-down under the
+drogue. A section hanging from its forward end reads about +1 g on that axis for the whole
+descent. Then neither the apogee vote nor, with a healthy IMU, the barometer backstop
+(#1706) ever ran, and the main never fired. Since #1776, `RestoredBurnout.h` latches
+burnout on such a restore once both of these hold:
+- the recovery arm gate is Open;
+- this boot's own sensors show the vehicle past thrust, with the specific force at or
+  under 2 g for 250 ms and either a barometric descent of 5 m/s held 3 s or free fall
+  held 2 s.
+
+2 g alone does not rule out thrust: a long-burn or low-thrust motor can read 1-2 g late in
+its burn. The 3 s descent hold, three times the gate's own 1 s arm, is what keeps a
+static-port step near Mach 1 from reading as a descent under a burning motor (#1706).
+Under the drogue it costs about 2 s. The vote and the backstop then run as they do after
+a live burnout, with the backstop's 1 s settle. An altitude-on-descent main fires at its
+altitude, or at once if the call comes below it. A time-after-apogee channel counts from
+this boot's apogee call, so it fires that much late.
+
+The latch's own evidence is also what closes the ground case. A stale restore on a bench
+can open the gate: its boost arm is marginal against a swing, and its spin arm against an
+airframe turned by hand. But no handling gives 15 m of continuous drop or 20 m of free
+fall. A restore that also lost the IMU never latches, because the backstop then calls
+apogee without burnout (#556). This restore lists every pyro channel as unfired, so a
+drogue that fired before the reset fires again once apogee is called. A section hanging
+nose-down already did so before #1776. The fix for that is a restore that carries the
+real channel state (#1717).
+
 **The EKF is handed the last accepted GNSS fix, unchanged, on every tick.** The filter
 fuses each fix's timestamp once and skips a repeat, so which fixes have been consumed is
 tracked in one place: the filter. The loop used to keep its own consumed markers and,
