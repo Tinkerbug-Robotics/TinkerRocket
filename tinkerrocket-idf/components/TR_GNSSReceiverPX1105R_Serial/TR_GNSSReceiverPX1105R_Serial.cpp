@@ -300,7 +300,7 @@ void TR_GNSSReceiverPX1105RSerial::runLink()
 
 int64_t TR_GNSSReceiverPX1105RSerial::arrivalUs(size_t index) const
 {
-    return rd_us_ - static_cast<int64_t>(static_cast<double>((rd_n_ - 1 - index) + rd_behind_) * byte_us_);
+    return px1105r::arrivalUs(rd_us_, rd_n_, index, rd_behind_, byte_us_);
 }
 
 // ── begin() ─────────────────────────────────────────────────────────────
@@ -422,14 +422,15 @@ void TR_GNSSReceiverPX1105RSerial::onFrame(const uint8_t* body, size_t len, size
         else
         {
             // the time sync runs without the raw outputs too (GNSS_CLOCK_MSG):
-            // the header alone
+            // the header alone, at the frame's first byte as rawE5 takes it
             if (len >= 14 && body[1] == 1)
             {
                 const uint16_t week = skytraq::be16(body + 3);
                 const uint32_t tow_ms = skytraq::be32(body + 5);
                 double dtr = 0.0;
                 if (px1105r::biasAt(clk_, px1105r::rxMs(week, tow_ms), dtr))
-                    time_sync_.addSample(px1105r::epochGpsS(week, tow_ms, dtr), end_us);
+                    time_sync_.addSample(px1105r::epochGpsS(week, tow_ms, dtr),
+                                         px1105r::frameStartUs(end_us, len, byte_us_));
             }
         }
         break;
@@ -764,11 +765,13 @@ void TR_GNSSReceiverPX1105RSerial::rawE5(const uint8_t* body, size_t len, int64_
     r.st.epochs++;
     const int64_t rx_ms = px1105r::rxMs(r.e5.week, r.e5.tow_ms);
 
-    // the time sync's sample: this epoch's GPS instant against its arrival
+    // the time sync's sample: this epoch's GPS instant against its frame's
+    // first byte (#1771: the last byte's time carries the frame's wire time,
+    // 7-15 ms, which moves with the signal count)
     double dtr = 0.0;
     const bool biased = px1105r::biasAt(clk_, rx_ms, dtr);
     const double gps_s = px1105r::epochGpsS(r.e5.week, r.e5.tow_ms, dtr);
-    if (biased) time_sync_.addSample(gps_s, end_us);
+    if (biased) time_sync_.addSample(gps_s, px1105r::frameStartUs(end_us, len, byte_us_));
     // the line's numbers for rawStats, from this task (the only one that touches time_sync_)
     r.st.line_valid = time_sync_.valid();
     r.st.line_rms_ms = static_cast<float>(time_sync_.envelopeRmsMs());

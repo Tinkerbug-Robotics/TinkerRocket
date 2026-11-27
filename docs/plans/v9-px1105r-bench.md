@@ -22,8 +22,9 @@ Nothing here has run on hardware yet. Host tests on the receiver's own captures 
   It then reads back what the receiver can report, and runs only once 0xE5 comes every 50 ms. A receiver that goes
   silent is found and set up again; one whose 0xE5 stops is set up again.
 - **No 1PPS.** The carrier's J3 pin 5 is the receiver's RXD2 (an input), so the image never touches GPIO2. Epochs
-  are placed on the MCU clock by when each 0xE5 arrives, as the Beetle's LC86G is (`GnssTimeSync`). The receiver's
-  own delay from an epoch to its 0xE5 is **not calibrated** (0). Every epoch is placed late by it, which in boost is
+  are placed on the MCU clock by when each 0xE5 arrives, as the Beetle's LC86G is (`GnssTimeSync`): by its
+  first byte (#1771), since the frame's own wire time (7-15 ms for 20-45 signals at 921600 baud) moves with the
+  signal count. The receiver's own delay from an epoch to the start of its 0xE5 is **not calibrated** (0). Every epoch is placed late by it, which in boost is
   acceleration × delay of velocity error (30 ms at 10 g ≈ 3 m/s). To measure it, put a scope on the PPS LED
   (D1/R1) and the receiver's TXD (J3 pin 2).
 - **Measurements** (`Px1105rRawEpoch.h`):
