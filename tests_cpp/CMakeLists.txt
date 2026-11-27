@@ -2095,6 +2095,20 @@ target_include_directories(test_raw_nav_choice PRIVATE
 target_link_libraries(test_raw_nav_choice GTest::gtest_main)
 gtest_discover_tests(test_raw_nav_choice)
 
+# ---------- test_beetle_v2_raw_floor ----------
+# #1772: the Beetle V2's raw-GNSS filter start check (config.h with TR_BOARD_M2
+# and TR_GNSS_DRIVER_PX1105R; raw_nav_policy.h roomForFlightTask): room for the
+# flight task's stack beside the filter's, not the ESP32-P4's 56 KB floor.
+add_executable(test_beetle_v2_raw_floor test_beetle_v2_raw_floor.cpp)
+target_include_directories(test_beetle_v2_raw_floor PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/../projects/flight_computer/main
+)
+target_compile_definitions(test_beetle_v2_raw_floor PRIVATE TR_BOARD_M2=1 TR_GNSS_DRIVER_PX1105R=1)
+target_link_libraries(test_beetle_v2_raw_floor GTest::gtest_main)
+gtest_discover_tests(test_beetle_v2_raw_floor)
+
 # ---------- test_sdr_board_config ----------
 # The V10's SDR raw-nav image's switches (config.h with TR_BOARD_V10 and
 # TR_GNSS_DRIVER_SDR, as its CMake sets them) and the receiver profile it flies

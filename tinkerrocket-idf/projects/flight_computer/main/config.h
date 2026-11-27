@@ -1129,6 +1129,13 @@ struct config : board_pins
     static constexpr float    EKF_ATT_VAR_OK        = 0.1f;   // rad²,  worst attitude axis (~18° 1σ)
     static constexpr float    EKF_VEL_VAR_OK        = 4.0f;   // (m/s)², worst velocity axis (~2 m/s 1σ)
 
+    // Task stacks the raw filter's start floor counts (#1772; main.cpp): the
+    // flight task's (app_main, the first task after setup_fc) and the raw
+    // filter's own ("Raw GNSS", startRawShadow). Each is one block of
+    // internal RAM.
+    static constexpr uint32_t FLIGHT_TASK_STACK_B = 16u * 1024u;
+    static constexpr uint32_t RAW_FILTER_STACK_B  = 8192;
+
 #if TR_RAW_NAV_P4
     // The mosaic-only image's one navigation filter, the raw-GNSS filter
     // (main.cpp startRawShadow; the plan's section 2, 2026-10-17), and the
@@ -1154,6 +1161,17 @@ struct config : board_pins
     //     block is at least this after its objects are allocated: its two
     //     tasks' stacks (14 KB) and the flight task's 16 KB come out of what
     //     is left, and G6 wants 40 KB free with the flight task running.
+    //     That is the ESP32-P4's (the V10 and V9 boards). The Beetle V2's
+    //     ESP32-S3 (#1772) has far less internal RAM, in several heaps, so its
+    //     largest block says little: it probes instead (RAW_INTERNAL_PROBE,
+    //     RawNavPolicy::roomForFlightTask). With blocks the size of the
+    //     filter's two stacks taken, the flight task's stack must still find
+    //     one block (RAW_INTERNAL_SLACK_B over), with RAW_INTERNAL_MARGIN_B
+    //     more free beside it. That margin is a stand-in: the Beetle V1 flew
+    //     with about 21 KB free once its flight task ran (its 2026-10-22 image:
+    //     37,852 B left after its filter's 8 KB and 4 KB stacks), but a Beetle
+    //     V2 has never booted. Its first boot's "[RAWGNSS] memory:" line gives
+    //     both numbers; set the margin from them.
     //   The flight safeguards (the Doppler change check, the heading share,
     //     the turning body's Doppler allowance and the spinning body's
     //     settings) are not here: they are set in one place,
@@ -1164,8 +1182,21 @@ struct config : board_pins
     static constexpr double   RAW_RESTORE_VEL_SIGMA_MPS = 20.0;
     static constexpr double   RAW_RESTORE_ATT_SIGMA_DEG = 15.0;
     static constexpr uint8_t  RAW_HEADING_GATE          = 1;
-    static constexpr uint32_t RAW_INTERNAL_FLOOR_B      = 56u * 1024u;
     static constexpr uint32_t RAW_MEAS_STACK_B          = 6144;   // the GNSS task: SBF decoding, a 128-entry store
+    // the Beetle V2's probe (RAW_INTERNAL_PROBE); compiled everywhere, read only there
+    static constexpr uint32_t RAW_INTERNAL_SLACK_B      = 1024;          // the tasks' control blocks, alignment
+    static constexpr uint32_t RAW_INTERNAL_MARGIN_B     = 8u * 1024u;    // a stand-in: the first Beetle V2 sets it
+#if defined(TR_BOARD_M2) && TR_BOARD_M2
+    static constexpr bool     RAW_INTERNAL_PROBE        = true;
+    static constexpr uint32_t RAW_INTERNAL_FLOOR_B      = 0;             // not used: it probes
+#else
+    static constexpr bool     RAW_INTERNAL_PROBE        = false;
+    static constexpr uint32_t RAW_INTERNAL_FLOOR_B      = 56u * 1024u;
+    // The floor leaves the flight task its block once the filter's two
+    // stacks are out of the largest one, and 16 KB over.
+    static_assert(RAW_INTERNAL_FLOOR_B >= RAW_FILTER_STACK_B + RAW_MEAS_STACK_B + FLIGHT_TASK_STACK_B + 16u * 1024u,
+                  "the raw filter's start floor must leave the flight task's stack and a margin (#1772)");
+#endif
     // The raw vote guard (raw_vote_guard.h) only logs on this image: it still
     // judges the filter against the barometer's climb rate and says when it
     // would have withheld the filter's apogee votes (console, FCS bit 1), but

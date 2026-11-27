@@ -39,6 +39,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <sdkconfig.h>
 #include <driver/uart.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -54,6 +55,22 @@
 #include "SkyTraqBinary.h"
 #include "SkyTraqLink.h"
 #include "SkyTraqNav.h"
+
+// #1772: on the ESP32-S3 (the Beetle V2's flight computer, the one FC that is
+// not a P4) the driver's large blocks -- the flight log's ring, the raw
+// outputs' queues, their state and the Doppler pairs' -- go to PSRAM where
+// there is some, internal RAM otherwise. The S3's internal RAM is what the raw
+// filter's start and the flight task need (config.h RAW_INTERNAL_PROBE), and
+// only tasks touch these, never an ISR, each send and receive without a wait.
+// The filter itself ran in PSRAM at almost no cost to the flight loop (775
+// against 777 passes a second); these add the flight loop's copy of each
+// logged frame out of PSRAM, unmeasured. The P4 (the V10, V9 and V8 boards)
+// keeps them in internal RAM, as before.
+#if defined(CONFIG_IDF_TARGET_ESP32S3) && CONFIG_IDF_TARGET_ESP32S3
+#define TR_PX1105R_PSRAM_FIRST 1
+#else
+#define TR_PX1105R_PSRAM_FIRST 0
+#endif
 
 class TR_GNSSReceiverPX1105RSerial : private skytraq::FrameSink
 {
@@ -267,9 +284,12 @@ class TR_GNSSReceiverPX1105RSerial : private skytraq::FrameSink
 
         // Frames for the flight log (as the mosaic's ring: aligned storage)
         static constexpr size_t kRingBytes = 24576;
+#if !TR_PX1105R_PSRAM_FIRST
         alignas(8) uint8_t ring_mem_[kRingBytes] = {};
         StaticRingbuffer_t ring_struct_ = {};
+#endif
         RingbufHandle_t   ring_ = nullptr;
+        bool              ring_in_psram_ = false;
         uint8_t           item_[4 + GNSS_SBF_MAX_FRAME] = {};
         uint32_t          ring_dropped_ = 0;
         uint32_t          too_long_ = 0;
@@ -292,9 +312,10 @@ class TR_GNSSReceiverPX1105RSerial : private skytraq::FrameSink
         // enableRawOutputs().
         struct RawState
         {
-            QueueHandle_t epoch_q = nullptr;     // TimedRawEpoch, internal RAM
+            QueueHandle_t epoch_q = nullptr;     // TimedRawEpoch (PSRAM first on the S3, #1772)
             QueueHandle_t eph_q = nullptr;       // gps_eph_t
             QueueHandle_t fix_q = nullptr;       // gnss_raw::TimedFix
+            bool          q_caps[3] = {};        // each made by xQueueCreateWithCaps (deleted with its own call)
             std::atomic<uint32_t> period_ms{0};
             std::atomic<bool> taking_epochs{false};
             std::atomic<bool> taking_eph{false};

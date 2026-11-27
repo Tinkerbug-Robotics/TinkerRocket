@@ -14,6 +14,7 @@
 #ifndef RAW_NAV_POLICY_H
 #define RAW_NAV_POLICY_H
 
+#include <cstddef>
 #include <cstdint>
 
 namespace RawNavPolicy
@@ -88,6 +89,20 @@ inline CrashRecord crashOnProven(CrashRecord r)
 {
     r.crashes = 0;
     return crashSealed(r);
+}
+
+// #1772: the Beetle V2's start check. Its ESP32-S3's internal RAM is several
+// heaps, and its largest free block is bounded by one of them, so a floor on
+// the largest block before the filter's stacks are made says little. What has
+// to hold is the flight task's: once the filter's two task stacks are out, its
+// 16 KB stack still finds one block, with `slack` over for the tasks' control
+// blocks and alignment, and `margin` more internal RAM free beside it.
+// main.cpp measures it with probe blocks the size of the two stacks, given
+// back before the tasks are made (probes_got: both were had).
+inline bool roomForFlightTask(bool probes_got, size_t largest_after, size_t free_after, size_t flight_stack,
+                              size_t slack, size_t margin)
+{
+    return probes_got && largest_after >= flight_stack + slack && free_after >= flight_stack + slack + margin;
 }
 
 inline bool crashLoop(const CrashRecord& r)
