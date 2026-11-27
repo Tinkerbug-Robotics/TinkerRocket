@@ -7,7 +7,7 @@ The iOS and Android apps build as two editions from the same `main`:
 | Who it is for | Customers | Development, bench and flight testing |
 | Boards | Tinker-Beetle only | Every board |
 | Name on the phone | Tinker Rocket | Tinker Rocket Dev |
-| Icon | The rocket-bug | The rocket-bug with a green **D** badge in the top-right corner |
+| Icon | The rocket-bug | The rocket-bug with a green **D** badge in the bottom-right corner |
 | iOS bundle ID | `TinkerbugRobotics.TinkerRocket` | `TinkerbugRobotics.TinkerRocketApp` |
 | Android application ID | `com.tinkerbug.rocket` | `com.tinkerbug.tinkerrocket` |
 | iOS build | `Store` configuration, scheme **TinkerRocketApp Store** | `Debug` / `Release`, scheme **TinkerRocketApp** |

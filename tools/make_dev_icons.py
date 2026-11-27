@@ -3,7 +3,7 @@
 
 The dev and store editions sit side by side on one phone (docs/app-editions.md),
 so the dev app's icon carries a small white disc with a bold green D in its
-top-right corner. This draws it from the store icons, so re-run it whenever
+bottom-right corner. This draws it from the store icons, so re-run it whenever
 those change:
 
     python3 tools/make_dev_icons.py
@@ -13,8 +13,8 @@ iOS:     Assets.xcassets/AppIcon.appiconset      -> AppIconDev.appiconset
 Android: src/main/res/mipmap-*/ic_launcher_{foreground,monochrome}.png
          -> src/dev/res/mipmap-*/  (the dev flavor's copies override main's)
 
-Placement: the top-right sky, clear of the antennae, and inside what each
-platform's mask always shows. iOS rounds the corners at about 22% of the side,
+Placement: the bottom-right sky, beside the legs and the exhaust cloud, and
+inside what each platform's mask always shows. iOS rounds the corners at about 22% of the side,
 so the badge sits in from the corner; an Android adaptive icon only promises the
 middle 66 of its 108 dp, so there the badge is drawn inside that circle.
 """
@@ -33,10 +33,10 @@ WHITE = (255, 255, 255, 255)
 FONT = "/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf"
 
 # Badge centre and radius as fractions of the image side.
-IOS_BADGE = (0.800, 0.200, 0.135)
+IOS_BADGE = (0.800, 0.800, 0.155)
 # Android: inside the 66 dp safe circle of the 108 dp canvas (centre 0.5, 0.5;
-# radius 0.3056): centre 0.233 from the middle, plus a radius of 0.070.
-ANDROID_BADGE = (0.665, 0.335, 0.070)
+# radius 0.3056): centre 0.224 from the middle, plus a radius of 0.080.
+ANDROID_BADGE = (0.658, 0.658, 0.080)
 
 
 def badge(size: int, cx: float, cy: float, r: float, mono: bool = False) -> Image.Image:
