@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include "sim_flag_run.h"
+
 // When the OC gives its half of the Beetle's two-processor pyro arm.
 //
 // On the Beetle (TR_BOARD_M2, and the retired V1) the squib return FET U9 closes only while BOTH
@@ -63,6 +65,12 @@
 //     whole run. The FC latches its dry-fire decision for the flight (#1104)
 //     because the sim's give-up tick drops isSimActive() while the FC is still
 //     INFLIGHT. SimFlightLatch mirrors that latch from NSF_SIM_ACTIVE.
+//
+//     The flag counts only once ten frames in a row carry it (#1774,
+//     sim_flag_run.h). A real sim carries it from its Start on the pad, so it
+//     is a sim from its first INFLIGHT frame, as before. In a real flight, the
+//     flag on one frame can only be a link error the CRC missed. Latching on
+//     it would hold consent low until LANDED and lose every later deployment.
 //
 // Everywhere else, consent is LOW. That covers the pad, where PRELAUNCH can
 // last hours with people around the rocket, and everything after LANDED.
@@ -140,22 +148,28 @@ inline bool fireTestWindowOpen(FireTestWindow& w, uint32_t now_ms)
 
 struct SimFlightLatch
 {
-    bool prev_inflight = false;
-    bool sim           = false;
+    bool           prev_inflight = false;
+    bool           sim           = false;
+    SimFlagRun::Run flag;                  // #1774: the flag's run of frames
 };
 
 // Feed every NonSensorData frame's state (== INFLIGHT) and NSF_SIM_ACTIVE bit,
-// in arrival order. Returns whether the current INFLIGHT phase is a
-// simulation, and false whenever the state is not INFLIGHT. A fresh INFLIGHT
-// phase is decided by the flag on its first frame, which is also where an OC
-// that rebooted mid-flight joins. Within the phase the flag can only latch it
-// on, never off: the sim's give-up tick clears NSF_SIM_ACTIVE while the FC
-// still says INFLIGHT, and the FC is still dry-firing then.
+// in arrival order, once each. Returns whether the current INFLIGHT phase is a
+// simulation, and false whenever the state is not INFLIGHT.
+//
+// The flag counts as set only once SimFlagRun::kFrames frames in a row have
+// carried it, in any state (#1774). A sim's run starts on the pad, so a fresh
+// INFLIGHT phase is decided on its first frame. An OC that rebooted mid-flight
+// joins there too: a sim's flight is read as a sim once the run is full.
+// Within the phase the counted flag can only latch the verdict on, never off.
+// An FC from before #1766 clears NSF_SIM_ACTIVE on the sim's give-up tick
+// while it still says INFLIGHT, and it is still dry-firing then.
 inline bool step(SimFlightLatch& s, bool state_inflight, bool sim_active)
 {
+    const bool sim_flag = SimFlagRun::step(s.flag, sim_active);
     if (!state_inflight)       s.sim = false;
-    else if (!s.prev_inflight) s.sim = sim_active;
-    else if (sim_active)       s.sim = true;
+    else if (!s.prev_inflight) s.sim = sim_flag;
+    else if (sim_flag)         s.sim = true;
     s.prev_inflight = state_inflight;
     return s.sim;
 }

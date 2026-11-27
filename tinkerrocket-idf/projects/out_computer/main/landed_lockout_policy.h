@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RocketComputerTypes.h"   // RocketState
+#include "sim_flag_run.h"
 
 // #317: once the vehicle has reported LANDED, the OC opens no new flight-log
 // session until it reboots. Post-flight ground handling can re-trip the FC's
@@ -44,6 +45,13 @@
 // said. Both flags ride the same NonSensorData frame as the state byte, so the
 // step is fed in processFrame, in arrival order, and needs no cross-task
 // sampling to get the edges right.
+//
+// #1774: "carries NSF_SIM_ACTIVE" in (a) and (b) means the flag on
+// SimFlagRun::kFrames frames in a row (sim_flag_run.h). One frame with the flag
+// set by a link error the CRC missed would make a real flight's landing a sim's
+// landing, and an FC reset after it would then clear the lockout. A real sim
+// carries the flag from its Start for seconds before PRELAUNCH, so (a) and (b)
+// clear as before.
 namespace LandedLockout {
 
 struct State
@@ -52,12 +60,15 @@ struct State
     bool        landed_was_sim = false;   // NSF_SIM_ACTIVE seen in the current LANDED phase or its flight
     bool        flight_was_sim = false;   // NSF_SIM_ACTIVE seen in the current INFLIGHT phase
     RocketState prev           = INITIALIZATION;
+    SimFlagRun::Run flag;                 // #1774: the flag's run of frames
 };
 
 // Feed every NonSensorData frame's rocket_state and its NSF_SIM_ACTIVE bit, in
-// arrival order. Returns the new `locked`.
-inline bool step(State& s, RocketState state, bool sim_active)
+// arrival order, once each. Returns the new `locked`. The flag counts only once
+// SimFlagRun::kFrames frames in a row have carried it.
+inline bool step(State& s, RocketState state, bool sim_flag_bit)
 {
+    const bool sim_active = SimFlagRun::step(s.flag, sim_flag_bit);
     if (state == INFLIGHT)
     {
         if (s.prev != INFLIGHT) s.flight_was_sim = false; // a fresh flight

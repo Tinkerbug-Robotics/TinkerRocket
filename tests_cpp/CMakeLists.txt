@@ -2962,6 +2962,22 @@ target_include_directories(test_landed_lockout_policy PRIVATE
 target_link_libraries(test_landed_lockout_policy GTest::gtest_main)
 gtest_discover_tests(test_landed_lockout_policy)
 
+# ---------- test_sim_flag_run (#1774) ----------
+# The OC believes NSF_SIM_ACTIVE only once ten frames in a row carry it. The
+# real CRC and NonSensorData layout make the issue's frame (flags bit 7 and
+# payload byte 6 bit 6 flipped, which the CRC-16 misses), and both OC policies
+# that read the flag, arm consent and the landed lockout, are fed the stream
+# around it. Pure headers in the OC project.
+add_executable(test_sim_flag_run test_sim_flag_run.cpp)
+target_include_directories(test_sim_flag_run PRIVATE
+    ${SHIM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/TR_I2C_Interface
+)
+target_link_libraries(test_sim_flag_run GTest::gtest_main)
+gtest_discover_tests(test_sim_flag_run)
+
 # ---------- test_fc_reboot_display_policy ----------
 # What the direct BLE link shows while the FC reboots and the OC stays up: a
 # ground state reads as a fresh boot, a flight phase is kept. Another FC-only
