@@ -5659,7 +5659,7 @@
 				)
 			)
 		)
-		(property "Value" "Blue"
+		(property "Value" "Green"
 			(at 269.24 60.0075 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -5713,7 +5713,7 @@
 				)
 			)
 		)
-		(property "MPN" "XL-1005UBC"
+		(property "MPN" "XL-1005UGC"
 			(at 264.795 58.42 0)
 			(hide yes)
 			(show_name no)

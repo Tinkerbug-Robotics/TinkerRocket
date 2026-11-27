@@ -35770,7 +35770,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "Blue"
+		(property "Value" "Green"
 			(at 0 -1.17 90)
 			(layer "B.Fab")
 			(hide yes)
@@ -35821,7 +35821,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "XL-1005UBC"
+		(property "MPN" "XL-1005UGC"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -37851,7 +37851,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "470 pF"
+		(property "Value" "100 pF"
 			(at 0 -1.16 0)
 			(layer "B.Fab")
 			(hide yes)
@@ -37876,7 +37876,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Description" "U12 input DC block (AT2659S data sheet C1)"
+		(property "Description" "U12 input DC block: 100 pF for the AT2659S data sheet's 470 pF (C1); both are past self-resonance at L1, under 1 ohm apart"
 			(at 0 0 0)
 			(layer "B.Fab")
 			(hide yes)
@@ -37888,7 +37888,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "GRM1555C1H471JA01D"
+		(property "MPN" "GRM1555C1H101JA01D"
 			(at 0 0 0)
 			(layer "B.SilkS")
 			(hide yes)
@@ -37927,7 +37927,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Dist_PN" "C76971"
+		(property "Dist_PN" "C77177"
 			(at 0 0 0)
 			(layer "B.SilkS")
 			(hide yes)
@@ -43238,7 +43238,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "5.11 k"
+		(property "Value" "100 k"
 			(at 0 -1.17 90)
 			(layer "B.Fab")
 			(hide yes)
@@ -43275,7 +43275,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "RC0402FR-075K11L"
+		(property "MPN" "RC0402FR-07100KL"
 			(at 0 0 90)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -43974,7 +43974,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "Blue"
+		(property "Value" "Green"
 			(at 0 -1.17 90)
 			(layer "B.Fab")
 			(hide yes)
@@ -44025,7 +44025,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "XL-1005UBC"
+		(property "MPN" "XL-1005UGC"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -50658,7 +50658,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "10"
+		(property "Value" "22"
 			(at 0 -1.17 90)
 			(layer "B.Fab")
 			(hide yes)
@@ -50695,7 +50695,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "RC0402FR-0710RL"
+		(property "MPN" "RC0402FR-0722RL"
 			(at 0 0 90)
 			(layer "B.SilkS")
 			(hide yes)
@@ -50734,7 +50734,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Dist_PN" "C138066"
+		(property "Dist_PN" "C114765"
 			(at 0 0 90)
 			(layer "B.SilkS")
 			(hide yes)
@@ -61739,7 +61739,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "5.11 k"
+		(property "Value" "49.9 k"
 			(at 0 -1.17 90)
 			(layer "B.Fab")
 			(hide yes)
@@ -61776,7 +61776,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "RC0402FR-075K11L"
+		(property "MPN" "RC0402FR-0749K9L"
 			(at 0 0 270)
 			(unlocked yes)
 			(layer "B.Fab")
@@ -65224,7 +65224,7 @@
 				(justify mirror)
 			)
 		)
-		(property "Value" "33.2 k"
+		(property "Value" "49.9 k"
 			(at 0 -1.17 0)
 			(layer "B.Fab")
 			(hide yes)
@@ -65261,7 +65261,7 @@
 				(justify mirror)
 			)
 		)
-		(property "MPN" "AC0402FR-0733K2L"
+		(property "MPN" "RC0402FR-0749K9L"
 			(at 0 0 0)
 			(unlocked yes)
 			(layer "B.Fab")
