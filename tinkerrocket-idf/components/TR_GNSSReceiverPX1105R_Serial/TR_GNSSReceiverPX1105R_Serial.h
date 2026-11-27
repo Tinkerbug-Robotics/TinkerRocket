@@ -105,16 +105,21 @@ class TR_GNSSReceiverPX1105RSerial : private skytraq::FrameSink
         bool pollRawFrame(uint8_t* out, size_t cap, size_t& len, uint32_t& time_us);
         uint32_t rawFramesDropped() const { return ring_dropped_ + too_long_ + short_buffer_; }
 
-        // The MCU clock against GPS time from the 0xE5 arrivals (GnssTimeSync,
-        // latency the receiver profile's). takeClockLine: the line each time
+        // The MCU clock against GPS time from the 0xE5 arrivals, each at its
+        // frame's first byte (GnssTimeSync, no latency: the raw filter takes
+        // the receiver profile's epoch_latency_s off itself). takeClockLine: the line each time
         // it moves (about once a second with a fix), for GNSS_CLOCK_MSG.
         const lc86::GnssTimeSync& timeSync() const { return time_sync_; }
         bool takeClockLine(GnssClockData& out);
         uint32_t clockLinesDropped() const { return clock_dropped_; }
 
-        // The receiver's delay from an epoch to the last byte of its 0xE5, s
-        // (GnssTimeSync::Config::latency_s): the receiver profile's
-        // epoch_latency_s. Call before begin().
+        // A latency for the time sync, s: the receiver's delay from an epoch to
+        // the first byte of its 0xE5 (GnssTimeSync::Config::latency_s, there
+        // "the last byte of that epoch's sentence": this driver hands the time
+        // sync the frame's first byte, #1771). Not called: the raw filter
+        // takes the receiver profile's epoch_latency_s off itself
+        // (RawGnssShadow), so setting both would take it off twice. Call
+        // before begin().
         void setEpochLatencyS(double s);
 
         // No geoid in the receiver's binary output: always false.

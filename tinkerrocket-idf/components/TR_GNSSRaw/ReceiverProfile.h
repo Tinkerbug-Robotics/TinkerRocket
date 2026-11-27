@@ -593,9 +593,11 @@ inline GnssReceiverProfile px1105rProfile()
                                     //   the tag, whole hertz (residual 0.047 m/s median = the step's at 25 ms,
                                     //   0.08 at 0 and 50 ms)
     p.epoch_latency_s = 0.0;        // UNCALIBRATED: no 1PPS reaches the FC on this carrier (J3 pin 5 is the
-                                    //   receiver's RXD2), so the epochs are placed by their 0xE5's arrival,
-                                    //   late by the receiver's own delay (a scope on the PPS LED, D1, against
-                                    //   the UART measures it)
+                                    //   receiver's RXD2), so the epochs are placed by when their 0xE5's
+                                    //   first byte arrived (#1771: not its last, whose wire time moves with
+                                    //   the signal count), late by the receiver's own delay from the epoch
+                                    //   to the start of that frame (a scope on the PPS LED, D1, against the
+                                    //   UART measures it)
     p.raw_epoch_period_s = 0.05;    // 09-26 static: every 0xE5 50 ms after the last (period field 50 ms)
 
     // the code: this receiver's own C/N0 fit (09-26 static; the LC86G's

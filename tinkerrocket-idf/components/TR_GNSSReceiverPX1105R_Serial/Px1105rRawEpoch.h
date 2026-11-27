@@ -47,7 +47,14 @@
 // The time tag. Without a 1PPS (the carrier's J3 pin 5 is the receiver's
 // RXD2) the MCU clock is placed against GPS time by when each 0xE5 arrives
 // (lc86::GnssTimeSync, the LC86G's envelope, with the profile's
-// epoch_latency_s). The epoch's GPS instant is its time of week less the
+// epoch_latency_s, which the filter takes off): when its first byte arrived
+// (frameStartUs, #1771), not its last. The last byte's time carries the
+// frame's own wire time -- the frame is 21 bytes plus 31 a signal, 7-15 ms at
+// 921600 baud for 20-45 signals -- which moves with the signal count. The
+// first byte's leaves the receiver's own delay from the epoch to the start of
+// that frame: taken as the same every epoch, though unmeasured (anything the
+// receiver sends before the 0xE5 in an epoch's burst is in it too). The
+// epoch's GPS instant is its time of week less the
 // receiver's clock bias, from the 0xDF that follows each 0xE5: the last one,
 // carried 50 ms by its drift (-0.6 us a second), as the mosaic carries its
 // PVT's (MosaicRawEpoch.h dtrMs), and on through the 0xDF without a fix that
@@ -325,6 +332,28 @@ inline int rawEpochFromE5(const skytraq::RawE5& in, Px1105rLockState& lk, gnss_r
         o.phase_m = o.has_phase ? lambda * c.carrier_cyc : 0.0;
     }
     return out.n;
+}
+
+// When a byte arrived on the FC's clock, us: a UART read at rd_us that
+// returned rd_n bytes, with `behind` more still waiting in the driver, puts
+// byte `index` of that read this many byte times before it -- the bytes taken
+// as back to back up to the read. A line idle before the read makes it late
+// by that idle time, which the time sync's lower envelope takes out.
+inline int64_t arrivalUs(int64_t rd_us, size_t rd_n, size_t index, size_t behind, double byte_us)
+{
+    return rd_us - static_cast<int64_t>(static_cast<double>((rd_n - 1 - index) + behind) * byte_us);
+}
+
+// When a frame's first byte (its A0) arrived, from when its last (its 0A,
+// end_us) did, us (#1771): body_len + 6 byte times earlier. A SkyTraq frame is
+// its body (body_len bytes, from its message ID on) and 7 more: A0 A1, the
+// length, the checksum, 0D 0A (SkyTraqBinary.h). The frame is taken as sent
+// back to back at the nominal baud: a pause inside it leaves this later than
+// the first byte's true arrival, never earlier (the byte times are truncated,
+// so it never rounds early either). byte_us 0: end_us as it is.
+inline int64_t frameStartUs(int64_t end_us, size_t body_len, double byte_us)
+{
+    return end_us - static_cast<int64_t>(static_cast<double>(body_len + 6) * byte_us);
 }
 
 // Whether an epoch is on the fuse grid: its time of week a whole number of

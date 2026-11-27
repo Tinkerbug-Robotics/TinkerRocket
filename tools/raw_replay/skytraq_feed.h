@@ -8,9 +8,10 @@
 // the LC86G driver's GnssTimeSync; the mosaic's Doppler pairs, MosaicRawEpoch.h):
 //   - 0xE5: decoded (decodeRawE5); its GPS instant the receiver's time of week
 //     less the last 0xDF's clock bias carried by its drift (biasAt,
-//     epochGpsS), which with the frame's arrival is a sample of the MCU <-> GPS
-//     line (lc86::GnssTimeSync at the profile's epoch_latency_s: no 1PPS on
-//     this carrier). On the fused grid (TOW % fuse period == 0) the cells kept
+//     epochGpsS), which with the frame's first byte's arrival (frameStartUs,
+//     from its last byte's and the link's baud, #1771) is a sample of the
+//     MCU <-> GPS line (lc86::GnssTimeSync, no latency, as the driver's: no
+//     1PPS on this carrier). On the fused grid (TOW % fuse period == 0) the cells kept
 //     (rawEpochFromE5: GPS L1 C/A, Galileo E1, BeiDou B1I MEO/IGSO) are an
 //     epoch, its Dopplers averaged with the off-grid epoch's before it
 //     (averageDopplerPairs, none across a clock cut), tagged on the line;
@@ -57,7 +58,10 @@ public:
     struct Config
     {
         uint32_t fuse_period_ms = 100;   // the profile's fuse_epoch_period_s
-        double   epoch_latency_s = 0.0;  // the profile's epoch_latency_s (the driver's setEpochLatencyS)
+        double   epoch_latency_s = 0.0;  // the time sync's latency: none on the driver (setEpochLatencyS has no
+                                         //   caller; the filter takes the profile's off itself)
+        double   byte_us = 1.0e7 / 921600.0;   // the link's byte time, 8N1 (the driver's kTargetBaud); 0: each
+                                               //   0xE5 sampled at its stamp as given (raw_replay.cpp)
         bool     pair = false;           // the Dopplers in pairs (the profile's rr_pair_avg)
         mosaic::MosaicDopplerPairConfig pair_cfg;
         bool     glonass = false;        // its GLONASS cells as well (px1105r::rawEpochFromE5's glonass)
@@ -179,7 +183,7 @@ private:
         const bool biased = px1105r::biasAt(clk_, rx_ms, dtr);
         const double gps_s = px1105r::epochGpsS(e5_.week, e5_.tow_ms, dtr);
         if (biased)
-            time_sync_.addSample(gps_s, end_us);
+            time_sync_.addSample(gps_s, px1105r::frameStartUs(end_us, len, cfg_.byte_us));
         const bool on_grid = px1105r::onFuseGrid(e5_.tow_ms, cfg_.fuse_period_ms);
         te = gnss_raw::TimedRawEpoch();
         if (cfg_.glonass)

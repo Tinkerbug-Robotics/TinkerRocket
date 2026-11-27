@@ -260,7 +260,11 @@ struct Args
     bool sdr_raw_steps = false;      // an experiment: the board's clock steps left in its ranges (SdrRawEpoch.h)
     std::string sdr_gps_iono;        // --gps-iono a0,..,b3: a GPS Klobuchar set as the board's, for a log made before
                                      // the board sent its own (4001 sub-type 4); "-" takes none, even the board's
-    double px_latency_ms = -1.0;     // --px-latency-ms: the PX1105R's time sync latency (-1: the profile's epoch_latency_s)
+    double px_latency_ms = -1.0;     // --px-latency-ms: the PX1105R's time sync latency (-1: none, as the driver's; the
+                                     //   filter takes the profile's epoch_latency_s off itself)
+    std::string px_stamp = "first";  // --px-stamp first|last: each 0xE5's time-sync sample at its frame's first byte
+                                     //   (the driver's since #1771) or last (before it: an older log as it flew); a
+                                     //   px_events.py file's stamps are taken as they are (META px_latency_ms)
     std::string px_tag = "sync";     // --px-tag sync|line: its epochs placed by its driver's time sync on the frames'
                                      //   arrivals (the firmware's), or on the events file's K line (an ideal tag)
     bool px_glonass = false;         // --glonass 1: the PX1105R's GLONASS L1OF Dopplers as well (Px1105rRawEpoch.h),
@@ -569,6 +573,7 @@ bool parseArgs(int argc, char** argv, Args& a)
         else if (k == "--receiver" || k == "--profile") a.receiver = val();
         else if (k == "--px-latency-ms") a.px_latency_ms = std::atof(val());
         else if (k == "--px-tag") a.px_tag = val();
+        else if (k == "--px-stamp") a.px_stamp = val();
         else if (k == "--glonass") a.px_glonass = std::atoi(val()) != 0;
         else if (k == "--l5") a.px_l5 = std::atoi(val()) != 0;
         else if (k == "--px-seed-locks") a.px_seed_locks = std::atoi(val()) != 0;
@@ -2925,11 +2930,20 @@ int main(int argc, char** argv)
     };
 #endif
 #if RAW_REPLAY_PX1105R
-    // the PX1105R's stream (skytraq_feed.h): its driver's chain on the same grid and pairs, its time sync at the
-    // profile's latency (TR_GNSSReceiverPX1105RSerial::setEpochLatencyS, from startRawShadow)
+    // the PX1105R's stream (skytraq_feed.h): its driver's chain on the same grid and pairs. Its time sync takes no
+    // latency, as the driver's (setEpochLatencyS has no caller): the filter takes the profile's epoch_latency_s off
+    // itself (RawGnssShadow), so taking it here as well would take it off twice. --px-latency-ms gives one, for an
+    // events file built with a stand-in (px_events.py --latency-ms).
     rr::SkyTraqFeed::Config pcfg;
     pcfg.fuse_period_ms = fcfg.fuse_period_ms;
-    pcfg.epoch_latency_s = a.px_latency_ms >= 0.0 ? a.px_latency_ms * 1.0e-3 : rx.epoch_latency_s;
+    pcfg.epoch_latency_s = a.px_latency_ms >= 0.0 ? a.px_latency_ms * 1.0e-3 : 0.0;
+    // Each 0xE5's sample at its frame's first byte, as the driver takes it (#1771), from the R line's stamp: an FC
+    // log's is the frame's last byte. Not on a px_events.py file (META px_latency_ms): its stamps are its envelope's
+    // plus its latency, not a frame's last byte, so they are taken as they are; nor with --px-stamp last, the frame's
+    // last byte, as the driver took it before #1771 (an older flight log replayed as it flew).
+    const bool px_events_file = in.meta.count("px_latency_ms") != 0;
+    if (px_events_file || a.px_stamp == "last")
+        pcfg.byte_us = 0.0;
     pcfg.pair = fcfg.pair;
     pcfg.pair_cfg = fcfg.pair_cfg;
     pcfg.glonass = a.px_glonass;
@@ -2948,6 +2962,17 @@ int main(int argc, char** argv)
         std::fprintf(stderr, "--px-tag is sync or line, not %s\n", a.px_tag.c_str());
         return 2;
     }
+    if (px && a.px_stamp != "first" && a.px_stamp != "last")
+    {
+        std::fprintf(stderr, "--px-stamp is first or last, not %s\n", a.px_stamp.c_str());
+        return 2;
+    }
+    if (px)
+        std::fprintf(stderr, "PX1105R time sync: each 0xE5 at %s, latency %.1f ms\n",
+                     px_events_file ? "its R line's stamp (a px_events.py file: its envelope's plus its latency)"
+                     : a.px_stamp == "last" ? "its frame's last byte (--px-stamp last: the driver before #1771)"
+                                            : "its frame's first byte (the driver's, #1771)",
+                     pcfg.epoch_latency_s * 1.0e3);
     // META app_iono (px_events.py --iono): the app's set (a pad calibration or NVS), through the GNSS task's one rule
     // as rawIonoOffer(io, false) takes it -- the rig's sky never broadcasts its own, the V9 rig image injects it
     if (px && in.meta.count("app_iono"))

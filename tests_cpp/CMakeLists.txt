@@ -2957,6 +2957,26 @@ gtest_discover_tests(test_fc_reboot_display_policy)
 # registers its own tests in tests_cpp/v9raw/<piece>.cmake, so pieces built at
 # the same time never edit this file. Each .cmake uses LIB_DIR and SHIM_DIR as
 # the targets above do.
+# ---------- test_px1105r_epoch_tag ----------
+# #1771: the PX1105R's raw epochs on the FC's clock, each 0xE5 a sample of the
+# time sync's line at its frame's first byte (Px1105rRawEpoch.h frameStartUs,
+# arrivalUs), through a simulated 921600-baud wire, the real SkyTraq frame
+# parser and GnssTimeSync, the signal count dropping and coming back.
+add_executable(test_px1105r_epoch_tag test_px1105r_epoch_tag.cpp
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial/SkyTraqBinary.cpp
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial/GnssTimeSync.cpp
+)
+target_include_directories(test_px1105r_epoch_tag PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_GNSSReceiverPX1105R_Serial
+    ${LIB_DIR}/TR_GNSSReceiverLC86_Serial
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/TR_RocketComputerTypes
+)
+target_link_libraries(test_px1105r_epoch_tag GTest::gtest_main)
+gtest_discover_tests(test_px1105r_epoch_tag)
+
 # ---------- test_skytraq_binary / test_skytraq_link ----------
 # The PX1105R's binary stream (TR_GNSSReceiverPX1105R_Serial/SkyTraqBinary.cpp:
 # framing, resync, the 0xE5 / 0xDF / 0xE7 decoders on its own frames,

@@ -883,26 +883,33 @@ the firmware's defaults, the 30 ms GNSS task delay, the 128-entry store: use `ra
 own receiver: `px1105rProfile()`, `applyPx1105rFlightProfile()` and `applyPx1105rFlightSafeguards()`
 (ReceiverProfileApply.h), where `--receiver mosaic` applies the mosaic's. Its stream is whole SkyTraq frames, one R
 line each (`A0 A1 .. 0D 0A`, hex) at the MCU time its last byte arrived, taken through the driver's own chain
-(`skytraq_feed.h`, from TR_GNSSReceiverPX1105R_Serial's pure code: SkyTraqBinary, SkyTraqNav, Px1105rRawEpoch.h):
-the 0xE5 decoded, its GPS instant the time of week less the last 0xDF's bias carried by its drift, a sample of the
-driver's arrival-time clock line (the LC86G driver's GnssTimeSync at the profile's `epoch_latency_s`); on the 100 ms
-grid an epoch, its Dopplers averaged with the off-grid epoch's before it (none across a clock cut); the 0xDF the
-clock (a step cuts the locks) and the fix the flight loop gets (its height above the ellipsoid; the cold start's
-position is the first 3-D one); the subframes into ephemerides and the GPS Klobuchar through the GNSS task's
-ionosphere rule. Built where the tree has the PX1105R's code and image profile (`RAW_REPLAY_PX1105R`, off by itself
-elsewhere); `--receiver lc86g` and `mosaic` are unchanged by it (their CSV, digest and events JSON compared byte for
-byte before and after, 2026-10-21: a V9 mosaic log and the Beetle's ec10).
+(`skytraq_feed.h`, from TR_GNSSReceiverPX1105R_Serial's pure code: SkyTraqBinary, SkyTraqNav, Px1105rRawEpoch.h): the
+0xE5 decoded, its GPS instant the time of week less the last 0xDF's bias carried by its drift, a sample of the
+driver's arrival-time clock line at the frame's first byte (its last byte's time less the frame at 921600 baud, #1771;
+the LC86G driver's GnssTimeSync, no latency, as the driver's: the filter takes `epoch_latency_s` off); on the 100 ms
+grid an epoch, its Dopplers averaged with the off-grid epoch's before it (none across a clock cut); the 0xDF the clock
+(a step cuts the locks) and the fix the flight loop gets (its height above the ellipsoid; the cold start's position is
+the first 3-D one); the subframes into ephemerides and the GPS Klobuchar through the GNSS task's ionosphere rule.
+Built where the tree has the PX1105R's code and image profile (`RAW_REPLAY_PX1105R`, off by itself elsewhere);
+`--receiver lc86g` and `mosaic` are unchanged by it (their CSV, digest and events JSON compared byte for byte before
+and after, 2026-10-21: a V9 mosaic log and the Beetle's ec10).
 
 - `--px-tag sync|line`: the epochs placed by the driver's time sync on the frames' arrivals (the firmware's, default),
-  or on the events file's K line (an ideal tag); `--px-latency-ms X` the time sync's latency in place of the profile's
-  (0: uncalibrated, no 1PPS on this carrier); `--epoch-shift-ms` moves the tags as for the other receivers.
+  or on the events file's K line (an ideal tag); `--px-latency-ms X` a latency for the time sync (default none, as the
+  driver's: the filter takes the profile's `epoch_latency_s` off itself, 0 while uncalibrated, no 1PPS on this
+  carrier); `--epoch-shift-ms` moves the tags as for the other receivers.
+- `--px-stamp first|last`: each 0xE5's time-sync sample at its frame's first byte (the driver's since #1771, default:
+  the R line's stamp less the frame at 921600 baud) or at its last byte, as the driver took it before #1771 (a log
+  from an older load replayed as it flew). A px_events.py file (META `px_latency_ms`) is taken at its stamps as they
+  are: they are its envelope's plus its latency, not a frame's last byte.
 - `META app_iono a0 a1 a2 a3 b0 b1 b2 b3 gps_day`: the app's set, offered to the rule as the app's (the rig's sky never
   broadcasts page 18; the V9 rig image injects the sky's own).
 - `--px-seed-locks 1`: a log the filter starts from its own state (S lines: a V10 flight log, whose ring holds ~2 s
   before launch) takes its first epochs' satellites as long locked, as the LC86G's restored start does. Without it
   each enters as just relocked: its Doppler carries `rr_relock_sigma` (3 m/s) decaying over `relock_tau_s` (10 s),
   2.5-2.9 m/s at launch against ~0.12-0.2 m/s locked, and the Doppler change check cannot see a burn. On the 65mm
-  Roll Control flight of 2026-11-21 (V10, PX100) the replay with it follows the flight's own filter to
+  Roll Control flight of 2026-11-21 (V10, PX100) the replay with it (and the last byte's stamp it flew with: those
+  numbers were run before #1771, `--px-stamp last` now) follows the flight's own filter to
   0.12 / 0.06 / 0.18 m/s rms north / east / down (T-2 to T+14 s) and holds the Dopplers from the first burn epoch
   to T+7.23 s as the flight did (the change check's window, then its latch, which lets go on the first epoch with
   five Dopplers); without it, it never holds them. A satellite counts as seen min(1 s, half the relock gap) before
@@ -924,14 +931,15 @@ byte before and after, 2026-10-21: a V9 mosaic log and the Beetle's ec10).
   has both). `--rr-lag-l5-ms X` (offline only) puts X in place of the profile's L5 lag. The 11-21 flight with it:
   116 more Dopplers on the pad, 8 in the burn, none in the coast (the change check held every Doppler, as flown, and
   the receiver had lost the L5 band before the L1 band) and 4 after; the velocity against the PX100's own fix
-  unchanged (1.00 / 0.95 / 4.72 m/s rms N / E / D, T+8.95-14). With `--l5 0` (the default) every PX1105R replay is
-  byte-identical to the tree before it.
+  unchanged (1.00 / 0.95 / 4.72 m/s rms N / E / D, T+8.95-14; run before #1771, at the last byte's stamp). With
+  `--l5 0` (the default) the L5 change left every PX1105R replay byte-identical to the tree before it.
 
 Beside it:
 - `px_events.py`: a rig capture of the PX1105R (`<host_t> B <hex body>`) beside the same simulated flight's sensors
   (`scenarios/sim_<flight>_sensors.csv.gz`) as an events file on one MCU clock by GPS time (sim_events.py's I, B and
   M conventions; the frames' host stamps mapped to GPS time by the 0xE5s' lower envelope, plus `--latency-ms`, a
-  stand-in for the receiver's and the UART's delay); `--static` for a still capture (a level, still IMU).
+  stand-in for the receiver's and the UART's delay, replayed with `--px-latency-ms` at the same; raw_replay takes
+  these stamps as they are, not as frames' last bytes); `--static` for a still capture (a level, still IMU).
 - `px_score.py`: the phases pad, boost, coast, apogee +-2 s and descent against the sim's truth (scorelib), for harness
   runs, a V9 rig run's on-board `[REPLAY-NAV]` (`--onboard NAME=fc_console.txt`) and the PX1105R's own fix
   (`--capture`).
