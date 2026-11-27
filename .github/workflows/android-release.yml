@@ -78,7 +78,10 @@ jobs:
           # Google Map Tiles key — releases must carry the Google Satellite
           # basemap; without this secret the picker silently omits it.
           TR_ANDROID_MAPS_API_KEY: ${{ secrets.TR_ANDROID_MAPS_API_KEY }}
-        run: ./gradlew --no-daemon :app:assembleRelease
+        # The dev edition (docs/app-editions.md): the sideloaded app, every
+        # board, the applicationId the fleet's phones already have. The store
+        # edition goes to Play as an AAB, not through this workflow.
+        run: ./gradlew --no-daemon :app:assembleDevRelease
         working-directory: TinkerRocketAndroid
 
       - name: Verify the APK — release-signed, version matches the tag, versionCode advanced
@@ -87,7 +90,7 @@ jobs:
           # free text and would otherwise be pasted straight into bash.
           SIMULATED_TAG: ${{ inputs.simulated_tag }}
         run: |
-          APK=TinkerRocketAndroid/app/build/outputs/apk/release/app-release.apk
+          APK=TinkerRocketAndroid/app/build/outputs/apk/dev/release/app-dev-release.apk
           GRADLE=TinkerRocketAndroid/app/build.gradle.kts
           ls -la "$APK"
 
@@ -185,7 +188,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          APK=TinkerRocketAndroid/app/build/outputs/apk/release/app-release.apk
+          APK=TinkerRocketAndroid/app/build/outputs/apk/dev/release/app-dev-release.apk
           OUT="TinkerRocket-${GITHUB_REF_NAME}.apk"
           cp "$APK" "$OUT"
           gh release create "$GITHUB_REF_NAME" "$OUT" \

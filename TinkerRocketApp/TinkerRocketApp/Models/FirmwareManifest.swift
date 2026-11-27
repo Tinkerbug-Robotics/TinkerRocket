@@ -112,11 +112,16 @@ nonisolated struct FirmwareManifest: Equatable {
 /// would leave an operator with a board provisioned wrongly, or not at all,
 /// unable to flash anything — and the flash button still refuses a wrong
 /// project, which is the case that actually matters.
+///
+/// The one exception is the store edition, which supports the Beetle only:
+/// it never offers another board's flight or out computer image
+/// (AppFeatures.offersFirmware), so a customer cannot flash a Mantis build.
 nonisolated enum FirmwareCatalog {
 
     static func forUnit(_ manifest: FirmwareManifest,
                         expectedProject: String,
-                        provisionedBoard: String? = nil) -> [FirmwareImage] {
+                        provisionedBoard: String? = nil,
+                        edition: AppEdition = .current) -> [FirmwareImage] {
         let want = provisionedBoard?
             .trimmingCharacters(in: .whitespaces).lowercased()
             .nilIfEmptyManifest
@@ -127,6 +132,7 @@ nonisolated enum FirmwareCatalog {
         }
         return manifest.images
             .filter { $0.project == expectedProject }
+            .filter { AppFeatures.offersFirmware($0, edition: edition) }
             .sorted { a, b in
                 let (ra, rb) = (rank(a), rank(b))
                 if ra != rb { return ra < rb }
@@ -158,12 +164,13 @@ nonisolated enum FirmwareCatalog {
     /// as refusing to show.
     static func best(_ manifest: FirmwareManifest,
                      expectedProject: String,
-                     provisionedBoard: String? = nil) -> FirmwareImage? {
+                     provisionedBoard: String? = nil,
+                     edition: AppEdition = .current) -> FirmwareImage? {
         let want = provisionedBoard?
             .trimmingCharacters(in: .whitespaces).lowercased()
             .nilIfEmptyManifest
         let candidates = forUnit(manifest, expectedProject: expectedProject,
-                                 provisionedBoard: want)
+                                 provisionedBoard: want, edition: edition)
         guard let head = candidates.first else { return nil }
         // head.board == nil means the sort found a universal image and put it
         // first, which is a legitimate recommendation either way.

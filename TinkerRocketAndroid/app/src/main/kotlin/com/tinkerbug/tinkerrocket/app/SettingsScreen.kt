@@ -120,6 +120,9 @@ fun SettingsScreen(
     val createdProfileName by syncer.createdProfileName.collectAsState()
     val unreportedGroups by syncer.unreportedGroups.collectAsState()
     val active = activeId?.let { id -> profiles.firstOrNull { it.id == id } }
+    // What this rocket's board has (AppEdition.kt): no fin or camera settings
+    // for a Beetle, and none at all in the store edition.
+    val features = rememberFeatures(session)
     // #1072: the roll sub-mode to restore when the control mode comes back
     // from Guidance (iOS's savedRollUsesAngle). Null until the operator has
     // switched at least once this visit — the profile's own value stands then.
@@ -411,13 +414,17 @@ fun SettingsScreen(
             }
             if (active != null) {
                 Section("Summary") {
-                    SummaryRow("Control mode", active.controlModeLabel)
-                    SummaryRow("Camera", when (active.cameraType) {
-                        0 -> "None"; 1 -> "GoPro"; else -> "RunCam"
-                    })
+                    if (features.finControl) SummaryRow("Control mode", active.controlModeLabel)
+                    if (features.camera) {
+                        SummaryRow("Camera", when (active.cameraType) {
+                            0 -> "None"; 1 -> "GoPro"; else -> "RunCam"
+                        })
+                    }
                     SummaryRow("IMU mounting", if (active.imuOrientSetting == 0xFF) "Auto"
                                                else "Code ${active.imuOrientSetting}")
-                    SummaryRow("Gain scheduling", if (active.gainScheduleEnabled) "On" else "Off")
+                    if (features.finControl) {
+                        SummaryRow("Gain scheduling", if (active.gainScheduleEnabled) "On" else "Off")
+                    }
                     // The profile's saved copies; what the board holds is
                     // under Calibration (#1629).
                     SummaryRow("Mag cal in profile", if (active.magCal == null) "Not saved" else "Saved")
@@ -608,404 +615,411 @@ fun SettingsScreen(
             edit(if (antennaLocked) null else ConfigGroup.ANTENNA_OFFSET) { it.withAntennaOffset(o) }
         }
 
-        // ── Camera (iOS Camera tab; raw-int field replaced by the picker) ─
-        Section("Camera") {
-            SegmentedPicker(listOf("None", "GoPro", "RunCam"), active.cameraType.coerceIn(0, 2)) { i ->
-                edit(ConfigGroup.CAMERA) { it.copy(cameraType = i) }
-            }
-            Caption(
-                when (active.cameraType) {
-                    1 -> "GoPro: controlled via GPIO pulse on shutter pin."
-                    2 -> "RunCam: controlled via UART serial command."
-                    else -> "No camera connected."
-                },
-            )
-        }
-
-        // ── Servo control ────────────────────────────────────────────────
-        // The master switch for every control setting below it, so it leads
-        // the block instead of sitting mid-way down a mixed "Rocket" section
-        // (iOS Control-tab twin).  Nothing under it reaches the fins except
-        // through the servo driver — the bench jog included, which cannot move
-        // a servo the FC never writes to.  Dimmed and locked rather than
-        // removed: the values stay readable for a preflight check, and a block
-        // that vanishes reads as broken rather than as switched off.
-        val servoOn = active.servoControlEnabled
-        // Close the keyboard when the gate shuts: the scrim swallows taps, not
-        // keystrokes, so a field focused before the switch was turned off would
-        // still take typing through it.  Blurring also commits that pending
-        // edit (NumField commits on blur) instead of stranding it.
-        LaunchedEffect(servoOn) { if (!servoOn) focusManager.clearFocus() }
-        Section("Servo control") {
-            ToggleRow("Servo control", servoOn) { v ->
-                edit(ConfigGroup.SERVO_ENABLE) { it.copy(servoControlEnabled = v) }
-            }
-            Caption(
-                if (servoOn) {
-                    "The flight computer drives the fin servos. Everything below — gains, " +
-                        "roll control, servo calibration, fin layout, guidance — applies."
-                } else {
-                    "Off — the fins never move: no roll control, no guidance, no bench jog. " +
-                        "The settings below stay saved, and do nothing until this is on."
-                },
-            )
-        }
-
-        GatedControls(enabled = servoOn) {
-            // ── PID ──────────────────────────────────────────────────────
-            Section("PID") {
-                FieldRow {
-                    NumField("Kp", fmt(active.pidKp), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidKp = v) } }
-                    }
-                    NumField("Ki", fmt(active.pidKi), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidKi = v) } }
-                    }
-                    NumField("Kd", fmt(active.pidKd), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidKd = v) } }
-                    }
-                }
-                FieldRow {
-                    NumField("Min cmd", fmt(active.pidMinCmd), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidMinCmd = v) } }
-                    }
-                    NumField("Max cmd", fmt(active.pidMaxCmd), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidMaxCmd = v) } }
-                    }
-                    // Rides the roll-control frame, not the PID frame.
-                    NumField("I-sep °/s", fmt(active.integralSepThreshold), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(integralSepThreshold = v) } }
-                    }
-                }
-                ToggleRow("Gain schedule", active.gainScheduleEnabled) { v ->
-                    edit(ConfigGroup.GAIN_SCHEDULE) { it.copy(gainScheduleEnabled = v) }
+        // Boards with a camera port only (AppFeatures.camera).
+        if (features.camera) {
+            // ── Camera (iOS Camera tab; raw-int field replaced by the picker) ─
+            Section("Camera") {
+                SegmentedPicker(listOf("None", "GoPro", "RunCam"), active.cameraType.coerceIn(0, 2)) { i ->
+                    edit(ConfigGroup.CAMERA) { it.copy(cameraType = i) }
                 }
                 Caption(
-                    "Gain schedule scales the gains by (V_ref/V)² so fin authority stays " +
-                        "roughly constant as speed changes. Off = fixed gains at all speeds.",
-                )
-            }
-
-            // ── Roll control (iOS Control-tab "Roll Control" section) ────
-            Section("Roll control") {
-                // #1072: iOS makes this a top-level CONTROL MODE — Roll Control
-                // or Guidance — because the two are exclusive in the firmware:
-                // guidance rate-nulls roll in every phase, so a profile with
-                // both on describes a flight the rocket will not fly. Android
-                // had two independent toggles, so the operator could ask for
-                // both and get neither explanation. Switching to Guidance
-                // stashes the roll sub-mode and restores it on the way back,
-                // exactly as controlModeBinding does.
-                SegmentedPicker(
-                    listOf("Roll control", "Guidance"),
-                    if (active.guidanceEnabled) 1 else 0,
-                ) { i ->
-                    if (i == 1) {
-                        savedRollUsesAngle = active.useAngleControl
-                        edit(ConfigGroup.GUIDANCE) {
-                            it.copy(guidanceEnabled = true, useAngleControl = false)
-                        }
-                        edit(ConfigGroup.ROLL_CONTROL) { it }
-                    } else {
-                        val restore = savedRollUsesAngle
-                        edit(ConfigGroup.GUIDANCE) {
-                            it.copy(
-                                guidanceEnabled = false,
-                                useAngleControl = restore ?: it.useAngleControl,
-                            )
-                        }
-                        edit(ConfigGroup.ROLL_CONTROL) { it }
-                    }
-                }
-                Caption(
-                    if (active.guidanceEnabled) {
-                        "Guidance steers the airframe; roll is rate-nulled (held at zero " +
-                            "spin) in every phase, so the roll profile below is not followed."
-                    } else {
-                        "Roll control only — the fins hold or track roll, and no guidance " +
-                            "law runs."
+                    when (active.cameraType) {
+                        1 -> "GoPro: controlled via GPIO pulse on shutter pin."
+                        2 -> "RunCam: controlled via UART serial command."
+                        else -> "No camera connected."
                     },
                 )
-                // The picker is the profile; this is what the flight computer holds.
-                if (session != null) {
-                    GuidanceStateLine(rememberGuidanceStateCheck(session, active))
-                }
-                ToggleRow(
-                    "Angle control",
-                    active.useAngleControl,
-                    enabled = !active.guidanceEnabled,
-                ) { v ->
-                    edit(ConfigGroup.ROLL_CONTROL) { it.copy(useAngleControl = v) }
+            }
+        }
+
+        // Boards with fin servos only (AppFeatures.finControl): servo control
+        // through guidance all reach the fins through the servo driver.
+        if (features.finControl) {
+            // ── Servo control ────────────────────────────────────────────────
+            // The master switch for every control setting below it, so it leads
+            // the block instead of sitting mid-way down a mixed "Rocket" section
+            // (iOS Control-tab twin).  Nothing under it reaches the fins except
+            // through the servo driver — the bench jog included, which cannot move
+            // a servo the FC never writes to.  Dimmed and locked rather than
+            // removed: the values stay readable for a preflight check, and a block
+            // that vanishes reads as broken rather than as switched off.
+            val servoOn = active.servoControlEnabled
+            // Close the keyboard when the gate shuts: the scrim swallows taps, not
+            // keystrokes, so a field focused before the switch was turned off would
+            // still take typing through it.  Blurring also commits that pending
+            // edit (NumField commits on blur) instead of stranding it.
+            LaunchedEffect(servoOn) { if (!servoOn) focusManager.clearFocus() }
+            Section("Servo control") {
+                ToggleRow("Servo control", servoOn) { v ->
+                    edit(ConfigGroup.SERVO_ENABLE) { it.copy(servoControlEnabled = v) }
                 }
                 Caption(
-                    if (active.useAngleControl) {
-                        "Cascaded angle control — fins track the roll profile waypoints below."
+                    if (servoOn) {
+                        "The flight computer drives the fin servos. Everything below — gains, " +
+                            "roll control, servo calibration, fin layout, guidance — applies."
                     } else {
-                        "Rate-only control — fins hold zero roll rate. No profile followed."
+                        "Off — the fins never move: no roll control, no guidance, no bench jog. " +
+                            "The settings below stay saved, and do nothing until this is on."
                     },
                 )
-                if (active.useAngleControl) {
+            }
+
+            GatedControls(enabled = servoOn) {
+                // ── PID ──────────────────────────────────────────────────────
+                Section("PID") {
                     FieldRow {
-                        NumField("Kp angle", fmt(active.kpAngle), Modifier.weight(1f)) { s ->
-                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(kpAngle = v) } }
+                        NumField("Kp", fmt(active.pidKp), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidKp = v) } }
                         }
-                        NumField("Rate cap °/s", fmt(active.rateCapDps), Modifier.weight(1f)) { s ->
-                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(rateCapDps = v) } }
+                        NumField("Ki", fmt(active.pidKi), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidKi = v) } }
+                        }
+                        NumField("Kd", fmt(active.pidKd), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidKd = v) } }
                         }
                     }
+                    FieldRow {
+                        NumField("Min cmd", fmt(active.pidMinCmd), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidMinCmd = v) } }
+                        }
+                        NumField("Max cmd", fmt(active.pidMaxCmd), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.PID) { it.copy(pidMaxCmd = v) } }
+                        }
+                        // Rides the roll-control frame, not the PID frame.
+                        NumField("I-sep °/s", fmt(active.integralSepThreshold), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(integralSepThreshold = v) } }
+                        }
+                    }
+                    ToggleRow("Gain schedule", active.gainScheduleEnabled) { v ->
+                        edit(ConfigGroup.GAIN_SCHEDULE) { it.copy(gainScheduleEnabled = v) }
+                    }
+                    Caption(
+                        "Gain schedule scales the gains by (V_ref/V)² so fin authority stays " +
+                            "roughly constant as speed changes. Off = fixed gains at all speeds.",
+                    )
                 }
-                FieldRow {
-                    NumField(
-                        "Roll delay ms", active.rollDelayMs.toString(), Modifier.weight(1f),
-                        range = WireBounds.U16,
-                    ) { s ->
-                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(rollDelayMs = v) } }
-                    }
-                    NumField("Min speed m/s", fmt(active.rollMinSpeedMps), Modifier.weight(1f)) { s ->
-                        // Clamped to the firmware's accepted range: the rocket
-                        // rejects anything above it, and a gate that never opens
-                        // means no roll control for the whole flight.
-                        s.toFloatOrNull()?.let { v ->
-                            edit(ConfigGroup.ROLL_CONTROL) {
-                                it.copy(rollMinSpeedMps = v.coerceIn(0f, 300f))
-                            }
-                        }
-                    }
-                }
-                Caption(
-                    "Milliseconds after launch before control activates — roll-rate-null and " +
-                        "PN guidance both engage at this delay, keeping fins neutral through " +
-                        "initial boost.",
-                )
-                Caption(
-                    "Min speed is the airspeed the rocket must reach before control activates. " +
-                        "Fin authority scales with speed squared, so a loop that starts on the " +
-                        "rail commands full deflection the fins cannot deliver and departs when " +
-                        "authority arrives. Applied on top of the roll delay: both must be " +
-                        "satisfied. 0 disables the speed gate.",
-                )
-            }
 
-            // ── Servo ────────────────────────────────────────────────────
-            Section("Servo") {
-                FieldRow {
-                    NumField("Bias 1", active.servoBias1.toString(), Modifier.weight(1f)) { s ->
-                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias1 = v) } }
-                    }
-                    NumField("Bias 2", active.servoBias2.toString(), Modifier.weight(1f)) { s ->
-                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias2 = v) } }
-                    }
-                    NumField("Bias 3", active.servoBias3.toString(), Modifier.weight(1f)) { s ->
-                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias3 = v) } }
-                    }
-                    NumField("Bias 4", active.servoBias4.toString(), Modifier.weight(1f)) { s ->
-                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias4 = v) } }
-                    }
-                }
-                FieldRow {
-                    NumField(
-                        "Hz", active.servoHz.toString(), Modifier.weight(1f),
-                        range = WireBounds.I16,
-                    ) { s ->
-                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoHz = v) } }
-                    }
-                    NumField(
-                        "Min µs", active.servoMinUs.toString(), Modifier.weight(1f),
-                        range = WireBounds.I16,
-                    ) { s ->
-                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoMinUs = v) } }
-                    }
-                    NumField(
-                        "Max µs", active.servoMaxUs.toString(), Modifier.weight(1f),
-                        range = WireBounds.I16,
-                    ) { s ->
-                        s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoMaxUs = v) } }
-                    }
-                    // #449: travel is the editable quantity; fin angles derive.
-                    NumField("Travel °", fmt(active.finTravelDeg), Modifier.weight(1f)) { s ->
-                        s.toFloatOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(finTravelDeg = v) } }
-                    }
-                }
-            }
-
-            // ── Fin layout (cmd 66) ──────────────────────────────────────
-            Section("Fin layout") {
-                FinLayoutEditor(
-                    ringMode = active.finRingMode,
-                    servoAtSlot = active.finServoAtSlot,
-                    reverse = active.finReverse,
-                    rollReverse = active.finRollReverse,
-                    canJog = canJog,
-                    finMinDeg = active.finMinDeg,
-                    finMaxDeg = active.finMaxDeg,
-                    onSetRingMode = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finRingMode = v) } },
-                    onSetServoAtSlot = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finServoAtSlot = v) } },
-                    onSetReverse = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finReverse = v) } },
-                    onSetRollReverse = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finRollReverse = v) } },
-                    onJogAngles = { angles -> session?.sendCommandFrame(Commands.servoTestAngles(angles)) },
-                    onJogStop = { session?.sendBareCommand(BleCommandId.SERVO_TEST_STOP) },
-                )
-            }
-
-            // ── Roll profile (cmd 26; Clear = cmd 27, matching iOS) ──────
-            Section("Roll profile") {
-                Text(
-                    "The target roll angle ramps linearly between waypoints. Before " +
-                        "the first waypoint the controller nulls roll rate (fins keep " +
-                        "zero roll through boost); after the last waypoint the final " +
-                        "angle is held. To hold an angle, give two consecutive " +
-                        "waypoints the same angle.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                active.rollWaypoints.forEachIndexed { i, wp ->
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("WP ${i + 1}", style = MaterialTheme.typography.bodySmall)
-                        NumField("Time s", fmt(wp.timeSeconds), Modifier.weight(1f)) { s ->
-                            s.toFloatOrNull()?.let { v ->
-                                edit(ConfigGroup.ROLL_PROFILE) { p ->
-                                    p.copy(
-                                        rollWaypoints = p.rollWaypoints.mapIndexed { j, w ->
-                                            if (j == i) w.copy(timeSeconds = v) else w
-                                        },
-                                    )
-                                }
+                // ── Roll control (iOS Control-tab "Roll Control" section) ────
+                Section("Roll control") {
+                    // #1072: iOS makes this a top-level CONTROL MODE — Roll Control
+                    // or Guidance — because the two are exclusive in the firmware:
+                    // guidance rate-nulls roll in every phase, so a profile with
+                    // both on describes a flight the rocket will not fly. Android
+                    // had two independent toggles, so the operator could ask for
+                    // both and get neither explanation. Switching to Guidance
+                    // stashes the roll sub-mode and restores it on the way back,
+                    // exactly as controlModeBinding does.
+                    SegmentedPicker(
+                        listOf("Roll control", "Guidance"),
+                        if (active.guidanceEnabled) 1 else 0,
+                    ) { i ->
+                        if (i == 1) {
+                            savedRollUsesAngle = active.useAngleControl
+                            edit(ConfigGroup.GUIDANCE) {
+                                it.copy(guidanceEnabled = true, useAngleControl = false)
                             }
-                        }
-                        NumField("Angle °", fmt(wp.angleDeg), Modifier.weight(1f)) { s ->
-                            s.toFloatOrNull()?.let { v ->
-                                edit(ConfigGroup.ROLL_PROFILE) { p ->
-                                    p.copy(
-                                        rollWaypoints = p.rollWaypoints.mapIndexed { j, w ->
-                                            if (j == i) w.copy(angleDeg = v) else w
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                        TextButton(onClick = {
-                            edit(ConfigGroup.ROLL_PROFILE) { p ->
-                                p.copy(rollWaypoints = p.rollWaypoints.filterIndexed { j, _ -> j != i })
-                            }
-                        }) { Text("✕") }
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (active.rollWaypoints.size < 8) {
-                        OutlinedButton(onClick = {
-                            val t = (active.rollWaypoints.lastOrNull()?.timeSeconds ?: -1f) + 1f
-                            edit(ConfigGroup.ROLL_PROFILE) { p ->
-                                p.copy(
-                                    rollWaypoints = p.rollWaypoints +
-                                        ProfileRollWaypoint(timeSeconds = t, angleDeg = 0f),
+                            edit(ConfigGroup.ROLL_CONTROL) { it }
+                        } else {
+                            val restore = savedRollUsesAngle
+                            edit(ConfigGroup.GUIDANCE) {
+                                it.copy(
+                                    guidanceEnabled = false,
+                                    useAngleControl = restore ?: it.useAngleControl,
                                 )
                             }
-                        }) { Text("Add Waypoint") }
+                            edit(ConfigGroup.ROLL_CONTROL) { it }
+                        }
                     }
-                    if (active.rollWaypoints.isNotEmpty()) {
-                        OutlinedButton(onClick = {
-                            // iOS: empty the profile + explicit clear command (27).
-                            edit(null) { it.copy(rollWaypoints = emptyList()) }
-                            session?.sendBareCommand(BleCommandId.ROLL_PROFILE_CLEAR)
-                        }) { Text("Clear Roll Profile") }
+                    Caption(
+                        if (active.guidanceEnabled) {
+                            "Guidance steers the airframe; roll is rate-nulled (held at zero " +
+                                "spin) in every phase, so the roll profile below is not followed."
+                        } else {
+                            "Roll control only — the fins hold or track roll, and no guidance " +
+                                "law runs."
+                        },
+                    )
+                    // The picker is the profile; this is what the flight computer holds.
+                    if (session != null) {
+                        GuidanceStateLine(rememberGuidanceStateCheck(session, active))
+                    }
+                    ToggleRow(
+                        "Angle control",
+                        active.useAngleControl,
+                        enabled = !active.guidanceEnabled,
+                    ) { v ->
+                        edit(ConfigGroup.ROLL_CONTROL) { it.copy(useAngleControl = v) }
+                    }
+                    Caption(
+                        if (active.useAngleControl) {
+                            "Cascaded angle control — fins track the roll profile waypoints below."
+                        } else {
+                            "Rate-only control — fins hold zero roll rate. No profile followed."
+                        },
+                    )
+                    if (active.useAngleControl) {
+                        FieldRow {
+                            NumField("Kp angle", fmt(active.kpAngle), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(kpAngle = v) } }
+                            }
+                            NumField("Rate cap °/s", fmt(active.rateCapDps), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(rateCapDps = v) } }
+                            }
+                        }
+                    }
+                    FieldRow {
+                        NumField(
+                            "Roll delay ms", active.rollDelayMs.toString(), Modifier.weight(1f),
+                            range = WireBounds.U16,
+                        ) { s ->
+                            s.toIntOrNull()?.let { v -> edit(ConfigGroup.ROLL_CONTROL) { it.copy(rollDelayMs = v) } }
+                        }
+                        NumField("Min speed m/s", fmt(active.rollMinSpeedMps), Modifier.weight(1f)) { s ->
+                            // Clamped to the firmware's accepted range: the rocket
+                            // rejects anything above it, and a gate that never opens
+                            // means no roll control for the whole flight.
+                            s.toFloatOrNull()?.let { v ->
+                                edit(ConfigGroup.ROLL_CONTROL) {
+                                    it.copy(rollMinSpeedMps = v.coerceIn(0f, 300f))
+                                }
+                            }
+                        }
+                    }
+                    Caption(
+                        "Milliseconds after launch before control activates — roll-rate-null and " +
+                            "PN guidance both engage at this delay, keeping fins neutral through " +
+                            "initial boost.",
+                    )
+                    Caption(
+                        "Min speed is the airspeed the rocket must reach before control activates. " +
+                            "Fin authority scales with speed squared, so a loop that starts on the " +
+                            "rail commands full deflection the fins cannot deliver and departs when " +
+                            "authority arrives. Applied on top of the roll delay: both must be " +
+                            "satisfied. 0 disables the speed gate.",
+                    )
+                }
+
+                // ── Servo ────────────────────────────────────────────────────
+                Section("Servo") {
+                    FieldRow {
+                        NumField("Bias 1", active.servoBias1.toString(), Modifier.weight(1f)) { s ->
+                            s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias1 = v) } }
+                        }
+                        NumField("Bias 2", active.servoBias2.toString(), Modifier.weight(1f)) { s ->
+                            s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias2 = v) } }
+                        }
+                        NumField("Bias 3", active.servoBias3.toString(), Modifier.weight(1f)) { s ->
+                            s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias3 = v) } }
+                        }
+                        NumField("Bias 4", active.servoBias4.toString(), Modifier.weight(1f)) { s ->
+                            s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoBias4 = v) } }
+                        }
+                    }
+                    FieldRow {
+                        NumField(
+                            "Hz", active.servoHz.toString(), Modifier.weight(1f),
+                            range = WireBounds.I16,
+                        ) { s ->
+                            s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoHz = v) } }
+                        }
+                        NumField(
+                            "Min µs", active.servoMinUs.toString(), Modifier.weight(1f),
+                            range = WireBounds.I16,
+                        ) { s ->
+                            s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoMinUs = v) } }
+                        }
+                        NumField(
+                            "Max µs", active.servoMaxUs.toString(), Modifier.weight(1f),
+                            range = WireBounds.I16,
+                        ) { s ->
+                            s.toIntOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(servoMaxUs = v) } }
+                        }
+                        // #449: travel is the editable quantity; fin angles derive.
+                        NumField("Travel °", fmt(active.finTravelDeg), Modifier.weight(1f)) { s ->
+                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.SERVO) { it.copy(finTravelDeg = v) } }
+                        }
                     }
                 }
-            }
 
-            // ── Guidance ─────────────────────────────────────────────────
-            // #1072: the law selector and its per-law tuning were missing
-            // entirely, so station-keeping was reachable on Android only by
-            // adopting a rocket already configured that way — and once
-            // adopted, its two gains could not be edited. The syncer has
-            // always SENT every field from the profile; only the controls
-            // were absent.
-            Section("Guidance") {
-                if (active.guidanceEnabled) {
-                    SegmentedPicker(
-                        listOf("Proportional Nav", "Station-Keep"),
-                        active.pnGuidanceLaw.coerceIn(0, 1),
-                    ) { i ->
-                        edit(ConfigGroup.GUIDANCE) { it.copy(pnGuidanceLaw = i) }
-                    }
-                    Caption(
-                        "Station-keep is a PD regulator that flies straight up over the aim " +
-                            "point — no closest-approach singularity. PN steers toward a " +
-                            "target altitude and is the legacy law.",
+                // ── Fin layout (cmd 66) ──────────────────────────────────────
+                Section("Fin layout") {
+                    FinLayoutEditor(
+                        ringMode = active.finRingMode,
+                        servoAtSlot = active.finServoAtSlot,
+                        reverse = active.finReverse,
+                        rollReverse = active.finRollReverse,
+                        canJog = canJog,
+                        finMinDeg = active.finMinDeg,
+                        finMaxDeg = active.finMaxDeg,
+                        onSetRingMode = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finRingMode = v) } },
+                        onSetServoAtSlot = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finServoAtSlot = v) } },
+                        onSetReverse = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finReverse = v) } },
+                        onSetRollReverse = { v -> edit(ConfigGroup.FIN_LAYOUT) { it.copy(finRollReverse = v) } },
+                        onJogAngles = { angles -> session?.sendCommandFrame(Commands.servoTestAngles(angles)) },
+                        onJogStop = { session?.sendBareCommand(BleCommandId.SERVO_TEST_STOP) },
                     )
-                    Caption(
-                        "Aim point is currently the pad (overhead); wind-compensated aim " +
-                            "points arrive with Drift Cast.",
+                }
+
+                // ── Roll profile (cmd 26; Clear = cmd 27, matching iOS) ──────
+                Section("Roll profile") {
+                    Text(
+                        "The target roll angle ramps linearly between waypoints. Before " +
+                            "the first waypoint the controller nulls roll rate (fins keep " +
+                            "zero roll through boost); after the last waypoint the final " +
+                            "angle is held. To hold an angle, give two consecutive " +
+                            "waypoints the same angle.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    // Per-law tuning. The other law's values stay in the
-                    // profile and keep going out on the wire, so switching
-                    // laws never zeroes its tune (iOS guidanceLawFields).
-                    if (active.pnGuidanceLaw == 0) {
-                        FieldRow {
-                            NumField("Target alt m", fmt(active.pnTargetAltM), Modifier.weight(1f)) { s ->
-                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnTargetAltM = v) } }
+                    active.rollWaypoints.forEachIndexed { i, wp ->
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("WP ${i + 1}", style = MaterialTheme.typography.bodySmall)
+                            NumField("Time s", fmt(wp.timeSeconds), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.let { v ->
+                                    edit(ConfigGroup.ROLL_PROFILE) { p ->
+                                        p.copy(
+                                            rollWaypoints = p.rollWaypoints.mapIndexed { j, w ->
+                                                if (j == i) w.copy(timeSeconds = v) else w
+                                            },
+                                        )
+                                    }
+                                }
                             }
-                            NumField("Nav gain (N)", fmt(active.pnNavGain), Modifier.weight(1f)) { s ->
-                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnNavGain = v) } }
+                            NumField("Angle °", fmt(wp.angleDeg), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.let { v ->
+                                    edit(ConfigGroup.ROLL_PROFILE) { p ->
+                                        p.copy(
+                                            rollWaypoints = p.rollWaypoints.mapIndexed { j, w ->
+                                                if (j == i) w.copy(angleDeg = v) else w
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                            TextButton(onClick = {
+                                edit(ConfigGroup.ROLL_PROFILE) { p ->
+                                    p.copy(rollWaypoints = p.rollWaypoints.filterIndexed { j, _ -> j != i })
+                                }
+                            }) { Text("✕") }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (active.rollWaypoints.size < 8) {
+                            OutlinedButton(onClick = {
+                                val t = (active.rollWaypoints.lastOrNull()?.timeSeconds ?: -1f) + 1f
+                                edit(ConfigGroup.ROLL_PROFILE) { p ->
+                                    p.copy(
+                                        rollWaypoints = p.rollWaypoints +
+                                            ProfileRollWaypoint(timeSeconds = t, angleDeg = 0f),
+                                    )
+                                }
+                            }) { Text("Add Waypoint") }
+                        }
+                        if (active.rollWaypoints.isNotEmpty()) {
+                            OutlinedButton(onClick = {
+                                // iOS: empty the profile + explicit clear command (27).
+                                edit(null) { it.copy(rollWaypoints = emptyList()) }
+                                session?.sendBareCommand(BleCommandId.ROLL_PROFILE_CLEAR)
+                            }) { Text("Clear Roll Profile") }
+                        }
+                    }
+                }
+
+                // ── Guidance ─────────────────────────────────────────────────
+                // #1072: the law selector and its per-law tuning were missing
+                // entirely, so station-keeping was reachable on Android only by
+                // adopting a rocket already configured that way — and once
+                // adopted, its two gains could not be edited. The syncer has
+                // always SENT every field from the profile; only the controls
+                // were absent.
+                Section("Guidance") {
+                    if (active.guidanceEnabled) {
+                        SegmentedPicker(
+                            listOf("Proportional Nav", "Station-Keep"),
+                            active.pnGuidanceLaw.coerceIn(0, 1),
+                        ) { i ->
+                            edit(ConfigGroup.GUIDANCE) { it.copy(pnGuidanceLaw = i) }
+                        }
+                        Caption(
+                            "Station-keep is a PD regulator that flies straight up over the aim " +
+                                "point — no closest-approach singularity. PN steers toward a " +
+                                "target altitude and is the legacy law.",
+                        )
+                        Caption(
+                            "Aim point is currently the pad (overhead); wind-compensated aim " +
+                                "points arrive with Drift Cast.",
+                        )
+                        // Per-law tuning. The other law's values stay in the
+                        // profile and keep going out on the wire, so switching
+                        // laws never zeroes its tune (iOS guidanceLawFields).
+                        if (active.pnGuidanceLaw == 0) {
+                            FieldRow {
+                                NumField("Target alt m", fmt(active.pnTargetAltM), Modifier.weight(1f)) { s ->
+                                    s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnTargetAltM = v) } }
+                                }
+                                NumField("Nav gain (N)", fmt(active.pnNavGain), Modifier.weight(1f)) { s ->
+                                    s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnNavGain = v) } }
+                                }
+                            }
+                            Caption(
+                                "Aim-point altitude above the pad. Set near (or modestly above) " +
+                                    "expected apogee — aiming far above weakens guidance.",
+                            )
+                        } else {
+                            FieldRow {
+                                NumField("Pos gain (kp) 1/s²", fmt(active.pnKpPos), Modifier.weight(1f)) { s ->
+                                    s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnKpPos = v) } }
+                                }
+                                NumField("Vel gain (kd) 1/s", fmt(active.pnKdVel), Modifier.weight(1f)) { s ->
+                                    s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnKdVel = v) } }
+                                }
+                            }
+                        }
+                        FieldRow {
+                            NumField("Max accel", fmt(active.pnMaxAccel), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMaxAccel = v) } }
+                            }
+                            NumField("Max fin °", fmt(active.pnMaxFinDeg), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMaxFinDeg = v) } }
+                            }
+                        }
+                        FieldRow {
+                            NumField("Min speed", fmt(active.pnMinSpeed), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMinSpeed = v) } }
+                            }
+                            NumField("Accel→fin °", fmt(active.pnAccelToFin), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnAccelToFin = v) } }
                             }
                         }
                         Caption(
-                            "Aim-point altitude above the pad. Set near (or modestly above) " +
-                                "expected apogee — aiming far above weakens guidance.",
+                            "Engages at the Activation Delay after launch (shared with roll " +
+                                "control), not after burnout.",
+                        )
+                        // Both laws. Clamped to what the flight computer takes,
+                        // (0, 60]: it keeps its old limit for anything else.
+                        FieldRow {
+                            NumField("Tilt limit, boost (°)", fmt(active.pnTiltLimitBoostDeg), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.takeIf { it.isFinite() }?.let { v ->
+                                    edit(ConfigGroup.GUIDANCE) { it.copy(pnTiltLimitBoostDeg = v.coerceIn(1f, 60f)) }
+                                }
+                            }
+                            NumField("Tilt limit, coast (°)", fmt(active.pnTiltLimitCoastDeg), Modifier.weight(1f)) { s ->
+                                s.toFloatOrNull()?.takeIf { it.isFinite() }?.let { v ->
+                                    edit(ConfigGroup.GUIDANCE) { it.copy(pnTiltLimitCoastDeg = v.coerceIn(1f, 60f)) }
+                                }
+                            }
+                        }
+                        Caption(
+                            "Guidance switches off for the rest of the flight if the rocket tilts " +
+                                "more than this from vertical. Boost is before burnout, coast after.",
                         )
                     } else {
-                        FieldRow {
-                            NumField("Pos gain (kp) 1/s²", fmt(active.pnKpPos), Modifier.weight(1f)) { s ->
-                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnKpPos = v) } }
-                            }
-                            NumField("Vel gain (kd) 1/s", fmt(active.pnKdVel), Modifier.weight(1f)) { s ->
-                                s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnKdVel = v) } }
-                            }
-                        }
+                        Caption("Switch the control mode above to Guidance to configure it.")
                     }
-                    FieldRow {
-                        NumField("Max accel", fmt(active.pnMaxAccel), Modifier.weight(1f)) { s ->
-                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMaxAccel = v) } }
-                        }
-                        NumField("Max fin °", fmt(active.pnMaxFinDeg), Modifier.weight(1f)) { s ->
-                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMaxFinDeg = v) } }
-                        }
-                    }
-                    FieldRow {
-                        NumField("Min speed", fmt(active.pnMinSpeed), Modifier.weight(1f)) { s ->
-                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnMinSpeed = v) } }
-                        }
-                        NumField("Accel→fin °", fmt(active.pnAccelToFin), Modifier.weight(1f)) { s ->
-                            s.toFloatOrNull()?.let { v -> edit(ConfigGroup.GUIDANCE) { it.copy(pnAccelToFin = v) } }
-                        }
-                    }
-                    Caption(
-                        "Engages at the Activation Delay after launch (shared with roll " +
-                            "control), not after burnout.",
-                    )
-                    // Both laws. Clamped to what the flight computer takes,
-                    // (0, 60]: it keeps its old limit for anything else.
-                    FieldRow {
-                        NumField("Tilt limit, boost (°)", fmt(active.pnTiltLimitBoostDeg), Modifier.weight(1f)) { s ->
-                            s.toFloatOrNull()?.takeIf { it.isFinite() }?.let { v ->
-                                edit(ConfigGroup.GUIDANCE) { it.copy(pnTiltLimitBoostDeg = v.coerceIn(1f, 60f)) }
-                            }
-                        }
-                        NumField("Tilt limit, coast (°)", fmt(active.pnTiltLimitCoastDeg), Modifier.weight(1f)) { s ->
-                            s.toFloatOrNull()?.takeIf { it.isFinite() }?.let { v ->
-                                edit(ConfigGroup.GUIDANCE) { it.copy(pnTiltLimitCoastDeg = v.coerceIn(1f, 60f)) }
-                            }
-                        }
-                    }
-                    Caption(
-                        "Guidance switches off for the rest of the flight if the rocket tilts " +
-                            "more than this from vertical. Boost is before burnout, coast after.",
-                    )
-                } else {
-                    Caption("Switch the control mode above to Guidance to configure it.")
                 }
             }
         }

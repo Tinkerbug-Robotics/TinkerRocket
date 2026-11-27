@@ -1,5 +1,6 @@
 package com.tinkerbug.tinkerrocket.session
 
+import com.tinkerbug.tinkerrocket.protocol.AppEdition
 import com.tinkerbug.tinkerrocket.protocol.EspImage
 import com.tinkerbug.tinkerrocket.protocol.FirmwareCatalog
 import com.tinkerbug.tinkerrocket.protocol.FirmwareFetch
@@ -38,6 +39,11 @@ public class FirmwareCatalogSession(
      * asks for and is the ordinary condition at a launch site, not an edge.
      */
     private val cache: FirmwareCache? = null,
+    /**
+     * The app edition. The store edition lists rocket images for the Beetle
+     * only (AppFeatures.offersFirmware); DEV, the default, lists them all.
+     */
+    private val edition: AppEdition = AppEdition.DEV,
 ) {
     public sealed interface State {
         public data object Idle : State
@@ -162,14 +168,14 @@ public class FirmwareCatalogSession(
             val effectiveBoard = provisionedBoard?.trim()?.ifEmpty { null }
                 ?: EspImage.boardSuffix(runningVersion)
 
-            val images = FirmwareCatalog.forUnit(manifest, expectedProject, effectiveBoard)
+            val images = FirmwareCatalog.forUnit(manifest, expectedProject, effectiveBoard, edition)
             if (images.isEmpty()) {
                 _state.value = State.Failed(
                     "Release ${rel.tag} carries no $expectedProject image.",
                 )
                 return@launch
             }
-            val best = FirmwareCatalog.best(manifest, expectedProject, effectiveBoard)
+            val best = FirmwareCatalog.best(manifest, expectedProject, effectiveBoard, edition)
             _state.value = State.Ready(
                 release = rel,
                 images = images,

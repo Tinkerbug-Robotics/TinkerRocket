@@ -814,7 +814,9 @@ struct DriftCastView: View {
 
                 // Send to unit — only when a device is connected (#42).  The
                 // tool itself runs standalone; uploading guidance needs a link.
-                if let device = device {
+                // The aim point is flown by guidance, through the fins: boards
+                // with fin servos only (AppFeatures.finControl).
+                if let device = device, device.features.finControl {
                     DriftCastSendButton(device: device, result: r, unitSystem: unitSystem)
                 }
             }

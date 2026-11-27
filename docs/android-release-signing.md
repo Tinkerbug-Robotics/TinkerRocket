@@ -57,7 +57,8 @@ offline copy of the file.
 git tag android-v1.0.0 && git push origin android-v1.0.0
 ```
 
-CI runs the JVM suite, builds `:app:assembleRelease` signed with the release key, verifies
+CI runs the JVM suite, builds `:app:assembleDevRelease` (the dev edition: every board, the
+sideloaded app; see `docs/app-editions.md`) signed with the release key, verifies
 the signer isn't the debug cert, and attaches `TinkerRocket-android-v1.0.0.apk` to a GitHub
 release. Bump `versionCode`/`versionName` in `app/build.gradle.kts` before tagging —
 `versionCode` must increase monotonically (Play requires it; sideloads want it too so
@@ -70,11 +71,12 @@ export TR_ANDROID_KEYSTORE=~/.tinkerrocket/release.keystore TR_ANDROID_KEY_ALIAS
 ```
 
 then set the two password vars from the password manager and run
-`./gradlew :app:assembleRelease` in `TinkerRocketAndroid/`.
+`./gradlew :app:assembleDevRelease` in `TinkerRocketAndroid/` (`:app:bundleStoreRelease` for the
+store edition's Play upload).
 
 ## Forks
 
-Nothing to configure: with no `TR_ANDROID_KEYSTORE` in the environment, `assembleRelease`
+Nothing to configure: with no `TR_ANDROID_KEYSTORE` in the environment, a release build
 falls back to the debug signing config — installable everywhere, distinct identity, cannot
 update a real install. Forks that want to distribute must mint their own key and rename
 `applicationId`.
@@ -91,6 +93,13 @@ uninstall (data loss) to switch to Play.
 signing key. Sideloads and Play installs then share a signature, fleet phones migrate to
 Play seamlessly, and Google's escrow takes over long-term custody from that day. Until
 enrollment, the password-manager + offline backups above are the only copies in the world.
+
+**Since the two editions (2026-11-27, `docs/app-editions.md`):** what goes to Play is the
+*store* edition, `com.tinkerbug.rocket` — a new package that no phone has sideloaded, so the
+signature-match wrinkle above does not apply to it, and Google may generate its signing key.
+The sideloaded fleet keeps the *dev* edition, `com.tinkerbug.tinkerrocket`, updated from
+GitHub releases as before. "Use existing key" matters again only if the dev edition ever
+moves to Play too.
 
 Also required for Play, handled at that time: AAB uploads instead of APKs (a one-job
 addition to the workflow), and the closed-testing gauntlet for new personal accounts

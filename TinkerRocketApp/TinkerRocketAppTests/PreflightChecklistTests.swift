@@ -188,6 +188,16 @@ final class PreflightChecklistTests: XCTestCase {
             .notApplicable("No camera on this rocket"))
     }
 
+    /// A Beetle has no camera port, and a profile defaults to RunCam: the step
+    /// must stand aside for the board rather than wait on "Not recording".
+    func testCameraRecordingStandsAsideOnABoardWithoutACamera() {
+        let withCam = RocketProfile.makeDefault(name: "cam")   // cameraType 2 = RunCam
+        var ctx = connectedCtx(fs: 0, profile: withCam)
+        ctx.cameraAvailable = false
+        XCTAssertEqual(PreflightChecklist.autoStatus(.cameraRecording, in: ctx),
+                       .notApplicable("No camera on this board"))
+    }
+
     func testLoggingActiveReadsFsBit() {
         XCTAssertEqual(PreflightChecklist.autoStatus(
             .loggingActive, in: connectedCtx(fs: 0x40)), .satisfied)

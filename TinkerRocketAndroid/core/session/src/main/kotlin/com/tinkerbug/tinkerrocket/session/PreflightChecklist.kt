@@ -152,6 +152,12 @@ public data class PreflightAutoContext(
     val profile: RocketProfile? = null,
     /** The flight computer's guidance on/off against the profile's. */
     val guidance: GuidanceStateCheck = GuidanceStateCheck.NotApplicable,
+    /**
+     * Whether the rocket's board has a camera port (AppFeatures.camera). A
+     * profile defaults to RunCam, so without this a Beetle, which has no
+     * camera, would wait on "Not recording" forever.
+     */
+    val cameraAvailable: Boolean = true,
 )
 
 public data class PreflightProgress(val done: Int = 0, val total: Int = 0) {
@@ -256,6 +262,9 @@ public object PreflightChecklist {
             }
 
             PreflightItemKind.CAMERA_RECORDING -> {
+                if (!ctx.cameraAvailable) {
+                    return PreflightAutoStatus.NotApplicable("No camera on this board")
+                }
                 val p = ctx.profile
                 if (p != null && p.cameraType == 0) {
                     return PreflightAutoStatus.NotApplicable("No camera on this rocket")

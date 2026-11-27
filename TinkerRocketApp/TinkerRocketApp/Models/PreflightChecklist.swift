@@ -302,6 +302,10 @@ struct PreflightAutoContext {
     var profile: RocketProfile? = nil
     /// The flight computer's guidance on/off against the profile's.
     var guidance: GuidanceStateCheck = .notApplicable
+    /// Whether the rocket's board has a camera port (AppFeatures.camera). A
+    /// profile defaults to RunCam, so without this a Beetle, which has no
+    /// camera, would wait on "Not recording" forever.
+    var cameraAvailable: Bool = true
 }
 
 struct PreflightProgress: Equatable {
@@ -394,6 +398,9 @@ enum PreflightChecklist {
             return .pending("No fix (\(t.num_sats) sats)")
 
         case .cameraRecording:
+            if !ctx.cameraAvailable {
+                return .notApplicable("No camera on this board")
+            }
             if let p = ctx.profile, p.cameraType == 0 {
                 return .notApplicable("No camera on this rocket")
             }

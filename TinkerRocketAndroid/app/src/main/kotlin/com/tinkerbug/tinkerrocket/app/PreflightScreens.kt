@@ -595,6 +595,7 @@ private fun preflightContext(
     val hasTelemetry by session.hasReceivedTelemetry.collectAsState()
     val syncState = syncer?.syncState?.collectAsState()?.value
         ?: ActiveRocketSyncer.SyncState.Idle
+    val features = rememberFeatures(session)
     return PreflightAutoContext(
         isConnected = connected,
         hasTelemetry = hasTelemetry,
@@ -602,7 +603,13 @@ private fun preflightContext(
         telemetry = telemetry,
         syncState = syncState,
         profile = profile,
-        guidance = rememberGuidanceStateCheck(session, profile),
+        // Guidance and the camera only where the board has them (AppEdition.kt).
+        guidance = if (features.finControl) {
+            rememberGuidanceStateCheck(session, profile)
+        } else {
+            com.tinkerbug.tinkerrocket.session.GuidanceStateCheck.NotApplicable
+        },
+        cameraAvailable = features.camera,
     )
 }
 
