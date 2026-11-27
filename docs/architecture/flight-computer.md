@@ -314,6 +314,29 @@ sensing, and an arm/fire pair. They are serviced only from the `INFLIGHT` state,
 The initialization sequence is deliberately hand-rolled — see Gotchas. This is the one
 part of the FC that can do something irreversible to a person standing nearby.
 
+### Triggers that cannot fire (#1775)
+
+An enabled channel's trigger must pass one check (`PyroConfigGate.h`, shared with the
+Out Computer): mode 0 or 1, a finite value, a delay of 0 to 120 s after apogee, or an
+altitude of at least 30 m above the pad on descent. The 120 s is a policy bound: a
+deployment by time is a drogue or its backup, and a main is set by altitude. Each of the values it refuses leaves the
+channel unable to fire when it is needed. A mode other than 0 or 1 matches neither trigger
+branch. A NaN value never passes a comparison. An altitude at or below 0 m fires at
+touchdown on a trusted barometer, or never if the landing site is higher than the pad. A
+delay longer than the descent never fires, because the triggers are serviced only in
+`INFLIGHT`. A disabled channel is not checked: nothing reads its trigger.
+
+- **A config frame that fails is refused whole.** The FC keeps the config it holds, logs the
+  failing channel and rule, and marks its config report to be re-sent, as an accepted
+  frame's is. The Out Computer refuses the same frame before relaying it (command 34) and
+  re-sends the pyro readback, so the app's tiles show what the rocket holds. Neither app
+  sends one.
+- **A stored record that fails is held as stored.** This can happen with a record saved before
+  the check, or a corrupted one. Dropping it would disable all four channels, whose health
+  bits then read NA and leave the pad card green. Held, the failing channel's `SH_PYRO`
+  bit reads BAD whatever its continuity, until a config that passes is sent. The
+  measured-continuity bits still report the e-match.
+
 ### The energy store is NOT inert on USB-only power
 
 Accepted as-built on V9, 2026-09-09 (#669). Do not connect e-matches during a

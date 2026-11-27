@@ -811,6 +811,13 @@ private struct SettingsContent: View {
                     ? "Fires this many seconds after apogee is detected."
                     : "Fires when the rocket descends through this altitude (AGL).")
                     .font(.caption).foregroundColor(.secondary)
+                // #1775: red, and the pyro config held back (applyPyroConfig),
+                // while this channel's saved trigger is one the rocket refuses.
+                Text(PyroTriggerRule.rangeText(mode: UInt8(clamping: mode), unitSystem: unitSystem))
+                    .font(.caption)
+                    .foregroundColor(PyroTriggerRule.accepts(mode: UInt8(clamping: mode),
+                                                             value: pyroChannelTriggerValue(ch))
+                                     ? .secondary : .red)
             }
             // Telemetry-driven controls live in a child view so this Section's
             // child list stays structurally stable and telemetry-independent.
@@ -1877,10 +1884,18 @@ private struct SettingsContent: View {
     /// Inverse of `formatPyro`: parse an entered value back to canonical units
     /// — seconds for time mode, metres for altitude mode (entered in the
     /// display unit).
+    ///
+    /// #1775 (PyroTriggerRule.valueToSend): text left as `formatPyro` showed it
+    /// keeps the stored value (an altitude is shown rounded, so re-parsing it
+    /// would move it), and an entry that is not a finite number keeps it too,
+    /// as an unparseable one always did (`Float("nan")` parses, so the old
+    /// guard let NaN through). A finite entry the rocket would refuse is
+    /// stored, so the field and the profile agree: the channel's range caption
+    /// turns red, and applyPyroConfig sends nothing until it passes.
     private func parsePyroValue(_ s: String, mode: UInt8, fallback: Float) -> Float {
-        guard let entered = Float(s) else { return fallback }
-        if mode == 0 { return entered }
-        return Float(UnitFormatter.displayToMeters(Double(entered), system: unitSystem))
+        PyroTriggerRule.valueToSend(text: s, mode: mode, unitSystem: unitSystem,
+                                    loadedText: formatPyro(fallback, mode: mode),
+                                    loadedMode: mode, loadedValue: fallback) ?? fallback
     }
 
     private func formatInt(_ v: Double) -> String {
@@ -2002,14 +2017,24 @@ private struct SettingsContent: View {
         updateProfile {
             for ch in 1...4 { setPyroValue(ch, in: &$0, parsed[ch - 1]) }
         }
+        // #1775: every field shows what is now stored, so an entry that did
+        // not parse snaps back instead of staying on screen as if it were set.
+        reloadPyroValueStrings()
         let p = profile
+        let channels: [(enabled: Bool, mode: UInt8, value: Float)] = [
+            (p.pyro1Enabled, p.pyro1TriggerMode, p.pyro1TriggerValue),
+            (p.pyro2Enabled, p.pyro2TriggerMode, p.pyro2TriggerValue),
+            (p.pyro3Enabled, p.pyro3TriggerMode, p.pyro3TriggerValue),
+            (p.pyro4Enabled, p.pyro4TriggerMode, p.pyro4TriggerValue),
+        ]
+        // #1775: this view sends on every toggle, so an edit part-way (a
+        // channel switched to altitude before its value is typed), or a value
+        // typed outside the range, holds a trigger the rocket refuses.
+        // sendPyroConfig holds such a config back; here it also gets no "Sent"
+        // badge, and the channel's range caption is red until it passes.
+        guard !PyroTriggerRule.anyRefused(channels) else { return }
         if device.isConnected {
-            device.sendPyroConfig(channels: [
-                (p.pyro1Enabled, p.pyro1TriggerMode, p.pyro1TriggerValue),
-                (p.pyro2Enabled, p.pyro2TriggerMode, p.pyro2TriggerValue),
-                (p.pyro3Enabled, p.pyro3TriggerMode, p.pyro3TriggerValue),
-                (p.pyro4Enabled, p.pyro4TriggerMode, p.pyro4TriggerValue),
-            ])
+            device.sendPyroConfig(channels: channels)
             // #1078: the mirror now lives inside sendPyroConfig, so every
             // caller gets it — including the whole-profile push, which is where
             // it was missing.

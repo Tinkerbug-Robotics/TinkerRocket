@@ -42,6 +42,7 @@
 #include <RocketComputerTypes.h>
 #include <GuidancePointGate.h>    // #435: pure cmd-28 acceptance gate (host-tested)
 #include <RollProfileGate.h>      // #1115: total wrap180f + roll-profile acceptance gate (host-tested)
+#include <PyroConfigGate.h>       // #1775: pyro trigger acceptance check (host-tested)
 #include <gnss_log_policy.h>      // the REDUCED GNSS log's SBF cut (host-tested)
 #include <TR_OTA_Receiver.h>      // FC-side OTA relay receiver (#8 Phase 4)
 #include <TR_OTA_Backend_esp.h>
@@ -8789,6 +8790,18 @@ static void setup_fc()
                  pyro_config.ch2_enabled, pyro_config.ch2_trigger_mode, (double)pyro_config.ch2_trigger_value,
                  pyro_config.ch3_enabled, pyro_config.ch3_trigger_mode, (double)pyro_config.ch3_trigger_value,
                  pyro_config.ch4_enabled, pyro_config.ch4_trigger_mode, (double)pyro_config.ch4_trigger_value);
+        // #1775: a record saved before the check (or a corrupted one) is held
+        // as stored, not dropped: dropping it would disable all four channels,
+        // whose health bits then read NA and leave the pad card green. Held,
+        // the failing channel's health bit reads BAD until a config that
+        // passes is sent.
+        const PyroConfigVerdict pyro_nvs_verdict = pyroConfigCheck(pyro_config);
+        if (pyro_nvs_verdict.rc != PYRO_CFG_OK)
+        {
+            ESP_LOGE(TAG, "NVS pyro: channel %u fails the trigger check (%s), held as stored: "
+                          "its pad health reads BAD until a config that passes is sent",
+                     (unsigned)pyro_nvs_verdict.channel, pyroConfigRcName(pyro_nvs_verdict.rc));
+        }
     } else {
         ESP_LOGI(TAG, "NVS pyro: none (all four disabled) — stored=%u bytes, expected=%u",
                  (unsigned)pyro_cfg_sz, (unsigned)sizeof(PyroConfigData));
@@ -14277,23 +14290,47 @@ static void loop_fc()
                                     cfg_payload, sizeof(cfg_payload), cfg_len)
                     && cfg_len >= sizeof(PyroConfigData))
                 {
-                    memcpy(&pyro_config, cfg_payload, sizeof(PyroConfigData));
-                    prefs.begin("pyro", false);
-                    prefs.putBytes("cfg", &pyro_config, sizeof(pyro_config));
-                    prefs.end();
-                    pyro_config_from_nvs = true;
-                    // #1231: the report carries pyro_config, so the app's
-                    // config_pyro tiles are re-drawn from what the FC now
-                    // holds — the echo the #1078 optimistic mirror stood in
-                    // for.  A frame that never lands sends no echo, and the
-                    // tiles then keep showing the FC's previous values,
-                    // which is the divergence made visible.
-                    config_report_dirty = true; log_next_report_send = true;
-                    ESP_LOGI(TAG, "[PYRO CFG] ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f",
-                             pyro_config.ch1_enabled, pyro_config.ch1_trigger_mode, (double)pyro_config.ch1_trigger_value,
-                             pyro_config.ch2_enabled, pyro_config.ch2_trigger_mode, (double)pyro_config.ch2_trigger_value,
-                             pyro_config.ch3_enabled, pyro_config.ch3_trigger_mode, (double)pyro_config.ch3_trigger_value,
-                             pyro_config.ch4_enabled, pyro_config.ch4_trigger_mode, (double)pyro_config.ch4_trigger_value);
+                    // #1775: check BEFORE adopting or saving. REFUSE, never
+                    // clamp (PyroConfigGate.h): a refused frame keeps the
+                    // previous config, and the report is marked to be re-sent,
+                    // as an accepted frame's is. The OC refuses the same frame
+                    // before relaying it; this is for an OC that does not.
+                    // (Such an OC has already cached the frame, and passes the
+                    // FC's report on to the app only when it changes.)
+                    PyroConfigData incoming;
+                    memcpy(&incoming, cfg_payload, sizeof(PyroConfigData));
+                    const PyroConfigVerdict pyro_verdict = pyroConfigCheck(incoming);
+                    if (pyro_verdict.rc != PYRO_CFG_OK)
+                    {
+                        ESP_LOGW(TAG, "[PYRO CFG] REFUSED (channel %u: %s), keeping the config held: "
+                                      "offered ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f",
+                                 (unsigned)pyro_verdict.channel, pyroConfigRcName(pyro_verdict.rc),
+                                 incoming.ch1_enabled, incoming.ch1_trigger_mode, (double)incoming.ch1_trigger_value,
+                                 incoming.ch2_enabled, incoming.ch2_trigger_mode, (double)incoming.ch2_trigger_value,
+                                 incoming.ch3_enabled, incoming.ch3_trigger_mode, (double)incoming.ch3_trigger_value,
+                                 incoming.ch4_enabled, incoming.ch4_trigger_mode, (double)incoming.ch4_trigger_value);
+                        config_report_dirty = true; log_next_report_send = true;
+                    }
+                    else
+                    {
+                        memcpy(&pyro_config, &incoming, sizeof(PyroConfigData));
+                        prefs.begin("pyro", false);
+                        prefs.putBytes("cfg", &pyro_config, sizeof(pyro_config));
+                        prefs.end();
+                        pyro_config_from_nvs = true;
+                        // #1231: the report carries pyro_config, so the app's
+                        // config_pyro tiles are re-drawn from what the FC now
+                        // holds — the echo the #1078 optimistic mirror stood in
+                        // for.  A frame that never lands sends no echo, and the
+                        // tiles then keep showing the FC's previous values,
+                        // which is the divergence made visible.
+                        config_report_dirty = true; log_next_report_send = true;
+                        ESP_LOGI(TAG, "[PYRO CFG] ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f",
+                                 pyro_config.ch1_enabled, pyro_config.ch1_trigger_mode, (double)pyro_config.ch1_trigger_value,
+                                 pyro_config.ch2_enabled, pyro_config.ch2_trigger_mode, (double)pyro_config.ch2_trigger_value,
+                                 pyro_config.ch3_enabled, pyro_config.ch3_trigger_mode, (double)pyro_config.ch3_trigger_value,
+                                 pyro_config.ch4_enabled, pyro_config.ch4_trigger_mode, (double)pyro_config.ch4_trigger_value);
+                    }
                 }
                 else
                 {
@@ -17329,12 +17366,17 @@ static void loop_fc()
             // Per-channel pyro (#303): only configured channels matter.  Carried
             // in sensor_health because LoRaData has no pyro_status, so on a
             // base-station relay this is the only pyro signal.
+            //
+            // #1775 (pyroChannelHealth, PyroConfigGate.h): a channel whose
+            // trigger fails the check reads BAD whatever its continuity, since
+            // it cannot fire when it is needed. The apply path refuses such a
+            // config, so only a record loaded from NVS at boot (saved before
+            // the check, or corrupted) can hold one. The measured-continuity
+            // bits below still say whether its e-match is there.
             for (int i = 0; i < 4; ++i) {
-                SensorHealthState pst = SH_NA;              // not configured -> ignored
-                if (pyroChEnabled(i)) {
-                    pst = !cont_known[i] ? SH_DEGRADED      // configured, not yet tested
-                        : (cont_state[i] ? SH_OK : SH_BAD); // continuity present / none
-                }
+                const SensorHealthState pst =
+                    pyroChannelHealth(pyroChEnabled(i), pyroChMode(i), pyroChValue(i),
+                                      cont_known[i], cont_state[i]);
                 sh = shSet(sh, SH_PYRO_SHIFT[i], pst);
 
                 // Measured continuity, NOT config-gated — the ground-test

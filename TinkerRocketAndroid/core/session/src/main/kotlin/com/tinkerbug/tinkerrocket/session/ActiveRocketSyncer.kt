@@ -4,6 +4,7 @@ import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
 import com.tinkerbug.tinkerrocket.protocol.Klobuchar
 import com.tinkerbug.tinkerrocket.protocol.PyroChannelConfig
+import com.tinkerbug.tinkerrocket.protocol.PyroTriggerRule
 import com.tinkerbug.tinkerrocket.protocol.RollWaypoint
 import com.tinkerbug.tinkerrocket.protocol.MagCalSubType
 import com.tinkerbug.tinkerrocket.protocol.RocketConfig
@@ -615,9 +616,18 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         // or the next connect resolves the tie by name instead of by choice.
         st.bind(profile.id, s.identity.value.unitId)
 
+        // #1775: the PYRO group held back a config the rocket would refuse (a
+        // channel left mid-edit, or one adopted from a record saved before the
+        // check). Everything else went; say the deployment settings did not,
+        // rather than Synced. (iOS pushProfileToRocket, same text.)
+        syncedTimer?.cancel()
+        PyroTriggerRule.firstRefused(pyroChannels(profile))?.let {
+            _syncState.value = SyncState.Failed(PyroTriggerRule.notSentText(it))
+            return
+        }
+
         // Optimistic (no per-command ack on this link); hold "syncing"
         // briefly so the badge is visible.
-        syncedTimer?.cancel()
         syncedTimer = scope.launch {
             delay(SYNCED_DELAY_MS)
             if (_syncState.value == SyncState.Syncing) _syncState.value = SyncState.Synced
@@ -638,6 +648,13 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
         if (!s.isConnected.value || s.isBaseStation) return
         pushGroupFrames(s, profile, group)
     }
+
+    private fun pyroChannels(profile: RocketProfile): List<PyroChannelConfig> = listOf(
+        PyroChannelConfig(profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),
+        PyroChannelConfig(profile.pyro2Enabled, profile.pyro2TriggerMode, profile.pyro2TriggerValue),
+        PyroChannelConfig(profile.pyro3Enabled, profile.pyro3TriggerMode, profile.pyro3TriggerValue),
+        PyroChannelConfig(profile.pyro4Enabled, profile.pyro4TriggerMode, profile.pyro4TriggerValue),
+    )
 
     private fun pushGroupFrames(s: DeviceSession, profile: RocketProfile, group: ConfigGroup) {
         when (group) {
@@ -709,18 +726,20 @@ public class ActiveRocketSyncer(private val scope: CoroutineScope) {
                 disarmAntennaAdopt()
             }
             ConfigGroup.PYRO -> {
-                val channels = listOf(
-                    PyroChannelConfig(profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),
-                    PyroChannelConfig(profile.pyro2Enabled, profile.pyro2TriggerMode, profile.pyro2TriggerValue),
-                    PyroChannelConfig(profile.pyro3Enabled, profile.pyro3TriggerMode, profile.pyro3TriggerValue),
-                    PyroChannelConfig(profile.pyro4Enabled, profile.pyro4TriggerMode, profile.pyro4TriggerValue),
-                )
-                s.sendCommandFrame(Commands.pyroConfig(channels))
-                // iOS applyPyroConfig step 3, from the ONE source the push
-                // used: the firmware never echoes config_pyro after a write,
-                // so without this the dashboard tiles show the last readback
-                // until the next connect.
-                s.mirrorPyroConfig(channels)
+                val channels = pyroChannels(profile)
+                // #1775: never a config the rocket would refuse (iOS
+                // sendPyroConfig holds it back the same way). The out computer
+                // would refuse the frame and keep what it holds, and the mirror
+                // below would first paint the refused value onto the tiles.
+                // Settings shows the channel's range in red meanwhile.
+                if (!PyroTriggerRule.anyRefused(channels)) {
+                    s.sendCommandFrame(Commands.pyroConfig(channels))
+                    // iOS applyPyroConfig step 3, from the ONE source the push
+                    // used: the firmware never echoes config_pyro after a write,
+                    // so without this the dashboard tiles show the last readback
+                    // until the next connect.
+                    s.mirrorPyroConfig(channels)
+                }
             }
         }
     }

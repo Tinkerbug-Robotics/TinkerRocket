@@ -1306,8 +1306,16 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
 
     /// 4-channel pyro config. Each tuple is (enabled, trigger_mode, trigger_value).
     /// Wire layout (24 bytes): 4 × {u8 enabled, u8 mode, f32 value}.
-    func sendPyroConfig(channels: [(enabled: Bool, mode: UInt8, value: Float)]) {
+    /// Returns false, sending nothing, for a config the rocket would refuse.
+    @discardableResult
+    func sendPyroConfig(channels: [(enabled: Bool, mode: UInt8, value: Float)]) -> Bool {
         precondition(channels.count == 4, "pyro config requires exactly 4 channels")
+        // #1775: every caller comes through here (the dashboard sheet, Settings,
+        // the whole-profile push), so this is the one place a config the rocket
+        // would refuse (PyroTriggerRule) is held back. Sent, the out computer
+        // would refuse it and keep what the rocket holds, and the mirror below
+        // would first paint the refused value onto the tiles.
+        guard !PyroTriggerRule.anyRefused(channels) else { return false }
         var payload = Data()
         for ch in channels {
             payload.append(ch.enabled ? 0x01 : 0x00)
@@ -1356,6 +1364,7 @@ class BLEDevice: NSObject, ObservableObject, CBPeripheralDelegate {
             cfg.pyro4TriggerValue = channels[3].value
             rocketConfig = cfg
         }
+        return true
     }
 
     // Continuity-test pending window (#411 UX). A manual PYRO_CONT_TEST

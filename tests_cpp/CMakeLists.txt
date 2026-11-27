@@ -2705,6 +2705,19 @@ target_include_directories(test_main_deploy_gate PRIVATE
 target_link_libraries(test_main_deploy_gate GTest::gtest_main)
 gtest_discover_tests(test_main_deploy_gate)
 
+# ---------- test_pyro_config_gate (#1775) ----------
+# The pyro channel config's acceptance check, shared by the FC (apply, boot
+# load, pad health bits) and the OC (command 34, boot load). Pure header in
+# TR_RocketComputerTypes; the deploy gate shows what the refused altitudes do.
+add_executable(test_pyro_config_gate test_pyro_config_gate.cpp)
+target_include_directories(test_pyro_config_gate PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/TR_KinematicChecks
+)
+target_link_libraries(test_pyro_config_gate GTest::gtest_main)
+gtest_discover_tests(test_pyro_config_gate)
+
 # ---------- test_gnss_ascent_gate (owner's rule 2026-09-26) ----------
 # GNSS is held out of the EKF and the apogee vote from launch until, after
 # burnout, its altitude has agreed with the barometer (or, when the barometer
