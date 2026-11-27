@@ -5399,7 +5399,38 @@ static void startRawShadow()
                  (unsigned)sizeof(gnss_raw::TimedRawEpoch), in(epoch_mem),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), (unsigned)largest,
                  (unsigned)config::RAW_INTERNAL_FLOOR_B);
-        if (largest < config::RAW_INTERNAL_FLOOR_B)
+        if (config::RAW_INTERNAL_PROBE)
+        {
+            // #1772 (the Beetle V2's S3: config.h): blocks the size of the
+            // filter's two stacks taken, as its tasks are about to take them,
+            // then given back -- the flight task's stack must still find one
+            // block, with the margin free beside it
+            void* s1 = heap_caps_malloc(config::RAW_FILTER_STACK_B, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            void* s2 = heap_caps_malloc(config::RAW_MEAS_STACK_B, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            const size_t largest_after = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            const size_t free_after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            heap_caps_free(s2);
+            heap_caps_free(s1);
+            const bool room = RawNavPolicy::roomForFlightTask(s1 != nullptr && s2 != nullptr, largest_after,
+                                                              free_after, config::FLIGHT_TASK_STACK_B,
+                                                              config::RAW_INTERNAL_SLACK_B,
+                                                              config::RAW_INTERNAL_MARGIN_B);
+            ESP_LOGI(TAG, "[RAWGNSS] memory, with the filter's stacks out (%u B + %u B%s): internal %u B free, "
+                          "largest block %u B; the flight task needs %u B in one block and %u B free",
+                     (unsigned)config::RAW_FILTER_STACK_B, (unsigned)config::RAW_MEAS_STACK_B,
+                     s1 != nullptr && s2 != nullptr ? "" : ", NOT BOTH HAD", (unsigned)free_after,
+                     (unsigned)largest_after,
+                     (unsigned)(config::FLIGHT_TASK_STACK_B + config::RAW_INTERNAL_SLACK_B),
+                     (unsigned)(config::FLIGHT_TASK_STACK_B + config::RAW_INTERNAL_SLACK_B +
+                                config::RAW_INTERNAL_MARGIN_B));
+            if (!room)
+            {
+                ESP_LOGE(TAG, "[RAWGNSS] no room for the flight task's stack beside the filter's: not started");
+                rawNavGiveBack(mem, stage_mem, built_mem, epoch_mem);
+                return;
+            }
+        }
+        else if (largest < config::RAW_INTERNAL_FLOOR_B)
         {
             ESP_LOGE(TAG, "[RAWGNSS] internal RAM's largest block %u B is under the %u B floor: not started",
                      (unsigned)largest, (unsigned)config::RAW_INTERNAL_FLOOR_B);
@@ -5498,7 +5529,7 @@ static void startRawShadow()
     RAW_NAV_WHEN(!RAW_IS_SDR)
     sensor_collector.setGNSSRawEpochPeriodMs((uint32_t)llround(rx.fuse_epoch_period_s * 1000.0));
 #endif
-    if (xTaskCreatePinnedToCore(rawShadowTask, "Raw GNSS", 8192, nullptr, 1, nullptr,
+    if (xTaskCreatePinnedToCore(rawShadowTask, "Raw GNSS", config::RAW_FILTER_STACK_B, nullptr, 1, nullptr,
                                 config::SENSOR_CORE) != pdPASS)
     {
         ESP_LOGE(TAG, "[RAWGNSS] task not created: shadow filter off");
@@ -5528,11 +5559,12 @@ static void startRawShadow()
     {
         ESP_LOGE(TAG, "[RAWGNSS] GNSS task not created: no raw epochs");
     }
-    ESP_LOGI(TAG, "[RAWGNSS] %s on core %u, priority 1, %.0f steps/s (%u B in %s; %u B internal left); "
-                  "its epochs built in the GNSS task, priority 0 (%u B stage, %u B epochs)",
+    ESP_LOGI(TAG, "[RAWGNSS] %s on core %u, priority 1, %.0f steps/s (%u B in %s; %u B internal left, largest "
+                  "block %u B); its epochs built in the GNSS task, priority 0 (%u B stage, %u B epochs)",
              cfg.primary ? "NAVIGATION filter" : "shadow filter", (unsigned)config::SENSOR_CORE,
              1.0 / cfg.min_step_s, (unsigned)n, where,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
              (unsigned)sizeof(gnss_raw::RawGnssMeasStage), (unsigned)(2 * sizeof(gnss_raw::BuiltEpoch)));
 #if TR_RAW_GNSS_PRIMARY
     ekf.attach(&raw_shadow_link);
@@ -17943,7 +17975,7 @@ extern "C" void app_main(void)
             tr_lp_boot();   // bench profiler (TR_LOOP_PROFILE); empty otherwise
             for (;;) { loop_fc(); esp_task_wdt_reset(); }
         },
-        "flight", 16 * 1024, nullptr, configMAX_PRIORITIES - 1, &flight_task, 1) != pdPASS)
+        "flight", config::FLIGHT_TASK_STACK_B, nullptr, configMAX_PRIORITIES - 1, &flight_task, 1) != pdPASS)
     {
         // Its stack is 16 KB of internal RAM in one block: a rig image once
         // had too little left, and never flew, without a word.

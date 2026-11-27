@@ -439,3 +439,14 @@ TEST(RawNavRestoreHold, NothingIsHeldWithoutARebootsRestore)
     EXPECT_EQ(restoreSeedStep(h, false, false, 10), RestoreSeed::Publish); // no restore pending
     EXPECT_FALSE(h.armed);
 }
+
+// #1772: the Beetle V2's start check: the flight task's stack finds one block once the filter's stacks are out,
+// with slack over, and the margin free beside it.
+TEST(RawNavPolicy, RoomForTheFlightTask)
+{
+    const size_t stack = 16384, slack = 1024, margin = 8192;
+    EXPECT_TRUE(RawNavPolicy::roomForFlightTask(true, stack + slack, stack + slack + margin, stack, slack, margin));
+    EXPECT_FALSE(RawNavPolicy::roomForFlightTask(true, stack + slack - 1, 100000, stack, slack, margin));
+    EXPECT_FALSE(RawNavPolicy::roomForFlightTask(true, stack + slack, stack + slack + margin - 1, stack, slack, margin));
+    EXPECT_FALSE(RawNavPolicy::roomForFlightTask(false, 100000, 100000, stack, slack, margin));
+}

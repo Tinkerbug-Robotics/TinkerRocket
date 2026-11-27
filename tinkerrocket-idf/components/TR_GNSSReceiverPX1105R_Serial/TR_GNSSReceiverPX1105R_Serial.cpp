@@ -7,6 +7,7 @@
 #include <esp_log.h>
 #include <esp_timer.h>
 #include <freertos/task.h>
+#include <freertos/idf_additions.h>   // xQueueCreateWithCaps (#1772); xRingbufferCreateWithCaps is ringbuf.h's
 
 #include <GnssClockRecord.h>   // TR_GNSSReceiverLC86_Serial: GNSS_CLOCK_MSG from the line
 
@@ -51,11 +52,51 @@ static constexpr size_t kUartTxBuf = 512;
 static constexpr int kRxFullThreshold = 64;
 static constexpr size_t kMaxBytesPerPoll = 4096U;
 
-// The raw outputs: three epochs (internal RAM), 48 ephemerides (a cold start
-// completes ~25 within the first minute), 4 fixes.
+// The raw outputs: three epochs, 48 ephemerides (a cold start completes ~25
+// within the first minute), 4 fixes. PSRAM first on the S3 (#1772).
 static constexpr UBaseType_t kRawEpochQDepth = 3;
 static constexpr UBaseType_t kEphQDepth = 48;
 static constexpr UBaseType_t kFixQDepth = 4;
+
+// #1772: a block, or a queue, in PSRAM where there is some on the S3
+// (TR_PX1105R_PSRAM_FIRST), else in internal RAM; a queue's `caps` says which
+// call made it, for its deletion.
+static void* rawAlloc(size_t n)
+{
+#if TR_PX1105R_PSRAM_FIRST
+    void* m = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (m != nullptr) return m;
+#endif
+    return heap_caps_malloc(n, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+
+static QueueHandle_t rawQueueCreate(UBaseType_t depth, UBaseType_t item, bool& caps)
+{
+#if TR_PX1105R_PSRAM_FIRST
+    QueueHandle_t q = xQueueCreateWithCaps(depth, item, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (q != nullptr)
+    {
+        caps = true;
+        return q;
+    }
+#endif
+    caps = false;
+    return xQueueCreate(depth, item);
+}
+
+static void rawQueueDelete(QueueHandle_t q, bool caps)
+{
+    if (q == nullptr) return;
+#if TR_PX1105R_PSRAM_FIRST
+    if (caps)
+    {
+        vQueueDeleteWithCaps(q);
+        return;
+    }
+#endif
+    (void)caps;
+    vQueueDelete(q);
+}
 
 // GPS - UTC since 2017-01-01 (no leap second announced since): the receiver's
 // binary output names no leap second, and GNSSData's clock is UTC.
@@ -321,10 +362,23 @@ bool TR_GNSSReceiverPX1105RSerial::begin(uint8_t update_rate_hz, uint8_t GNSS_RX
 
     if (ring_ == nullptr)
     {
+#if TR_PX1105R_PSRAM_FIRST
+        // #1772: PSRAM where there is some, internal RAM otherwise
+        ring_ = xRingbufferCreateWithCaps(kRingBytes, RINGBUF_TYPE_NOSPLIT, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        ring_in_psram_ = ring_ != nullptr;
+        if (ring_ == nullptr) ring_ = xRingbufferCreate(kRingBytes, RINGBUF_TYPE_NOSPLIT);
+        if (ring_ == nullptr)
+            ESP_LOGE(TAG, "PX1105R: no memory for the log ring (%u B); frames will not be logged",
+                     static_cast<unsigned>(kRingBytes));
+        else
+            ESP_LOGI(TAG, "PX1105R: the log ring (%u B) in %s", static_cast<unsigned>(kRingBytes),
+                     ring_in_psram_ ? "PSRAM" : "internal RAM");
+#else
         if ((reinterpret_cast<uintptr_t>(ring_mem_) & 0x3U) != 0)
             ESP_LOGE(TAG, "PX1105R: the log ring is not 32-bit aligned; frames will not be logged");
         else
             ring_ = xRingbufferCreateStatic(kRingBytes, RINGBUF_TYPE_NOSPLIT, ring_mem_, &ring_struct_);
+#endif
     }
     if (clock_q_ == nullptr)
         clock_q_ = xQueueCreateStatic(kClockQDepth, sizeof(GnssClockData), clock_q_mem_, &clock_q_struct_);
@@ -624,23 +678,24 @@ void TR_GNSSReceiverPX1105RSerial::logChannels()
 bool TR_GNSSReceiverPX1105RSerial::enableRawOutputs()
 {
     if (raw_ != nullptr) return true;
-    // Internal RAM: the poll task works in it at 20 Hz.
-    void* mem = heap_caps_malloc(sizeof(RawState), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    // The poll task works in it at 20 Hz: internal RAM on the P4, PSRAM first
+    // on the S3 (#1772), whose internal RAM the filter's start needs.
+    void* mem = rawAlloc(sizeof(RawState));
     if (mem == nullptr)
     {
         ESP_LOGE(TAG, "PX1105R raw: no memory for the raw outputs (%u B)", static_cast<unsigned>(sizeof(RawState)));
         return false;
     }
     RawState* r = new (mem) RawState();
-    r->epoch_q = xQueueCreate(kRawEpochQDepth, sizeof(gnss_raw::TimedRawEpoch));
-    r->eph_q = xQueueCreate(kEphQDepth, sizeof(gps_eph_t));
-    r->fix_q = xQueueCreate(kFixQDepth, sizeof(gnss_raw::TimedFix));
+    r->epoch_q = rawQueueCreate(kRawEpochQDepth, sizeof(gnss_raw::TimedRawEpoch), r->q_caps[0]);
+    r->eph_q = rawQueueCreate(kEphQDepth, sizeof(gps_eph_t), r->q_caps[1]);
+    r->fix_q = rawQueueCreate(kFixQDepth, sizeof(gnss_raw::TimedFix), r->q_caps[2]);
     if (r->epoch_q == nullptr || r->eph_q == nullptr || r->fix_q == nullptr)
     {
         ESP_LOGE(TAG, "PX1105R raw: no memory for the queues");
-        if (r->epoch_q != nullptr) vQueueDelete(r->epoch_q);
-        if (r->eph_q != nullptr) vQueueDelete(r->eph_q);
-        if (r->fix_q != nullptr) vQueueDelete(r->fix_q);
+        rawQueueDelete(r->epoch_q, r->q_caps[0]);
+        rawQueueDelete(r->eph_q, r->q_caps[1]);
+        rawQueueDelete(r->fix_q, r->q_caps[2]);
         r->~RawState();
         heap_caps_free(mem);
         return false;
@@ -652,9 +707,9 @@ bool TR_GNSSReceiverPX1105RSerial::enableRawOutputs()
     if (nav_mem == nullptr)
     {
         ESP_LOGE(TAG, "PX1105R raw: no memory for the subframes (%u B)", static_cast<unsigned>(sizeof(skytraq::NavAssembler)));
-        vQueueDelete(r->epoch_q);
-        vQueueDelete(r->eph_q);
-        vQueueDelete(r->fix_q);
+        rawQueueDelete(r->epoch_q, r->q_caps[0]);
+        rawQueueDelete(r->eph_q, r->q_caps[1]);
+        rawQueueDelete(r->fix_q, r->q_caps[2]);
         r->~RawState();
         heap_caps_free(mem);
         return false;
@@ -674,13 +729,15 @@ bool TR_GNSSReceiverPX1105RSerial::enableRawOutputs()
 #endif
     r->st.enabled = true;
     raw_ = r;   // before begin(): the poll task does not exist yet
-    ESP_LOGI(TAG, "PX1105R raw: outputs on -- %u epochs (%u B), %u ephemerides (%u B), %u B of state, "
-                  "%u B of subframes in %s",
+    auto where = [](bool psram) { return psram ? "PSRAM" : "internal RAM"; };
+    ESP_LOGI(TAG, "PX1105R raw: outputs on -- %u epochs (%u B) in %s, %u ephemerides (%u B) in %s, %u fixes in %s, "
+                  "%u B of state in %s, %u B of subframes in %s",
              static_cast<unsigned>(kRawEpochQDepth),
-             static_cast<unsigned>(kRawEpochQDepth * sizeof(gnss_raw::TimedRawEpoch)),
+             static_cast<unsigned>(kRawEpochQDepth * sizeof(gnss_raw::TimedRawEpoch)), where(r->q_caps[0]),
              static_cast<unsigned>(kEphQDepth), static_cast<unsigned>(kEphQDepth * sizeof(gps_eph_t)),
-             static_cast<unsigned>(sizeof(RawState)), static_cast<unsigned>(sizeof(skytraq::NavAssembler)),
-             esp_ptr_external_ram(nav_mem) ? "PSRAM" : "internal RAM");
+             where(r->q_caps[1]), static_cast<unsigned>(kFixQDepth), where(r->q_caps[2]),
+             static_cast<unsigned>(sizeof(RawState)), where(esp_ptr_external_ram(mem)),
+             static_cast<unsigned>(sizeof(skytraq::NavAssembler)), where(esp_ptr_external_ram(nav_mem)));
     return true;
 }
 
@@ -695,7 +752,7 @@ bool TR_GNSSReceiverPX1105RSerial::setRawDopplerPairing(const mosaic::MosaicDopp
 {
     if (raw_ == nullptr) return false;
     if (raw_->pairing.load(std::memory_order_acquire) != nullptr) return true;
-    void* mem = heap_caps_malloc(sizeof(RawState::Pairing), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    void* mem = rawAlloc(sizeof(RawState::Pairing));   // PSRAM first on the S3 (#1772)
     if (mem == nullptr)
     {
         ESP_LOGE(TAG, "PX1105R raw: no memory for the Doppler pairs (%u B): every epoch's own Dopplers",
@@ -706,8 +763,9 @@ bool TR_GNSSReceiverPX1105RSerial::setRawDopplerPairing(const mosaic::MosaicDopp
     p->cfg = c;
     raw_->pairing.store(p, std::memory_order_release);
     ESP_LOGI(TAG, "PX1105R raw: Dopplers in pairs -- each grid epoch's with the epoch %lu ms before it, at most "
-                  "%.1f m/s apart, %u B of state",
-             static_cast<unsigned long>(c.dt_ms), c.max_diff_mps, static_cast<unsigned>(sizeof(RawState::Pairing)));
+                  "%.1f m/s apart, %u B of state in %s",
+             static_cast<unsigned long>(c.dt_ms), c.max_diff_mps, static_cast<unsigned>(sizeof(RawState::Pairing)),
+             esp_ptr_external_ram(mem) ? "PSRAM" : "internal RAM");
     return true;
 }
 
