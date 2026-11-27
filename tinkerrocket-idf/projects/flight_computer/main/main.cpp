@@ -273,10 +273,12 @@ static bool applyPendingMagOffset(const char* why)
     if (!pending_mag_apply) return true;
     const bool ok = programMagOffset(pending_mag_cx, pending_mag_cy, pending_mag_cz);
     if (ok) pending_mag_apply = false;
-    ESP_LOGI(TAG, "%s hard-iron offset applied (%s): (%d,%d,%d) %s",
+    ESP_LOGI(TAG, "%s hard-iron offset applied (%s): (%d,%d,%d) %s%s",
              magCalChipName(), why,
              (int)pending_mag_cx, (int)pending_mag_cy, (int)pending_mag_cz,
-             ok ? "OK" : "FAILED");
+             ok ? "OK" : "FAILED",
+             // #1773: the offset is held for the MMC5983MA's counts, but it did not come up
+             magCalOnMmc() && sensor_collector_hw.mmc5983maMissing() ? " (no MMC5983MA this boot)" : "");
     return ok;
 }
 
@@ -8253,6 +8255,9 @@ static void setup_fc()
     if (raw_boot_ask.valid)
     {
         sensor_collector_hw.deferGNSSBringUpThisBoot();
+        // #1773: and the magnetometer one try, not ~2 s of retries: the
+        // flight resumes at once, and no filter fuses it in flight
+        sensor_collector_hw.magOneTryThisBoot();
 #if TR_RAW_NAV_AUTO
         if (gnssTypeGivesRaw(raw_boot_hint))
             ESP_LOGW(TAG, "[RECOVERY] a flight is in progress: the boot does not wait on the %s -- its GNSS poll "
@@ -8968,6 +8973,17 @@ static void setup_fc()
     {
         ESP_LOGE(TAG, "[BARO] Barometer did NOT come up — flying baro-absent. "
                       "Altitude/apogee/barometric deployment are unavailable.");
+        fcBootStatus(FCB_SENSORS, FCB_DEG_SENSORS);
+    }
+    // #1773: the MMC5983MA's bring-up is bounded too (it used to retry
+    // forever, inside setup, before the flight task and an in-flight reboot's
+    // recovery). The Beetle V2's only magnetometer: a boot that went on
+    // without it says so. No deployment needs it; the filter loses the pad's
+    // magnetic heading.
+    if (config::USE_MMC5983MA && sensor_collector_hw.mmc5983maMissing())
+    {
+        ESP_LOGE(TAG, "[MAG] The MMC5983MA did NOT come up -- flying with no magnetometer "
+                      "(no magnetic heading on the pad).");
         fcBootStatus(FCB_SENSORS, FCB_DEG_SENSORS);
     }
 
@@ -17265,6 +17281,12 @@ static void loop_fc()
             if (mag_st == SH_OK && ekf.getMagReferenceValid() && ekf.getMagCalSuspect()) {
                 mag_st = SH_DEGRADED;
             }
+            // #1773: the board's MMC5983MA wanted but not brought up is a
+            // failed sensor, not one the board does not carry (N/A), as the
+            // barometer's is
+            if (mag_st == SH_NA && config::USE_MMC5983MA && sensor_collector_hw.mmc5983maMissing()) {
+                mag_st = SH_BAD;
+            }
             sh = shSet(sh, SH_MAG_SHIFT, mag_st);
 
             // #1303: keep trying to program a stored hard iron that could not be
@@ -17621,7 +17643,8 @@ static void loop_fc()
             // Skipped when the IIS2MDC won the boot-time probe: the MMC path
             // was never started, so every counter is a meaningless zero (and
             // reads as a dead sensor to anyone reviewing the log).
-            if (!sensor_collector.isIIS2MDCActive())
+            // #1773: nor when the MMC5983MA never came up (the same zeros).
+            if (!sensor_collector.isIIS2MDCActive() && !sensor_collector_hw.mmc5983maMissing())
             {
                 static MMC5983MADebugSnapshot prev_mmc_snap = {};
                 MMC5983MADebugSnapshot now_mmc_snap;

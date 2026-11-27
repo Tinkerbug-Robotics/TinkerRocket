@@ -2109,6 +2109,15 @@ target_compile_definitions(test_beetle_v2_raw_floor PRIVATE TR_BOARD_M2=1 TR_GNS
 target_link_libraries(test_beetle_v2_raw_floor GTest::gtest_main)
 gtest_discover_tests(test_beetle_v2_raw_floor)
 
+# ---------- test_sensor_bringup_retry ----------
+# #1773: a sensor's bounded bring-up (TR_Sensor_Collector/sensor_bringup_retry.h):
+# the MMC5983MA tried three times in about 2 s, then given up, where it used to
+# retry forever inside setup_fc.
+add_executable(test_sensor_bringup_retry test_sensor_bringup_retry.cpp)
+target_include_directories(test_sensor_bringup_retry PRIVATE ${LIB_DIR}/TR_Sensor_Collector)
+target_link_libraries(test_sensor_bringup_retry GTest::gtest_main)
+gtest_discover_tests(test_sensor_bringup_retry)
+
 # ---------- test_sdr_board_config ----------
 # The V10's SDR raw-nav image's switches (config.h with TR_BOARD_V10 and
 # TR_GNSS_DRIVER_SDR, as its CMake sets them) and the receiver profile it flies

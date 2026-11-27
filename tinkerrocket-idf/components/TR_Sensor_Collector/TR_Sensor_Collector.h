@@ -483,6 +483,14 @@ public:
     // The altitude filter, apogee detection and the barometric deployment
     // paths all have no input in that case — the caller should say so loudly.
     bool isBaroOnline() const { return use_bmp585 && bmp585_online_; }
+    // #1773: the MMC5983MA was wanted (the board's magnetometer) but did not
+    // answer, or would not configure, within its bounded bring-up: the boot
+    // went on with no magnetometer.
+    bool mmc5983maMissing() const { return mmc_missing_; }
+    // #1773: a flight in progress (the boot's ask of the OC): the
+    // magnetometer gets one try, with no retry -- the flight resumes at once,
+    // and no filter fuses the magnetometer in flight. Call before begin().
+    void magOneTryThisBoot() { mag_one_try_ = true; }
 
     // Program IIS2MDC OFFSET_X/Y/Z hard-iron registers — or, behind the
     // QMC5883P seam, the driver's software offset: same raw-LSB units, same
@@ -597,6 +605,9 @@ private:
     // Set true after IIS2MDC is detected and configured at boot. When true,
     // the legacy MMC5983MA SPI path is skipped.
     bool iis2mdc_active = false;
+    bool mmc_missing_ = false;      // #1773: wanted, not brought up (mmc5983maMissing)
+    bool mag_one_try_ = false;      // #1773: magOneTryThisBoot
+    bool configureI2cMag();         // #1773: the I2C slot's part, false (and logged) if it will not configure
     i2c_master_bus_handle_t iis2mdc_bus = nullptr;
     // True when iis2mdc_bus was supplied by the app (shared with other
     // devices) — the collector then must not create or delete it.

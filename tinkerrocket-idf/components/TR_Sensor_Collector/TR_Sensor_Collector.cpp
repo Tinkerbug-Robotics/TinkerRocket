@@ -11,6 +11,7 @@
 #include <esp_heap_caps.h>
 #include "ism6_whoami.h"
 #include "axis_sign.h"
+#include "sensor_bringup_retry.h"   // #1773: a bounded bring-up
 
 static const char* SC_TAG = "SENSORS";
 
@@ -233,6 +234,26 @@ SensorCollector::SensorCollector(
         iis2mdc_bus = external_i2c_bus;
         iis2mdc_bus_external = true;
     }
+}
+
+// #1773: the I2C slot's magnetometer configured with the driver's defaults
+// -- 100 Hz on either part, the cadence the poll gate assumes. IIS2MDC:
+// continuous, high-resolution, offset cancel on, BDU on, DRDY pin off.
+// QMC5883P (#1312): normal mode, +/-8 G, set/reset on. Tried for 100 ms (a
+// NACK on a busy bus), once on a flight in progress (magOneTryThisBoot). A
+// part that answers but will not configure is no magnetometer, as one that
+// does not answer: it used to stop the boot here for good.
+bool SensorCollector::configureI2cMag()
+{
+    constexpr uint32_t kI2cMagConfigTimeoutMs = 100U;
+    uint32_t tries = 0;
+    if (SensorBringup::retryUntil([this] { return iis2mdc.configure() == MAG_DRIVER_OK; },
+                                  [] { delay_ms(20); }, [] { return (uint32_t)millis(); },
+                                  mag_one_try_ ? 0U : kI2cMagConfigTimeoutMs, tries))
+        return true;
+    ESP_LOGE(SC_TAG, "%s answered but its configuration FAILED (%lu tries) -- not used", magName(),
+             (unsigned long)tries);
+    return false;
 }
 
 void SensorCollector::begin(uint8_t imu_execution_core) 
@@ -527,18 +548,8 @@ void SensorCollector::begin(uint8_t imu_execution_core)
                      esp_err_to_name(bus_err));
             iis2mdc_bus = nullptr;
         }
-        else if (iis2mdc.begin(iis2mdc_bus, IIS2MDC_I2C_FREQ_HZ) == MAG_DRIVER_OK)
+        else if (iis2mdc.begin(iis2mdc_bus, IIS2MDC_I2C_FREQ_HZ) == MAG_DRIVER_OK && configureI2cMag())
         {
-            // Configure with the driver's defaults — 100 Hz on either part,
-            // the cadence the poll gate below assumes.  IIS2MDC: continuous,
-            // high-resolution, offset cancel on, BDU on, DRDY pin off.
-            // QMC5883P (#1312): normal mode, +/-8 G, set/reset on.
-            if (iis2mdc.configure() != MAG_DRIVER_OK)
-            {
-                ESP_LOGE(SC_TAG, "%s configuration failed, stopping.", magName());
-                while (1) { delay_ms(1000); }
-            }
-
             iis2mdc_active = true;
             ESP_LOGI(SC_TAG, "%s found and initialized (%s)", magName(), magConfigNote());
             ESP_LOGI(SC_TAG, "MMC5983MA path skipped — %s is the magnetometer on this "
@@ -570,11 +581,11 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         {
             if (use_mmc5983ma)
             {
-                ESP_LOGI(SC_TAG, "%s not detected — falling back to MMC5983MA", magName());
+                ESP_LOGI(SC_TAG, "%s not detected or not configured — falling back to MMC5983MA", magName());
             }
             else
             {
-                ESP_LOGW(SC_TAG, "%s not detected and this board has no "
+                ESP_LOGW(SC_TAG, "%s not detected or not configured and this board has no "
                                  "MMC5983MA fallback — NO MAGNETOMETER", magName());
             }
             // Tear down the bus so the pins are released (on V7 this frees
@@ -596,78 +607,105 @@ void SensorCollector::begin(uint8_t imu_execution_core)
         gpio_set_level((gpio_num_t)(MMC5983MA_CS), 1);
         delay_ms(2);
 
-        while (!mmc5983ma.begin())
-        {
-            ESP_LOGW(SC_TAG, "MMC5983MA did not respond. Retrying...");
-            delay_ms(500);
-            (void)mmc5983ma.softReset();
-            delay_ms(500);
-        }
+        // #1773: bounded, as the barometer's is. It used to retry forever,
+        // inside setup_fc, before the flight task and an in-flight reboot's
+        // recovery: a part that did not answer kept the FC in setup for good,
+        // and the setup watchdog's restart only ran into it again. Three
+        // tries in about 2 s (a soft reset between), one on a flight in
+        // progress (magOneTryThisBoot), then no magnetometer: no deployment
+        // needs it.
+        constexpr uint32_t kMmcBringupTimeoutMs = 2000U;
+        const uint32_t mmc_budget_ms = mag_one_try_ ? 0U : kMmcBringupTimeoutMs;
+        uint32_t mmc_attempts = 0;
+        const bool mmc_answered = SensorBringup::retryUntil(
+            [this] { return mmc5983ma.begin(); },
+            [this] {
+                ESP_LOGW(SC_TAG, "MMC5983MA did not respond. Retrying...");
+                delay_ms(500);
+                (void)mmc5983ma.softReset();
+                delay_ms(500);
+            },
+            [] { return (uint32_t)millis(); }, mmc_budget_ms, mmc_attempts);
 
-        (void)mmc5983ma.softReset();
-        (void)mmc5983ma.performSetOperation();
-        delay_ms(10);
-        (void)mmc5983ma.performResetOperation();
-        delay_ms(10);
-        (void)mmc5983ma.enableAutomaticSetReset();  // Eliminates hysteresis drift
-
-        bool mmc_ok = true;
+        bool mmc_ok = mmc_answered;
         // #1140 item 1: bandwidth derived FROM the selected frequency, so
         // the datasheet's CM_FREQ/BW pairing holds by construction rather
         // than by two ladders happening to agree.
         const uint16_t mmc_freq = mmcFreqForRate(MMC5983MA_UPDATE_RATE);
-        mmc_ok = mmc_ok && mmc5983ma.setFilterBandwidth(mmcBandwidthForFreq(mmc_freq));
-        mmc_ok = mmc_ok && mmc5983ma.setContinuousModeFrequency(mmc_freq);
-        mmc_ok = mmc_ok && mmc5983ma.enableContinuousMode();
-        mmc_ok = mmc_ok && mmc5983ma.enableInterrupt();
+        if (mmc_answered)
+        {
+            (void)mmc5983ma.softReset();
+            (void)mmc5983ma.performSetOperation();
+            delay_ms(10);
+            (void)mmc5983ma.performResetOperation();
+            delay_ms(10);
+            (void)mmc5983ma.enableAutomaticSetReset();  // Eliminates hysteresis drift
+
+            mmc_ok = mmc_ok && mmc5983ma.setFilterBandwidth(mmcBandwidthForFreq(mmc_freq));
+            mmc_ok = mmc_ok && mmc5983ma.setContinuousModeFrequency(mmc_freq);
+            mmc_ok = mmc_ok && mmc5983ma.enableContinuousMode();
+            mmc_ok = mmc_ok && mmc5983ma.enableInterrupt();
+        }
 
         if (!mmc_ok)
         {
-            ESP_LOGE(SC_TAG, "MMC5983MA configuration failed, stopping.");
-            while (1) { delay_ms(1000); }
-        }
-
-        ESP_LOGI(SC_TAG, "MMC5983MA found and initialized");
-        if (MMC5983MA_UPDATE_RATE >= 1000U)
-        {
-            ESP_LOGI(SC_TAG, "MMC5983MA max-rate mode: BW=800Hz, CM_FREQ=1000Hz, CMM_EN=1.");
-        }
-
-        uint8_t ctrl0 = 0;
-        uint8_t ctrl1 = 0;
-        uint8_t ctrl2 = 0;
-        if (mmc5983ma.readControl0(&ctrl0))
-        {
-            mmc5983ma_last_ctrl0 = ctrl0;
-        }
-        if (mmc5983ma.readControl1(&ctrl1))
-        {
-            mmc5983ma_last_ctrl1 = ctrl1;
-        }
-        if (mmc5983ma.readControl2(&ctrl2))
-        {
-            mmc5983ma_last_ctrl2 = ctrl2;
-        }
-
-        mmc5983ma_instance = this;
-        // The INT pad reaches a GPIO on every board but the Tinker-Beetle V2,
-        // whose -1 arrives here as 255: no interrupt to attach, so the poll
-        // task asks the status register instead (twice a sample period).
-        mmc_int_wired_ = (MMC5983MA_INT < GPIO_NUM_MAX);
-        if (mmc_int_wired_)
-        {
-            gpio_set_direction((gpio_num_t)(MMC5983MA_INT), GPIO_MODE_INPUT);
-            gpio_set_intr_type((gpio_num_t)(MMC5983MA_INT), GPIO_INTR_POSEDGE);
-            gpio_isr_handler_add((gpio_num_t)(MMC5983MA_INT), &onMMC5983MAIntTrampoline, nullptr);
-            gpio_intr_enable((gpio_num_t)(MMC5983MA_INT));
+            // #1773: this used to be `while (1)` too. No magnetometer instead:
+            // the poll task and its stall recovery skip the part, and the boot
+            // reports degraded sensors (main.cpp, mmc5983maMissing).
+            if (mmc_answered)
+                ESP_LOGE(SC_TAG, "MMC5983MA configuration FAILED -- continuing with NO MAGNETOMETER.");
+            else
+                ESP_LOGE(SC_TAG, "MMC5983MA did not answer after %lu attempts / %lu ms%s -- continuing with NO "
+                                 "MAGNETOMETER.",
+                         (unsigned long)mmc_attempts, (unsigned long)mmc_budget_ms,
+                         mag_one_try_ ? " (a flight in progress: one try)" : "");
+            mmc_missing_ = true;
+            use_mmc5983ma = false;
         }
         else
         {
-            mmc_poll_period_us_ = 500000UL / (uint32_t)mmc_freq;
-            mmc_next_poll_us_ = time_us();
-            ESP_LOGI(SC_TAG, "MMC5983MA INT not wired: polling its status every %u us",
-                     (unsigned)mmc_poll_period_us_);
-        }
+            ESP_LOGI(SC_TAG, "MMC5983MA found and initialized");
+            if (MMC5983MA_UPDATE_RATE >= 1000U)
+            {
+                ESP_LOGI(SC_TAG, "MMC5983MA max-rate mode: BW=800Hz, CM_FREQ=1000Hz, CMM_EN=1.");
+            }
+
+            uint8_t ctrl0 = 0;
+            uint8_t ctrl1 = 0;
+            uint8_t ctrl2 = 0;
+            if (mmc5983ma.readControl0(&ctrl0))
+            {
+                mmc5983ma_last_ctrl0 = ctrl0;
+            }
+            if (mmc5983ma.readControl1(&ctrl1))
+            {
+                mmc5983ma_last_ctrl1 = ctrl1;
+            }
+            if (mmc5983ma.readControl2(&ctrl2))
+            {
+                mmc5983ma_last_ctrl2 = ctrl2;
+            }
+
+            mmc5983ma_instance = this;
+            // The INT pad reaches a GPIO on every board but the Tinker-Beetle V2,
+            // whose -1 arrives here as 255: no interrupt to attach, so the poll
+            // task asks the status register instead (twice a sample period).
+            mmc_int_wired_ = (MMC5983MA_INT < GPIO_NUM_MAX);
+            if (mmc_int_wired_)
+            {
+                gpio_set_direction((gpio_num_t)(MMC5983MA_INT), GPIO_MODE_INPUT);
+                gpio_set_intr_type((gpio_num_t)(MMC5983MA_INT), GPIO_INTR_POSEDGE);
+                gpio_isr_handler_add((gpio_num_t)(MMC5983MA_INT), &onMMC5983MAIntTrampoline, nullptr);
+                gpio_intr_enable((gpio_num_t)(MMC5983MA_INT));
+            }
+            else
+            {
+                mmc_poll_period_us_ = 500000UL / (uint32_t)mmc_freq;
+                mmc_next_poll_us_ = time_us();
+                ESP_LOGI(SC_TAG, "MMC5983MA INT not wired: polling its status every %u us",
+                         (unsigned)mmc_poll_period_us_);
+            }
+        }   // mmc_ok
     }
 
     ESP_LOGI(SC_TAG, "Initializing ISM6HG256...");
