@@ -14,6 +14,12 @@
 // then gives up and the FC keeps holding LANDED with the flag DOWN
 // (resetFlightStateForSim is deliberately not called on natural completion),
 // and the operator's sim Stop resets it to READY with the flag still down.
+//
+// #1774: the flag counts only on SimFlagRun::kFrames frames in a row, so a
+// flagged stretch below is {state, true, kRun}: a run of that many frames. The
+// FC sets the flag from a sim's Start on the pad, seconds of frames, so every
+// stretch a sim makes is at least that long. One flagged frame is a link
+// error the CRC missed, and changes nothing.
 
 #include <gtest/gtest.h>
 #include <vector>
@@ -25,13 +31,16 @@ using LandedLockout::step;
 
 namespace {
 
-struct Frame { RocketState state; bool sim; };
+struct Frame { RocketState state; bool sim; int n = 1; };   // n frames of it
+
+constexpr int kRun = SimFlagRun::kFrames;
 
 // Feed a frame sequence; returns the lockout after the last one.
 bool feed(State& s, std::initializer_list<Frame> frames)
 {
     bool locked = s.locked;
-    for (const Frame& f : frames) locked = step(s, f.state, f.sim);
+    for (const Frame& f : frames)
+        for (int i = 0; i < f.n; ++i) locked = step(s, f.state, f.sim);
     return locked;
 }
 
@@ -51,7 +60,7 @@ TEST(LandedLockoutPolicy, NothingLocksBeforeALanding)
     EXPECT_FALSE(feed(s, {{INITIALIZATION, false}, {READY, false},
                           {PRELAUNCH, false}, {INFLIGHT, false}}));
     // A sim that starts and is stopped on the pad never touches it either.
-    EXPECT_FALSE(feed(s, {{READY, true}, {PRELAUNCH, true}, {READY, false}}));
+    EXPECT_FALSE(feed(s, {{READY, true, kRun}, {PRELAUNCH, true, kRun}, {READY, false}}));
 }
 
 TEST(LandedLockoutPolicy, ARealLandingLatches)
@@ -113,8 +122,8 @@ TEST(LandedLockoutPolicy, ASimStartAfterARealLandingClearsIt)
     // action, and the sim flight should log.
     State s;
     feed(s, kRealFlightToLanded);
-    EXPECT_FALSE(feed(s, {{READY, true}}));
-    EXPECT_FALSE(feed(s, {{PRELAUNCH, true}, {INFLIGHT, true}}));
+    EXPECT_FALSE(feed(s, {{READY, true, kRun}}));
+    EXPECT_FALSE(feed(s, {{PRELAUNCH, true, kRun}, {INFLIGHT, true, kRun}}));
 }
 
 TEST(LandedLockoutPolicy, AFlownOutSimThenStopClearsIt)
@@ -124,8 +133,8 @@ TEST(LandedLockoutPolicy, AFlownOutSimThenStopClearsIt)
     // memory that this LANDED phase was a sim can clear it.  Without that a
     // real flight after a bench sim is unlogged until an OC reboot.
     State s;
-    EXPECT_TRUE(feed(s, {{READY, true}, {PRELAUNCH, true}, {INFLIGHT, true},
-                         {LANDED, true}, {LANDED, true},      // the sim's landed hold
+    EXPECT_TRUE(feed(s, {{READY, true, kRun}, {PRELAUNCH, true, kRun}, {INFLIGHT, true, kRun},
+                         {LANDED, true, kRun}, {LANDED, true, kRun},      // the sim's landed hold
                          {LANDED, false}, {LANDED, false}})); // the sim gave up; FC holds
     EXPECT_TRUE(s.landed_was_sim);
     EXPECT_FALSE(feed(s, {{READY, false}}));                  // sim Stop: FC resets
@@ -136,8 +145,8 @@ TEST(LandedLockoutPolicy, AFlownOutSimThenStopClearsIt)
 TEST(LandedLockoutPolicy, AFlownOutSimThenANewSimStartClearsIt)
 {
     State s;
-    feed(s, {{READY, true}, {INFLIGHT, true}, {LANDED, true}, {LANDED, false}});
-    EXPECT_FALSE(feed(s, {{READY, true}}));
+    feed(s, {{READY, true, kRun}, {INFLIGHT, true, kRun}, {LANDED, true, kRun}, {LANDED, false}});
+    EXPECT_FALSE(feed(s, {{READY, true, kRun}}));
 }
 
 TEST(LandedLockoutPolicy, AnFcResetAfterASimLandingClearsIt)
@@ -146,7 +155,7 @@ TEST(LandedLockoutPolicy, AnFcResetAfterASimLandingClearsIt)
     // fresh session on the next PRELAUNCH is an ordinary pad session.  This is
     // what the old rule did too.
     State s;
-    feed(s, {{READY, true}, {INFLIGHT, true}, {LANDED, true}, {LANDED, false}});
+    feed(s, {{READY, true, kRun}, {INFLIGHT, true, kRun}, {LANDED, true, kRun}, {LANDED, false}});
     EXPECT_FALSE(feed(s, {{INITIALIZATION, false}}));
 }
 
@@ -159,8 +168,8 @@ TEST(LandedLockoutPolicy, AFlownOutSimWhoseHeldLandedCarriesTheFlagThenStopClear
 {
     State s;
     std::vector<Frame> held;
-    for (int i = 0; i < 500; i++) held.push_back({LANDED, true});
-    EXPECT_FALSE(feed(s, {{READY, true}, {PRELAUNCH, true}, {INFLIGHT, true}}));
+    for (int i = 0; i < 500; i++) held.push_back({LANDED, true});   // one frame each
+    EXPECT_FALSE(feed(s, {{READY, true, kRun}, {PRELAUNCH, true, kRun}, {INFLIGHT, true, kRun}}));
     for (const Frame& f : held) EXPECT_TRUE(LandedLockout::step(s, f.state, f.sim));
     EXPECT_TRUE(s.landed_was_sim);
     EXPECT_FALSE(feed(s, {{READY, false}}));                          // the Stop: FC resets
@@ -193,8 +202,8 @@ TEST(LandedLockoutPolicy, AFlownOutSimWithNoFlaggedLandedFrameThenStopClearsIt)
     // the 500 Hz NonSensorData frame misses it about half the time.  The
     // flight's own INFLIGHT frames, flagged throughout, decide it then.
     State s;
-    EXPECT_TRUE(feed(s, {{READY, true}, {PRELAUNCH, true}, {INFLIGHT, true}, {INFLIGHT, true},
-                         {LANDED, false}, {LANDED, false}}));
+    EXPECT_TRUE(feed(s, {{READY, true, kRun}, {PRELAUNCH, true, kRun}, {INFLIGHT, true, kRun},
+                         {INFLIGHT, true, kRun}, {LANDED, false}, {LANDED, false}}));
     EXPECT_TRUE(s.landed_was_sim);
     EXPECT_FALSE(feed(s, {{READY, false}}));                  // sim Stop: FC resets
     EXPECT_FALSE(feed(s, {{PRELAUNCH, false}, {INFLIGHT, false}}));   // the real flight logs
@@ -205,7 +214,7 @@ TEST(LandedLockoutPolicy, ARealFlightAfterASimIsJudgedByItsOwnFrames)
     // The sim's flight memory ends with it: a later real landing, even one
     // whose INFLIGHT frames the OC never saw (a paused ingest), holds.
     State s;
-    feed(s, {{READY, true}, {INFLIGHT, true}, {LANDED, false}});
+    feed(s, {{READY, true, kRun}, {INFLIGHT, true, kRun}, {LANDED, false}});
     EXPECT_FALSE(feed(s, {{READY, false}}));                  // sim Stop
     EXPECT_TRUE(feed(s, {{PRELAUNCH, false}, {LANDED, false}}));
     EXPECT_FALSE(s.landed_was_sim);
@@ -219,7 +228,7 @@ TEST(LandedLockoutPolicy, ARealLandingAfterASimIsHeldLikeAnyRealLanding)
     // The sim memory belongs to ITS LANDED phase.  A later real flight's
     // LANDED starts a fresh phase, and an FC reset after it must hold.
     State s;
-    feed(s, {{READY, true}, {INFLIGHT, true}, {LANDED, true}, {LANDED, false}});
+    feed(s, {{READY, true, kRun}, {INFLIGHT, true, kRun}, {LANDED, true, kRun}, {LANDED, false}});
     EXPECT_FALSE(feed(s, {{READY, false}}));                  // sim Stop
     EXPECT_TRUE(feed(s, {{PRELAUNCH, false}, {INFLIGHT, false}, {LANDED, false}}));
     EXPECT_FALSE(s.landed_was_sim);
@@ -230,8 +239,8 @@ TEST(LandedLockoutPolicy, ItRelatchesOnTheNextLanding)
 {
     State s;
     feed(s, kRealFlightToLanded);
-    EXPECT_FALSE(feed(s, {{READY, true}}));                   // sim re-arm
-    EXPECT_TRUE(feed(s, {{INFLIGHT, true}, {LANDED, true}}));
+    EXPECT_FALSE(feed(s, {{READY, true, kRun}}));                   // sim re-arm
+    EXPECT_TRUE(feed(s, {{INFLIGHT, true, kRun}, {LANDED, true, kRun}}));
 }
 
 TEST(LandedLockoutPolicy, StepReturnsTheStoredVerdict)
@@ -239,6 +248,37 @@ TEST(LandedLockoutPolicy, StepReturnsTheStoredVerdict)
     State s;
     EXPECT_EQ(step(s, LANDED, false), s.locked);
     EXPECT_TRUE(s.locked);
-    EXPECT_EQ(step(s, READY, true), s.locked);
+    for (int i = 0; i < kRun; ++i) EXPECT_EQ(step(s, READY, true), s.locked);
     EXPECT_FALSE(s.locked);
+}
+
+// ── #1774: one flagged frame is a link error ────────────────────────────────
+
+TEST(LandedLockoutPolicy, OneFlaggedFrameInARealFlightDoesNotMakeItsLandingASims)
+{
+    // The CRC misses flags bit 7 with payload byte 6 bit 6. That frame in the
+    // flight would make the landing a sim's, and the FC reset after it would
+    // clear the lockout: the PRELAUNCH pre-create would open a junk session and
+    // could evict the oldest stored flight.
+    State s;
+    feed(s, {{INITIALIZATION, false}, {READY, false}, {PRELAUNCH, false, 2500},
+             {INFLIGHT, false, 3000}, {INFLIGHT, true}, {INFLIGHT, false, 30000}});
+    EXPECT_FALSE(s.flight_was_sim);
+    EXPECT_TRUE(feed(s, {{LANDED, false, 500}}));
+    EXPECT_FALSE(s.landed_was_sim);
+    EXPECT_TRUE(feed(s, {{INITIALIZATION, false}, {READY, false}, {PRELAUNCH, false}}));
+}
+
+TEST(LandedLockoutPolicy, OneFlaggedFrameInARealLandingOrAfterItsResetDoesNotClearIt)
+{
+    State s;
+    feed(s, kRealFlightToLanded);
+    EXPECT_TRUE(feed(s, {{LANDED, false, 100}, {LANDED, true}, {LANDED, false, 100}}));
+    EXPECT_FALSE(s.landed_was_sim);
+    // the FC resets: one flagged frame off LANDED is not a sim's start (a)
+    EXPECT_TRUE(feed(s, {{INITIALIZATION, false}, {READY, false, 50}, {READY, true},
+                         {READY, false, 50}, {PRELAUNCH, true}, {PRELAUNCH, false}}));
+    // nine in a row are not either; ten are
+    EXPECT_TRUE(feed(s, {{PRELAUNCH, true, kRun - 1}, {PRELAUNCH, false}}));
+    EXPECT_FALSE(feed(s, {{READY, true, kRun}}));
 }

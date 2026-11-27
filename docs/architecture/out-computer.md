@@ -240,6 +240,18 @@ FC leaving `LANDED` on its own is not enough: its `post_flight_lockout` is plain
 an FC-only reset walks it back to `PRELAUNCH` with the OC still up, and the OC holds the
 lockout through that (#1235).
 
+**The landed lockout and arm consent believe `NSF_SIM_ACTIVE` only once ten frames in a
+row carry it (#1774, `sim_flag_run.h`).** Arm consent, on the Beetle and the V10 board
+(`arm_consent_policy.h`), holds `OC_ARM_EN` low through a sim's flight. The link's CRC-16
+misses some 2-bit errors on a NonSensorData frame (#1729), one of which sets the flag.
+Latched on one frame in a real flight, it would hold consent low until `LANDED` and lose
+every later deployment. A sim carries the flag from its Start on the pad, at least 5 s
+before its launch, so ten frames (20 ms) cost a sim almost nothing. In two cases consent
+is up for nine frames while the FC dry-fires: an OC that joins a sim's flight in progress,
+and a sim whose flag a missed link error cleared in the last nine frames before launch.
+The OC's other readers of the flag (the stray-Stop gate, the blind-window check,
+telemetry) still act on one frame, and none of them changes consent or a deployment.
+
 **A NAND that fails to mount at power-on is retried, on the ground only (#1228).**
 `initPeripherals()` brings the radio and the FC link up around a dead logger (#1132),
 so the storage row goes red instead of the whole downlink going dark — and the loop
