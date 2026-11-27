@@ -1,0 +1,195 @@
+(footprint "SMA_GradConn_RFPC-SMA28-F_Vertical"
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(layer "F.Cu")
+	(property "Reference" "REF**"
+		(at 0 -4.9 0)
+		(layer "F.SilkS")
+		(hide yes)
+		(uuid "44b8711b-3e71-5363-ad84-dd635bd2fc9e")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Value" "RFPC-SMA28-F"
+		(at 0 4.9 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "60fd7c3c-5fd3-5232-ba5d-0704efdbd69b")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" "https://www.digikey.com/en/products/detail/gct/RFPC-SMA28-F/22162141"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "efdba83d-f5cd-5d5f-8e58-6ce67741a9a3")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" "GCT (GradConn) RFPC-SMA28-F SMA jack, straight, through-hole, 50 ohm, 7.0 mm square flange, 9.6 mm tall"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "fe466adf-7420-5aee-ad92-833bcd2a65cc")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(descr "GCT (formerly GradConn) RFPC-SMA28-F SMA jack (female), straight, through-hole, 50 ohm. Centre pin 1.55 mm drill / 2.325 mm pad; four ground posts on a 5.08 mm square, 1.75 mm drill / 2.625 mm pad (the TinkerNav V25 land for the same part). Flange 7.0 x 7.0 mm, 9.6 mm above the seating plane, posts 3.9 mm below it. Pin 1 = centre, pin 2 = posts, as Connector:Conn_Coaxial. https://www.digikey.com/en/products/detail/gct/RFPC-SMA28-F/22162141")
+	(tags "SMA jack vertical through-hole coaxial RF GradConn GCT")
+	(attr through_hole)
+	(duplicate_pad_numbers_are_jumpers no)
+	(fp_line
+		(start -3.62 -1)
+		(end -3.62 1)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "d7b69a54-58fa-5b57-b9eb-b0a9a1531d22")
+	)
+	(fp_line
+		(start -1 -3.62)
+		(end 1 -3.62)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "f46745bb-68d6-599b-b932-41260b826137")
+	)
+	(fp_line
+		(start 3.62 -1)
+		(end 3.62 1)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "6c35e48c-9abc-5f4b-b2df-a803c155f97a")
+	)
+	(fp_line
+		(start -1 3.62)
+		(end 1 3.62)
+		(stroke
+			(width 0.12)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "8e12d3d0-72d5-5c07-a1ae-cc54245704a7")
+	)
+	(fp_rect
+		(start -3.5 -3.5)
+		(end 3.5 3.5)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.Fab")
+		(uuid "9a9c7249-a745-5f1c-a339-591f0da4fee4")
+	)
+	(fp_circle
+		(center 0 0)
+		(end 3.175 0)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.Fab")
+		(uuid "90a3e625-96b1-5eb0-8eab-122f2a8c5780")
+	)
+	(fp_rect
+		(start -4.1 -4.1)
+		(end 4.1 4.1)
+		(stroke
+			(width 0.05)
+			(type solid)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "8b77dd28-2849-5584-b50f-2849b4d5dae8")
+	)
+	(fp_text user "${REFERENCE}"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "31d5774f-9102-50dd-9cbd-017ce5cb7905")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(pad "1" thru_hole circle
+		(at 0 0)
+		(size 2.325 2.325)
+		(drill 1.55)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "98d58cc4-2d18-5ee8-bd9a-2c64c9c4b534")
+	)
+	(pad "2" thru_hole circle
+		(at -2.54 -2.54)
+		(size 2.625 2.625)
+		(drill 1.75)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "d22799b6-d2ef-53f0-991d-362e3f40b95e")
+	)
+	(pad "2" thru_hole circle
+		(at 2.54 -2.54)
+		(size 2.625 2.625)
+		(drill 1.75)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "aca7a01a-1454-52e7-9f51-6fac9ff12a43")
+	)
+	(pad "2" thru_hole circle
+		(at -2.54 2.54)
+		(size 2.625 2.625)
+		(drill 1.75)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "92a3e53f-703f-5a51-9f41-ed48ccbeed22")
+	)
+	(pad "2" thru_hole circle
+		(at 2.54 2.54)
+		(size 2.625 2.625)
+		(drill 1.75)
+		(layers "*.Cu" "*.Mask")
+		(remove_unused_layers no)
+		(uuid "149c52a7-6d0d-5990-abb1-b76dd9b3eda2")
+	)
+	(embedded_fonts no)
+	(model "${KIPRJMOD}/../3dmodels/SMA_GradConn_RFPC-SMA28-F_Vertical.step"
+		(offset
+			(xyz 0 0 0)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
+)
