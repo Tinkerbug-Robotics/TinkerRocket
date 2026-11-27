@@ -3,7 +3,7 @@
 	(generator "eeschema")
 	(generator_version "10.0")
 	(uuid "707e0406-c94e-4ebf-bc76-6a6e21a4ecde")
-	(paper "A3")
+	(paper "A4")
 	(title_block
 		(title "tinker-beetle: Pyro")
 		(date "2026-09-05")
@@ -8349,20 +8349,286 @@
 			)
 		)
 	)
-(text "Pyro channel switches: P-FET + DTC123J driver per channel, as on the Mantis V10 (replaces the TPS2HC16 smart switches)."
-		(exclude_from_sim no)
-		(at 25.4 210.82 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
+	(wire
+		(pts
+			(xy 92.075 34.925) (xy 96.52 34.925)
 		)
-		(uuid "3fecf6b6-ccb3-4944-895c-4fce6d20e9bc")
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8b075b02-7456-44a0-88f7-1000b175f216")
+	)
+	(wire
+		(pts
+			(xy 78.74 59.055) (xy 83.185 59.055)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7b4a7ef0-8bd4-4858-b08d-8f93279669fa")
+	)
+	(wire
+		(pts
+			(xy 92.075 47.625) (xy 96.52 47.625)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "604b8219-761a-4759-86f4-e8e6222f5c70")
+	)
+	(wire
+		(pts
+			(xy 92.075 32.385) (xy 92.075 34.925)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "46fee663-96fc-4c74-a1eb-3d8be2e82400")
+	)
+	(wire
+		(pts
+			(xy 48.26 40.005) (xy 48.26 47.625)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9bb5d9f4-c1bb-4cd5-902d-f46b60e4d247")
+	)
+	(wire
+		(pts
+			(xy 60.96 32.385) (xy 60.96 34.925)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "041a8705-14c0-4565-9109-1e20707e66a8")
+	)
+	(wire
+		(pts
+			(xy 96.52 46.99) (xy 96.52 47.625)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9017ab7d-ad6f-4d04-b89e-32224920846d")
+	)
+	(wire
+		(pts
+			(xy 92.075 47.625) (xy 92.075 53.975)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d034363e-dff9-4efa-9030-b8b92fe43633")
+	)
+	(wire
+		(pts
+			(xy 60.96 37.465) (xy 60.96 40.005)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c80ce5cd-cab7-436e-ba91-0659b0852413")
+	)
+	(wire
+		(pts
+			(xy 96.52 34.925) (xy 96.52 39.37)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2931aeb6-c8cc-420c-8b6c-f0c412d8ce15")
+	)
+	(wire
+		(pts
+			(xy 92.075 40.005) (xy 92.075 47.625)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2dc136e7-d8e9-4ad6-a3a3-c8f101031598")
+	)
+	(wire
+		(pts
+			(xy 60.96 34.925) (xy 60.96 37.465)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "fff9bab8-d6e8-4c1b-9d63-1055f5904831")
+	)
+	(wire
+		(pts
+			(xy 96.52 34.925) (xy 101.6 34.925)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2a3dad3f-3477-4b65-881b-c24a31047cf1")
+	)
+	(wire
+		(pts
+			(xy 92.075 34.925) (xy 92.075 37.465)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2bf629b3-abc5-4305-bd58-9ee3f2fb40e8")
+	)
+	(wire
+		(pts
+			(xy 48.26 40.005) (xy 60.96 40.005)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d50f560d-e049-4a16-b514-2f14def8d039")
+	)
+	(junction
+		(at 96.52 34.925)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "64faa470-acb4-4c4f-858c-eefc4d4f92f0")
+	)
+	(junction
+		(at 92.075 47.625)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "f312a03e-2d49-46da-9b02-f3b61001ef5a")
+	)
+	(junction
+		(at 48.26 47.625)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "a3c449b7-6dba-441f-8724-9683d352d954")
+	)
+	(junction
+		(at 92.075 34.925)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "aa610198-eb36-4278-a860-2c64db0c8e2c")
+	)
+	(junction
+		(at 60.96 34.925)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "5c6c217b-03fe-4ab9-85ba-17faadc8f477")
+	)
+	(junction
+		(at 60.96 40.005)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "1593e8e3-fa48-45ec-ad1f-3884d0d34d05")
+	)
+	(junction
+		(at 78.74 59.055)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "da027f8f-9315-4598-b21f-0f9d20039ad0")
+	)
+	(junction
+		(at 60.96 37.465)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "75216c51-4d36-445c-97f5-0847be8b8b62")
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 92.075 64.135 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "addfcfb7-77fe-41f9-8030-1eaa3b5cd226")
+		(property "Reference" "#PWR9176"
+			(at 92.075 70.485 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 93.98 68.58 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 92.075 64.135 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 92.075 64.135 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 92.075 64.135 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "99c53ddf-9bca-4a1e-bd4b-34ea8a7bd46b")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
+					(reference "#PWR9176")
+					(unit 1)
+				)
+			)
+		)
 	)
 	(symbol
 		(lib_id "Custom:WSD20L50DN33")
-		(at 66.675 225.425 0)
+		(at 99.06 35.56 0)
+		(mirror y)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -8372,7 +8638,7 @@
 		(dnp no)
 		(uuid "d4caaa2b-47ce-481b-8117-37ec8eab3fc5")
 		(property "Reference" "U8"
-			(at 44.1325 236.855 0)
+			(at 76.5175 46.99 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -8382,7 +8648,7 @@
 			)
 		)
 		(property "Value" "WSD20L50DN33"
-			(at 44.1325 234.315 0)
+			(at 76.5175 44.45 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -8392,7 +8658,7 @@
 			)
 		)
 		(property "Footprint" "Footprints:TSON Advance_TOS"
-			(at 59.69 222.25 0)
+			(at 92.075 32.385 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8404,7 +8670,7 @@
 			)
 		)
 		(property "Datasheet" "WSD20L50DN33"
-			(at 59.69 222.25 0)
+			(at 92.075 32.385 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8416,7 +8682,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 66.675 225.425 0)
+			(at 99.06 35.56 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8427,7 +8693,7 @@
 			)
 		)
 		(property "MPN" "WSD20L50DN33"
-			(at 66.675 225.425 0)
+			(at 99.06 35.56 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8438,7 +8704,7 @@
 			)
 		)
 		(property "Mfr" "Winsok"
-			(at 66.675 225.425 0)
+			(at 99.06 35.56 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8449,28 +8715,28 @@
 			)
 		)
 		(pin "1"
-			(uuid "2ed346d7-6474-4f01-a5af-1bc62a8c2454")
+			(uuid "ed3022ea-2a52-4cff-98f7-4b6285bc9aca")
 		)
 		(pin "3"
-			(uuid "9f41d8a4-a96b-43c9-893b-23dbbbe47ac5")
+			(uuid "e1a27275-7129-4ea4-b9cb-3f4a80d2d79c")
 		)
 		(pin "4"
-			(uuid "f9cf2722-af00-4825-a409-a1276aa2af88")
+			(uuid "26ac93be-7e41-4ef0-a5b1-d8428550d928")
 		)
 		(pin "2"
-			(uuid "d9b368c8-22dd-4aed-ac94-938cecbfc106")
+			(uuid "5b7d80ff-6f8b-44ec-9b24-cee78345d17f")
 		)
 		(pin "8"
-			(uuid "96467ea7-df8c-4567-a2a4-ef5d16bb3785")
+			(uuid "5e1b9b8b-eec2-4ecd-af91-bc7a776be25a")
 		)
 		(pin "6"
-			(uuid "5c682322-4a74-417b-9e10-78ead22070f7")
+			(uuid "b4995215-7d6b-4ed8-bdd0-95a9c19aa250")
 		)
 		(pin "5"
-			(uuid "a7cde529-169a-40b4-beb4-bc9f4816dad5")
+			(uuid "1901f7d8-dd67-4c12-81f2-e6e45ccbc586")
 		)
 		(pin "7"
-			(uuid "9a5f4356-5d60-450e-b53c-d05bfade04bc")
+			(uuid "18d1ea4d-1f02-4f18-9972-008b1a8a0716")
 		)
 		(instances
 			(project "tinker-beetle"
@@ -8481,133 +8747,41 @@
 			)
 		)
 	)
-	(wire
-		(pts
-			(xy 73.66 222.25) (xy 73.66 224.79)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "703f702e-f684-485c-be08-b87ea994209c")
-	)
-	(wire
-		(pts
-			(xy 73.66 224.79) (xy 73.66 227.33)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "51f2d3a6-1ca4-49fb-9226-ffbc5681ef49")
-	)
-	(wire
-		(pts
-			(xy 73.66 222.25) (xy 71.12 222.25)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e356d56c-0a06-4c50-8516-5628aa1c27b3")
-	)
-	(global_label "VBAT_CON"
-		(shape input)
-		(at 71.12 222.25 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "6bb27818-f741-4394-8355-9e8f812602cd")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 71.12 222.25 0)
-			(hide yes)
+	(symbol
+		(lib_id "Transistor_BJT:DTC123J")
+		(at 89.535 59.055 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "b3c5c8a5-8edd-4301-b08f-8406f1400882")
+		(property "Reference" "Q5"
+			(at 82.55 52.07 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
-	)
-	(wire
-		(pts
-			(xy 73.66 229.87) (xy 71.12 229.87)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "80fcc11b-2b36-406c-8dfc-42cc7c7b6ef4")
-	)
-	(label "PYRO1_GATE"
-		(at 71.12 229.87 180)
-		(effects
-			(font
-				(size 1.27 1.27)
+		(property "Value" "DTC123J"
+			(at 82.55 54.61 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
 			)
-			(justify right bottom)
 		)
-		(uuid "d72d9edb-9d7e-47c9-ab4e-a99dd96675c8")
-	)
-	(wire
-		(pts
-			(xy 104.775 222.25) (xy 104.775 224.79)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "c5b622c3-cd07-4bc5-ab68-0a57b1e498af")
-	)
-	(wire
-		(pts
-			(xy 104.775 224.79) (xy 104.775 227.33)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "9048216e-5a8a-4acf-aa09-c938440ad536")
-	)
-	(wire
-		(pts
-			(xy 104.775 227.33) (xy 104.775 229.87)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "95f981f7-462f-4abd-a90d-cc3707e96b62")
-	)
-	(wire
-		(pts
-			(xy 104.775 222.25) (xy 107.315 222.25)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "c4387209-b2f9-40fb-a5e7-b445387da2d5")
-	)
-	(global_label "PYRO1_EXT"
-		(shape input)
-		(at 107.315 222.25 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "99ca7a11-93ea-4c0d-9750-2d27591ed25b")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 107.315 222.25 0)
+		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
+			(at 89.535 59.055 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8618,51 +8792,20 @@
 				(justify left)
 			)
 		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 58.42 228.6 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "7a50bb85-173f-45bb-9896-ff63e2ec208f")
-		(property "Reference" "R15"
-			(at 56.515 228.6 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "10 k"
-			(at 60.325 229.235 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 58.166 229.616 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
 		(property "Datasheet" ""
-			(at 58.42 228.6 0)
+			(at 89.535 59.055 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Description" "Digital NPN Transistor, 2k2/47k, SOT-23"
+			(at 89.535 59.055 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8672,8 +8815,8 @@
 				)
 			)
 		)
-		(property "Description" "Resistor, US symbol"
-			(at 58.42 228.6 0)
+		(property "MPN" "DTC123JETL"
+			(at 89.535 59.055 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8683,19 +8826,8 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0710KL"
-			(at 58.42 228.6 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 58.42 228.6 0)
+		(property "Mfr" "Rohm"
+			(at 89.535 59.055 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8706,10 +8838,114 @@
 			)
 		)
 		(pin "1"
-			(uuid "8de3ae82-451c-436a-b32c-0466386faf77")
+			(uuid "8638160f-db72-40ac-8237-752e283b3832")
 		)
 		(pin "2"
-			(uuid "fefc8a86-eb56-47f3-a82f-7633f5bcb40b")
+			(uuid "dc4ae6b8-bfec-45e9-86ef-60c2dcc0bc20")
+		)
+		(pin "3"
+			(uuid "0b5187d3-8e1b-43ad-b60f-4ed3a96deb56")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
+					(reference "Q5")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 96.52 43.18 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "7a50bb85-173f-45bb-9896-ff63e2ec208f")
+		(property "Reference" "R15"
+			(at 98.425 43.18 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "10 k"
+			(at 94.615 42.545 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 95.504 42.926 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 96.52 43.18 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 96.52 43.18 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 96.52 43.18 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 96.52 43.18 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "2fbf4a7f-2c90-49ab-8513-0e533765361e")
+		)
+		(pin "2"
+			(uuid "8f645863-f5b9-462e-8671-2fb621bbf174")
 		)
 		(instances
 			(project "tinker-beetle"
@@ -8722,223 +8958,225 @@
 	)
 	(wire
 		(pts
-			(xy 58.42 224.79) (xy 58.42 222.25)
+			(xy 62.23 100.965) (xy 62.23 103.505)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "8fc2f6ce-a990-4089-8950-4c852d1a1414")
-	)
-	(global_label "VBAT_CON"
-		(shape input)
-		(at 58.42 222.25 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "fe41ddc8-d8de-4a28-b2e1-028cfc95b005")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 58.42 222.25 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
+		(uuid "b10a5ef8-6ac6-4d57-a176-7ff35311e52a")
 	)
 	(wire
 		(pts
-			(xy 58.42 232.41) (xy 58.42 234.95)
+			(xy 98.425 98.425) (xy 103.505 98.425)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "49e413d6-0ce0-4cda-8448-20ec0926a866")
-	)
-	(label "PYRO1_GATE"
-		(at 58.42 234.95 270)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right bottom)
-		)
-		(uuid "8f96cb5d-dc9c-4671-92b0-e07efb8e6d2a")
-	)
-	(symbol
-		(lib_id "Transistor_BJT:DTC123J")
-		(at 50.8 242.57 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "b3c5c8a5-8edd-4301-b08f-8406f1400882")
-		(property "Reference" "Q5"
-			(at 43.815 235.585 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "DTC123J"
-			(at 43.815 238.125 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
-			(at 50.8 242.57 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Datasheet" ""
-			(at 50.8 242.57 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Description" "Digital NPN Transistor, 2k2/47k, SOT-23"
-			(at 50.8 242.57 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "DTC123JETL"
-			(at 50.8 242.57 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Rohm"
-			(at 50.8 242.57 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "3782f664-853a-442d-a6b5-f0d65cbf143c")
-		)
-		(pin "2"
-			(uuid "98c0ab7e-a2ff-4e65-9803-936e230341bd")
-		)
-		(pin "3"
-			(uuid "6debd224-7835-4913-89ec-7a07cb7a1838")
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "Q5")
-					(unit 1)
-				)
-			)
-		)
+		(uuid "c5cda11f-293b-4d47-9f0d-75e590562290")
 	)
 	(wire
 		(pts
-			(xy 44.45 242.57) (xy 41.91 242.57)
+			(xy 98.425 114.935) (xy 93.345 114.935)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "100130b8-daf4-4e86-aac4-6085a0525e80")
-	)
-	(global_label "PYRO1_FIRE"
-		(shape input)
-		(at 41.91 242.57 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "c0eb8689-9aa3-4bd8-9995-8197b7956a81")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 41.91 242.57 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
+		(uuid "8375ea73-d1b6-487e-b8a8-1a2b506d15c0")
 	)
 	(wire
 		(pts
-			(xy 53.34 237.49) (xy 53.34 234.95)
+			(xy 83.82 114.935) (xy 83.82 123.825)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "43b5d581-31bc-48fe-afd0-84edf2356ff2")
+		(uuid "2c58038c-1254-426b-b6cb-1fb3671885d8")
 	)
-	(label "PYRO1_GATE"
-		(at 53.34 234.95 90)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
+	(wire
+		(pts
+			(xy 50.165 103.505) (xy 62.23 103.505)
 		)
-		(uuid "80669d4d-2bcc-4385-87e3-a729223c2e13")
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4d2b152c-5aae-4fa6-9f8c-4a0ea80a6eb9")
+	)
+	(wire
+		(pts
+			(xy 62.23 98.425) (xy 62.23 100.965)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b77747f4-7632-4f94-b320-f2a895ff3c43")
+	)
+	(wire
+		(pts
+			(xy 98.425 109.855) (xy 98.425 114.935)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "457755e6-9083-4ae8-a815-a1cb7ec9d4ad")
+	)
+	(wire
+		(pts
+			(xy 93.345 98.425) (xy 93.345 100.965)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "799aa374-f7b3-41f8-8b4f-0cbaac774781")
+	)
+	(wire
+		(pts
+			(xy 62.23 95.885) (xy 62.23 98.425)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a05b770c-51a7-4ce9-a99a-59eadaddec09")
+	)
+	(wire
+		(pts
+			(xy 93.345 95.885) (xy 93.345 98.425)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f835b8dc-7a27-4f0b-8493-f821e967dbd3")
+	)
+	(wire
+		(pts
+			(xy 74.93 128.27) (xy 71.12 128.27)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f68e32f0-cb04-4fc2-956b-8361f666ba8d")
+	)
+	(wire
+		(pts
+			(xy 98.425 98.425) (xy 98.425 102.235)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "564b1f35-ce94-434e-8365-77e620cc28e3")
+	)
+	(wire
+		(pts
+			(xy 93.345 114.935) (xy 83.82 114.935)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "4519816b-c43d-4d43-8f17-52ae58a047b6")
+	)
+	(wire
+		(pts
+			(xy 93.345 98.425) (xy 98.425 98.425)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "19799abc-1863-4caf-8fd2-d318f3c6aca1")
+	)
+	(wire
+		(pts
+			(xy 74.93 128.905) (xy 74.93 128.27)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "70cd5bea-f8f1-4675-8036-80bd11ee84aa")
+	)
+	(wire
+		(pts
+			(xy 50.165 103.505) (xy 50.165 110.49)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "492fa5da-ea91-4995-8e96-c9024d240a23")
+	)
+	(wire
+		(pts
+			(xy 93.345 103.505) (xy 93.345 114.935)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f94b0b61-59a7-4596-b4d9-6f5243bb22be")
+	)
+	(junction
+		(at 62.23 100.965)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "cc36aa5c-87d2-48d0-9008-f7b77c8ba197")
+	)
+	(junction
+		(at 50.165 110.49)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "0d66d873-acc5-4c1d-b818-95deb8267f4c")
+	)
+	(junction
+		(at 98.425 98.425)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "4478ce92-ed2a-4fbe-8bdf-3ab0cf835408")
+	)
+	(junction
+		(at 93.345 98.425)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "92d09a76-3907-4a1b-8b2f-7ec71646dd1c")
+	)
+	(junction
+		(at 93.345 114.935)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "53418388-97f6-4843-91aa-145c68fe6438")
+	)
+	(junction
+		(at 71.12 128.27)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "4d79268e-526a-4371-acad-f2f34f3cdb94")
+	)
+	(junction
+		(at 62.23 103.505)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "40d52873-cafa-45d0-875b-fd600204d4f7")
+	)
+	(junction
+		(at 62.23 98.425)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "1f994bbb-ee66-427a-b27c-bc0e11b8791b")
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 53.34 247.65 0)
+		(at 83.82 133.985 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -8946,9 +9184,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "fbd5bf03-23da-48c6-bcdb-d5ff628bb48e")
-		(property "Reference" "#PWR9164"
-			(at 53.34 254 0)
+		(uuid "2e135493-42b1-44f5-bd12-853d99baedc7")
+		(property "Reference" "#PWR9171"
+			(at 83.82 140.335 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8959,17 +9197,18 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 53.34 252.73 0)
+			(at 85.725 138.43 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify right)
 			)
 		)
 		(property "Footprint" ""
-			(at 55.245 205.74 0)
+			(at 83.82 133.985 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8980,7 +9219,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 55.245 205.74 0)
+			(at 83.82 133.985 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8991,7 +9230,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 55.245 205.74 0)
+			(at 83.82 133.985 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9002,12 +9241,12 @@
 			)
 		)
 		(pin "1"
-			(uuid "7bb76993-2261-4195-8247-bce565f63b66")
+			(uuid "4d83976b-83ea-406b-a86b-d29183dd659e")
 		)
 		(instances
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "#PWR9164")
+					(reference "#PWR9171")
 					(unit 1)
 				)
 			)
@@ -9015,7 +9254,8 @@
 	)
 	(symbol
 		(lib_id "Custom:WSD20L50DN33")
-		(at 174.625 225.425 0)
+		(at 100.33 99.06 0)
+		(mirror y)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -9025,7 +9265,7 @@
 		(dnp no)
 		(uuid "11ecea17-4234-4c23-9b9e-8fd3d6d84ec7")
 		(property "Reference" "U6"
-			(at 152.0825 236.855 0)
+			(at 77.7875 110.49 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -9035,7 +9275,7 @@
 			)
 		)
 		(property "Value" "WSD20L50DN33"
-			(at 152.0825 234.315 0)
+			(at 77.7875 107.95 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -9045,7 +9285,7 @@
 			)
 		)
 		(property "Footprint" "Footprints:TSON Advance_TOS"
-			(at 167.64 222.25 0)
+			(at 93.345 95.885 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9057,7 +9297,7 @@
 			)
 		)
 		(property "Datasheet" "WSD20L50DN33"
-			(at 167.64 222.25 0)
+			(at 93.345 95.885 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9069,7 +9309,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 174.625 225.425 0)
+			(at 100.33 99.06 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9080,7 +9320,7 @@
 			)
 		)
 		(property "MPN" "WSD20L50DN33"
-			(at 174.625 225.425 0)
+			(at 100.33 99.06 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9091,7 +9331,7 @@
 			)
 		)
 		(property "Mfr" "Winsok"
-			(at 174.625 225.425 0)
+			(at 100.33 99.06 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9102,28 +9342,28 @@
 			)
 		)
 		(pin "1"
-			(uuid "5d77b224-7aa7-4a12-943e-31d2b14c984c")
+			(uuid "a6065d6b-5d7e-4cae-b635-341da5933b63")
 		)
 		(pin "3"
-			(uuid "f2825425-1d47-4aa4-bfa8-c2b658a21740")
+			(uuid "1458172a-543e-47bb-8a6d-5dcb3bec5d84")
 		)
 		(pin "4"
-			(uuid "54ee3a2d-d8a3-430e-9005-53a506c5707e")
+			(uuid "92e856d3-efa3-45c5-b665-1efdf79f2ab3")
 		)
 		(pin "2"
-			(uuid "d2d77996-cce8-4080-8109-96da50fac5f0")
+			(uuid "ff5eecde-5b1e-4a5d-a636-b119a6977379")
 		)
 		(pin "8"
-			(uuid "5564dfd0-1f3a-4286-a683-ff9abd292cd8")
+			(uuid "41a38cb3-5175-4b54-8906-c7a3af0c3788")
 		)
 		(pin "6"
-			(uuid "60965ee3-1eab-4c2c-8bbc-8bf9c980f79f")
+			(uuid "13f3139d-ea9d-4368-9364-3cda1da71ada")
 		)
 		(pin "5"
-			(uuid "93a73272-3b9d-42fd-829d-ee16b9de4e75")
+			(uuid "a18d81e6-c70d-494c-a761-f2d19ff10a4e")
 		)
 		(pin "7"
-			(uuid "7af0a049-edb4-4c6d-ae7b-0f5e8235aa09")
+			(uuid "7fd858dc-1967-4115-8dfb-e63b36b84cf6")
 		)
 		(instances
 			(project "tinker-beetle"
@@ -9134,133 +9374,41 @@
 			)
 		)
 	)
-	(wire
-		(pts
-			(xy 181.61 222.25) (xy 181.61 224.79)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "528f80d8-00d0-46dc-99cc-a6b63e7da59e")
-	)
-	(wire
-		(pts
-			(xy 181.61 224.79) (xy 181.61 227.33)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "2ccaf1a8-8999-40b3-94b3-dda93b37ae6c")
-	)
-	(wire
-		(pts
-			(xy 181.61 222.25) (xy 179.07 222.25)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "6982dd71-04d9-4ca6-a6cf-0d3f1f96847f")
-	)
-	(global_label "VBAT_CON"
-		(shape input)
-		(at 179.07 222.25 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "fd169b53-5e55-4298-9176-577ec484acc0")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 179.07 222.25 0)
-			(hide yes)
+	(symbol
+		(lib_id "Transistor_BJT:DTC123J")
+		(at 81.28 128.905 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "a48e2b4b-5283-4d7c-b6be-124a2342f7d0")
+		(property "Reference" "Q3"
+			(at 74.295 121.92 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
-	)
-	(wire
-		(pts
-			(xy 181.61 229.87) (xy 179.07 229.87)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "967ce139-c15c-4519-bbec-5bf410a4408a")
-	)
-	(label "PYRO2_GATE"
-		(at 179.07 229.87 180)
-		(effects
-			(font
-				(size 1.27 1.27)
+		(property "Value" "DTC123J"
+			(at 74.295 124.46 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
 			)
-			(justify right bottom)
 		)
-		(uuid "6f8c2b57-b2ea-4066-9328-16632972917f")
-	)
-	(wire
-		(pts
-			(xy 212.725 222.25) (xy 212.725 224.79)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "199b737b-3047-4681-9ebe-5f5419c07b4c")
-	)
-	(wire
-		(pts
-			(xy 212.725 224.79) (xy 212.725 227.33)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "aeafabc6-b47d-4fcd-9bff-888435761c77")
-	)
-	(wire
-		(pts
-			(xy 212.725 227.33) (xy 212.725 229.87)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "240b0b83-28b7-442a-b3dc-112d2f71807a")
-	)
-	(wire
-		(pts
-			(xy 212.725 222.25) (xy 215.265 222.25)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "54b464b4-4be3-4fdd-b5c5-8819a67e91ae")
-	)
-	(global_label "PYRO2_EXT"
-		(shape input)
-		(at 215.265 222.25 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "b74a57e2-a1ae-4ce2-b874-5944c23c6eb7")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 215.265 222.25 0)
+		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
+			(at 81.28 128.905 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9271,51 +9419,20 @@
 				(justify left)
 			)
 		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 166.37 228.6 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "ceeecff6-0f94-41f6-8ec8-c1e8341da5d8")
-		(property "Reference" "R16"
-			(at 164.465 228.6 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "10 k"
-			(at 168.275 229.235 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 166.116 229.616 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
 		(property "Datasheet" ""
-			(at 166.37 228.6 0)
+			(at 81.28 128.905 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Description" "Digital NPN Transistor, 2k2/47k, SOT-23"
+			(at 81.28 128.905 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9325,8 +9442,8 @@
 				)
 			)
 		)
-		(property "Description" "Resistor, US symbol"
-			(at 166.37 228.6 0)
+		(property "MPN" "DTC123JETL"
+			(at 81.28 128.905 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9336,19 +9453,8 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0710KL"
-			(at 166.37 228.6 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 166.37 228.6 0)
+		(property "Mfr" "Rohm"
+			(at 81.28 128.905 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9359,10 +9465,114 @@
 			)
 		)
 		(pin "1"
-			(uuid "4d276327-b482-4ed1-8e20-dec7bb7ae6e1")
+			(uuid "63740b7d-cd31-4b42-a163-6b10ca717f24")
 		)
 		(pin "2"
-			(uuid "65031fea-cab8-46c2-aea8-3a8eff9af383")
+			(uuid "b3d6d7d8-ed17-4b25-8e31-c6827e196e0c")
+		)
+		(pin "3"
+			(uuid "935efd45-d91d-457b-a3ce-2cc58d7de589")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
+					(reference "Q3")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 98.425 106.045 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "ceeecff6-0f94-41f6-8ec8-c1e8341da5d8")
+		(property "Reference" "R16"
+			(at 100.33 106.045 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "10 k"
+			(at 96.52 105.41 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 97.409 105.791 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 98.425 106.045 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 98.425 106.045 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 98.425 106.045 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 98.425 106.045 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "d1f7d06d-95d1-4990-a7ec-c900542123b5")
+		)
+		(pin "2"
+			(uuid "9ba46640-1bcb-443b-bdad-ee1a81804c8e")
 		)
 		(instances
 			(project "tinker-beetle"
@@ -9375,223 +9585,225 @@
 	)
 	(wire
 		(pts
-			(xy 166.37 224.79) (xy 166.37 222.25)
+			(xy 50.165 163.195) (xy 62.23 163.195)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "13807d84-2e47-4d6a-b7ca-9e8eea32136b")
-	)
-	(global_label "VBAT_CON"
-		(shape input)
-		(at 166.37 222.25 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "2dbadd50-e016-49c2-aed2-3f626f0a8acd")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 166.37 222.25 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
+		(uuid "27733fac-5fa6-43b6-accf-580eb561d207")
 	)
 	(wire
 		(pts
-			(xy 166.37 232.41) (xy 166.37 234.95)
+			(xy 93.345 158.115) (xy 93.345 160.655)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "216880d4-6562-44c2-84e5-3646a1dc831d")
-	)
-	(label "PYRO2_GATE"
-		(at 166.37 234.95 270)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right bottom)
-		)
-		(uuid "302cae3c-2ea1-4fe2-b117-0d6b03357dc1")
-	)
-	(symbol
-		(lib_id "Transistor_BJT:DTC123J")
-		(at 158.75 242.57 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "a48e2b4b-5283-4d7c-b6be-124a2342f7d0")
-		(property "Reference" "Q3"
-			(at 151.765 235.585 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "DTC123J"
-			(at 151.765 238.125 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
-			(at 158.75 242.57 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Datasheet" ""
-			(at 158.75 242.57 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Description" "Digital NPN Transistor, 2k2/47k, SOT-23"
-			(at 158.75 242.57 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "DTC123JETL"
-			(at 158.75 242.57 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Rohm"
-			(at 158.75 242.57 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "90b44742-0330-48e5-91b8-90fc78cf4938")
-		)
-		(pin "2"
-			(uuid "922414ce-0d15-4a96-91c9-752b54f347f0")
-		)
-		(pin "3"
-			(uuid "50b5167c-886f-4adb-a339-d9ec64d3d03b")
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "Q3")
-					(unit 1)
-				)
-			)
-		)
+		(uuid "31771be7-adeb-4766-b75c-67a80ce1d5c5")
 	)
 	(wire
 		(pts
-			(xy 152.4 242.57) (xy 149.86 242.57)
+			(xy 98.425 158.115) (xy 98.425 161.925)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "a5463eaf-d0fe-46f6-803c-aa8cb773b39e")
-	)
-	(global_label "PYRO2_FIRE"
-		(shape input)
-		(at 149.86 242.57 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "c7d28167-3719-4881-aab3-761de862821f")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 149.86 242.57 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
+		(uuid "37f1b917-52dc-4602-962e-c6972de49d4b")
 	)
 	(wire
 		(pts
-			(xy 161.29 237.49) (xy 161.29 234.95)
+			(xy 93.345 174.625) (xy 83.82 174.625)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "d6209fcd-a003-4700-b4c6-1733bba40711")
+		(uuid "43025c8b-c527-46c7-bbda-e95a7cfa4632")
 	)
-	(label "PYRO2_GATE"
-		(at 161.29 234.95 90)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
+	(wire
+		(pts
+			(xy 98.425 169.545) (xy 98.425 174.625)
 		)
-		(uuid "76b8b4db-a2ba-4fc3-ba54-fb52e8a62a4a")
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "277e6fa6-5085-47a3-a07d-2007f4e32fb1")
+	)
+	(wire
+		(pts
+			(xy 93.345 158.115) (xy 98.425 158.115)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "08ffc290-7d5e-4145-bbc4-e129dc740fc9")
+	)
+	(wire
+		(pts
+			(xy 98.425 174.625) (xy 93.345 174.625)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1ecdb03d-2161-4f2e-ae83-7c0d70ac3b6b")
+	)
+	(wire
+		(pts
+			(xy 62.23 155.575) (xy 62.23 158.115)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "060a3e7d-0313-4cb7-b726-c1140ebb1104")
+	)
+	(wire
+		(pts
+			(xy 93.345 155.575) (xy 93.345 158.115)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "6bb0e8df-3cc6-490b-943c-9a67963c997c")
+	)
+	(wire
+		(pts
+			(xy 62.23 158.115) (xy 62.23 160.655)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "cce81546-0459-47f0-8025-92e2afc7332c")
+	)
+	(wire
+		(pts
+			(xy 74.93 188.595) (xy 74.93 186.055)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "5e9a384a-473d-4179-ae62-6c8837d15a7f")
+	)
+	(wire
+		(pts
+			(xy 98.425 158.115) (xy 103.505 158.115)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "d6817ed1-d83a-4ea7-aaf3-c186ba9586c2")
+	)
+	(wire
+		(pts
+			(xy 83.82 174.625) (xy 83.82 183.515)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "842336c7-54c5-42b5-b0b8-c85c92fd83ea")
+	)
+	(wire
+		(pts
+			(xy 93.345 163.195) (xy 93.345 174.625)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "09f1261f-f276-4eb0-8eb1-453aad40dc87")
+	)
+	(wire
+		(pts
+			(xy 74.93 186.055) (xy 69.85 186.055)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9e2f6d99-8a5a-48b4-ad93-8ad942c40cec")
+	)
+	(wire
+		(pts
+			(xy 62.23 160.655) (xy 62.23 163.195)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "958fef1e-1ca5-44bf-8fca-3e4a197ebef6")
+	)
+	(wire
+		(pts
+			(xy 50.165 163.195) (xy 50.165 170.18)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "3c524de2-80d5-42aa-b6de-04b31cb2f3b4")
+	)
+	(junction
+		(at 62.23 158.115)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "8fa069bb-ba51-4614-8eb6-36ad371cae84")
+	)
+	(junction
+		(at 69.85 186.055)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "59e9ce8e-ae7e-46ce-a567-7bf055bf5246")
+	)
+	(junction
+		(at 98.425 158.115)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "657f0aa2-28c4-4a16-b276-dcf4d2444663")
+	)
+	(junction
+		(at 62.23 163.195)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "acc66f9a-2379-4071-887a-2fd6fec88a78")
+	)
+	(junction
+		(at 50.165 170.18)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "ec2f9299-1fb6-4215-af13-94854b05a835")
+	)
+	(junction
+		(at 93.345 174.625)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "4e038bf5-429f-47c5-9cd3-abfabff30c2d")
+	)
+	(junction
+		(at 62.23 160.655)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "2b74914e-d64e-4175-a69d-e87edf7d82e6")
+	)
+	(junction
+		(at 93.345 158.115)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "5dccc3a3-7759-478f-ac05-8c0523027198")
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 161.29 247.65 0)
+		(at 83.82 193.675 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -9599,9 +9811,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "d7aa8348-5c47-4e89-810b-402784e88ba4")
-		(property "Reference" "#PWR9165"
-			(at 161.29 254 0)
+		(uuid "46bf1d9c-2abc-49ce-a40d-b207ec52c7e8")
+		(property "Reference" "#PWR9172"
+			(at 83.82 200.025 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9612,17 +9824,18 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 161.29 252.73 0)
+			(at 88.265 196.85 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify right)
 			)
 		)
 		(property "Footprint" ""
-			(at 163.195 205.74 0)
+			(at 83.82 193.675 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9633,7 +9846,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 163.195 205.74 0)
+			(at 83.82 193.675 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9644,7 +9857,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 163.195 205.74 0)
+			(at 83.82 193.675 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9655,12 +9868,12 @@
 			)
 		)
 		(pin "1"
-			(uuid "e3fec975-5d9f-4426-8359-528585530e95")
+			(uuid "c580e64b-f31d-4f4d-bc46-ffb0bedff7bc")
 		)
 		(instances
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "#PWR9165")
+					(reference "#PWR9172")
 					(unit 1)
 				)
 			)
@@ -9668,7 +9881,8 @@
 	)
 	(symbol
 		(lib_id "Custom:WSD20L50DN33")
-		(at 66.675 258.445 0)
+		(at 100.33 158.75 0)
+		(mirror y)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -9678,7 +9892,7 @@
 		(dnp no)
 		(uuid "592ff020-e8dc-433b-a04d-2fc106ca4a92")
 		(property "Reference" "U7"
-			(at 44.1325 269.875 0)
+			(at 77.7875 170.18 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -9688,7 +9902,7 @@
 			)
 		)
 		(property "Value" "WSD20L50DN33"
-			(at 44.1325 267.335 0)
+			(at 77.7875 167.64 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -9698,7 +9912,7 @@
 			)
 		)
 		(property "Footprint" "Footprints:TSON Advance_TOS"
-			(at 59.69 255.27 0)
+			(at 93.345 155.575 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9710,7 +9924,7 @@
 			)
 		)
 		(property "Datasheet" "WSD20L50DN33"
-			(at 59.69 255.27 0)
+			(at 93.345 155.575 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9722,7 +9936,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 66.675 258.445 0)
+			(at 100.33 158.75 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9733,7 +9947,7 @@
 			)
 		)
 		(property "MPN" "WSD20L50DN33"
-			(at 66.675 258.445 0)
+			(at 100.33 158.75 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9744,7 +9958,7 @@
 			)
 		)
 		(property "Mfr" "Winsok"
-			(at 66.675 258.445 0)
+			(at 100.33 158.75 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9755,28 +9969,28 @@
 			)
 		)
 		(pin "1"
-			(uuid "2d0df614-f6f0-4f24-8d86-1231767f1022")
+			(uuid "ccdffe17-5792-4a35-90f0-75bd1db82d33")
 		)
 		(pin "3"
-			(uuid "b9f0b406-4fd1-43e3-af95-25c210e3523a")
+			(uuid "535f1fea-3424-4596-b181-4836c7fd8436")
 		)
 		(pin "4"
-			(uuid "3a09d265-2458-420d-8b03-c38070d2ece6")
+			(uuid "75d2fcd8-70c6-4579-9785-776e2acbb602")
 		)
 		(pin "2"
-			(uuid "cc6a8c87-2793-4881-b300-b1f0481096ae")
+			(uuid "6e662fc2-1666-417c-afd2-cbca5d1d0011")
 		)
 		(pin "8"
-			(uuid "c1530e34-6020-4a35-ac27-ccc1ae72d544")
+			(uuid "0ea9368c-d618-45fb-b30f-8d2407da4162")
 		)
 		(pin "6"
-			(uuid "2329c930-5aa5-459d-b4c0-a257e2c42740")
+			(uuid "91c43d6d-c143-4e18-ad72-89576d2b6510")
 		)
 		(pin "5"
-			(uuid "0318eedd-51ef-427f-8218-b2cfca5eff6c")
+			(uuid "b7b35005-cd5c-414a-9c97-8c4f1b308371")
 		)
 		(pin "7"
-			(uuid "9f749c4c-31cb-4779-82f3-b19d6442c9db")
+			(uuid "f52fb404-5373-40d4-93b6-1a5cbc98df13")
 		)
 		(instances
 			(project "tinker-beetle"
@@ -9787,133 +10001,41 @@
 			)
 		)
 	)
-	(wire
-		(pts
-			(xy 73.66 255.27) (xy 73.66 257.81)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "24f005e9-f96e-4487-9890-110e613d24e0")
-	)
-	(wire
-		(pts
-			(xy 73.66 257.81) (xy 73.66 260.35)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e7d919ed-b266-4d14-8f2c-5983f54eab52")
-	)
-	(wire
-		(pts
-			(xy 73.66 255.27) (xy 71.12 255.27)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "8af99194-f0ac-4503-ac7b-66ef22e6d3c5")
-	)
-	(global_label "VBAT_CON"
-		(shape input)
-		(at 71.12 255.27 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "2992fb69-89e6-4eb8-95ae-037bd271ca4a")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 71.12 255.27 0)
-			(hide yes)
+	(symbol
+		(lib_id "Transistor_BJT:DTC123J")
+		(at 81.28 188.595 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "269a4dcc-473b-47f3-a419-130f490a12ef")
+		(property "Reference" "Q4"
+			(at 74.295 181.61 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(justify right)
+				(justify left)
 			)
 		)
-	)
-	(wire
-		(pts
-			(xy 73.66 262.89) (xy 71.12 262.89)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "5635e724-8968-4ac4-b05a-8e2249b01fcf")
-	)
-	(label "PYRO3_GATE"
-		(at 71.12 262.89 180)
-		(effects
-			(font
-				(size 1.27 1.27)
+		(property "Value" "DTC123J"
+			(at 74.295 184.15 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
 			)
-			(justify right bottom)
 		)
-		(uuid "be65d819-ade0-45ae-bbaf-9f5e4ac97fab")
-	)
-	(wire
-		(pts
-			(xy 104.775 255.27) (xy 104.775 257.81)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "a680cfdb-9d91-4d53-96af-ba6e6b8ce6b6")
-	)
-	(wire
-		(pts
-			(xy 104.775 257.81) (xy 104.775 260.35)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "739fcece-0959-4f78-8cb8-fdcdc7755d4d")
-	)
-	(wire
-		(pts
-			(xy 104.775 260.35) (xy 104.775 262.89)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "d8d9665d-fd01-45f9-a342-35c1c3e948f1")
-	)
-	(wire
-		(pts
-			(xy 104.775 255.27) (xy 107.315 255.27)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "d472b098-af0a-4f94-baec-dbc45074c923")
-	)
-	(global_label "PYRO3_EXT"
-		(shape input)
-		(at 107.315 255.27 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "f09caae7-366e-4d93-8edb-2f0de490e19a")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 107.315 255.27 0)
+		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
+			(at 81.28 188.595 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9924,51 +10046,20 @@
 				(justify left)
 			)
 		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 58.42 261.62 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "9eb5089e-6e00-46df-b1e8-60bd7f040818")
-		(property "Reference" "R17"
-			(at 56.515 261.62 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "10 k"
-			(at 60.325 262.255 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 58.166 262.636 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
 		(property "Datasheet" ""
-			(at 58.42 261.62 0)
+			(at 81.28 188.595 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Description" "Digital NPN Transistor, 2k2/47k, SOT-23"
+			(at 81.28 188.595 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9978,8 +10069,8 @@
 				)
 			)
 		)
-		(property "Description" "Resistor, US symbol"
-			(at 58.42 261.62 0)
+		(property "MPN" "DTC123JETL"
+			(at 81.28 188.595 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -9989,19 +10080,8 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0710KL"
-			(at 58.42 261.62 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 58.42 261.62 0)
+		(property "Mfr" "Rohm"
+			(at 81.28 188.595 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10012,10 +10092,114 @@
 			)
 		)
 		(pin "1"
-			(uuid "c2e71d4e-1d05-4a56-bf68-f8d71062556b")
+			(uuid "755bbea1-b34d-4d2d-b1f5-45c18b9ebdf2")
 		)
 		(pin "2"
-			(uuid "8d343619-d64f-4760-9a1d-5fb1e2173b48")
+			(uuid "a25a84e2-4fa5-4b4a-b6fb-d4f1560bedb9")
+		)
+		(pin "3"
+			(uuid "04401998-2793-4bbc-a0c0-2304728f0bc8")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
+					(reference "Q4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 98.425 165.735 180)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "9eb5089e-6e00-46df-b1e8-60bd7f040818")
+		(property "Reference" "R17"
+			(at 100.33 165.735 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "10 k"
+			(at 96.52 165.1 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 97.409 165.481 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 98.425 165.735 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 98.425 165.735 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 98.425 165.735 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 98.425 165.735 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "4b257ba6-e8ea-4776-96ab-b5cf688845f4")
+		)
+		(pin "2"
+			(uuid "9a666b43-4811-41e6-9912-55af0910114a")
 		)
 		(instances
 			(project "tinker-beetle"
@@ -10028,223 +10212,215 @@
 	)
 	(wire
 		(pts
-			(xy 58.42 257.81) (xy 58.42 255.27)
+			(xy 189.23 114.935) (xy 189.23 118.745)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "7b1e83a3-65a6-48e0-837c-f30987d8d239")
-	)
-	(global_label "VBAT_CON"
-		(shape input)
-		(at 58.42 255.27 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "80e76177-982b-4b72-bcce-1d21ab4cf1f3")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 58.42 255.27 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
+		(uuid "5a0c2c23-2911-4691-bd0e-49eb23393d61")
 	)
 	(wire
 		(pts
-			(xy 58.42 265.43) (xy 58.42 267.97)
+			(xy 174.625 131.445) (xy 174.625 140.335)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "33f4a85d-21f4-4b1e-a35c-b5d87f7348ae")
-	)
-	(label "PYRO3_GATE"
-		(at 58.42 267.97 270)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right bottom)
-		)
-		(uuid "fb431c26-3cc6-48b7-8981-8bbc4bf63331")
-	)
-	(symbol
-		(lib_id "Transistor_BJT:DTC123J")
-		(at 50.8 275.59 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "269a4dcc-473b-47f3-a419-130f490a12ef")
-		(property "Reference" "Q4"
-			(at 43.815 268.605 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "DTC123J"
-			(at 43.815 271.145 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
-			(at 50.8 275.59 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Datasheet" ""
-			(at 50.8 275.59 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Description" "Digital NPN Transistor, 2k2/47k, SOT-23"
-			(at 50.8 275.59 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "DTC123JETL"
-			(at 50.8 275.59 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Rohm"
-			(at 50.8 275.59 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "b64dbd07-5572-404e-8f96-5a1aec796e5a")
-		)
-		(pin "2"
-			(uuid "0f6a76b9-4270-4368-8010-d2dbb10ba304")
-		)
-		(pin "3"
-			(uuid "39c9926e-cb78-4581-8b19-fe196e0ed856")
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "Q4")
-					(unit 1)
-				)
-			)
-		)
+		(uuid "84672ee2-7331-48c4-88a7-19cd3f12af96")
 	)
 	(wire
 		(pts
-			(xy 44.45 275.59) (xy 41.91 275.59)
+			(xy 153.035 114.935) (xy 153.035 117.475)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "528955eb-f764-47df-9239-10f613f739ee")
-	)
-	(global_label "PYRO3_FIRE"
-		(shape input)
-		(at 41.91 275.59 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "ed0c10aa-f7fa-4102-98a8-c81474da151f")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 41.91 275.59 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
+		(uuid "7db95595-ee12-4978-9ec4-7d204999960b")
 	)
 	(wire
 		(pts
-			(xy 53.34 270.51) (xy 53.34 267.97)
+			(xy 189.23 114.935) (xy 194.31 114.935)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "86b19fef-4bd6-4a27-b0a5-742745ceca4a")
+		(uuid "4661eeb5-1c6f-49c2-a3e3-7fdbaabedd37")
 	)
-	(label "PYRO3_GATE"
-		(at 53.34 267.97 90)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
+	(wire
+		(pts
+			(xy 189.23 131.445) (xy 184.15 131.445)
 		)
-		(uuid "0a5484db-7b6a-428b-8b4d-ce791d9205bc")
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7d5b9f89-e00d-41e6-bcdf-7955ac97f212")
+	)
+	(wire
+		(pts
+			(xy 140.97 120.015) (xy 153.035 120.015)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e0a41b3a-bed5-4ded-9ad3-42bd4d714e6d")
+	)
+	(wire
+		(pts
+			(xy 161.925 145.415) (xy 165.735 145.415)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9091c0e1-350d-41fa-bf4f-6c5841df7d5b")
+	)
+	(wire
+		(pts
+			(xy 184.15 120.015) (xy 184.15 131.445)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e6aac3ba-1efa-49f5-a490-71af40bc53e9")
+	)
+	(wire
+		(pts
+			(xy 153.035 117.475) (xy 153.035 120.015)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b56dbe60-2812-452b-970a-c9bf349fdcdc")
+	)
+	(wire
+		(pts
+			(xy 184.15 114.935) (xy 189.23 114.935)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "415cbd00-06ae-47c1-9418-58c0f033bfa4")
+	)
+	(wire
+		(pts
+			(xy 153.035 112.395) (xy 153.035 114.935)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1604f60b-7745-4ccd-9e46-0e14232d6b83")
+	)
+	(wire
+		(pts
+			(xy 140.97 120.015) (xy 140.97 127)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "cbf0ccb6-4347-43d8-9e0a-9f01ce74953b")
+	)
+	(wire
+		(pts
+			(xy 189.23 126.365) (xy 189.23 131.445)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "43fc541b-5cd4-4fcc-8d18-95ab04b9070b")
+	)
+	(wire
+		(pts
+			(xy 184.15 112.395) (xy 184.15 114.935)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "f921a564-b977-4f5e-bcbe-96b33490cc47")
+	)
+	(wire
+		(pts
+			(xy 184.15 131.445) (xy 174.625 131.445)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7280d92e-17f8-4aec-90cd-7a776c65ba13")
+	)
+	(wire
+		(pts
+			(xy 184.15 114.935) (xy 184.15 117.475)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c9253383-1d34-46bd-80e1-415d2e60ae4d")
+	)
+	(junction
+		(at 153.035 117.475)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "fcffbf7d-4d3b-4c64-b8fb-0c9ab4ebe9d7")
+	)
+	(junction
+		(at 184.15 114.935)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "78064f1a-9329-46a4-8234-fa11791f2cec")
+	)
+	(junction
+		(at 184.15 131.445)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "c9f15f86-c1f8-499d-9016-ada120ca4946")
+	)
+	(junction
+		(at 189.23 114.935)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "1a821aa1-54c4-4c72-99dd-c239c80e72cc")
+	)
+	(junction
+		(at 153.035 114.935)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "ebf973f6-70d2-4bdb-b7a9-f7425727da85")
+	)
+	(junction
+		(at 161.925 145.415)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "eec88ada-8a3f-4d53-8585-bae7fce1e207")
+	)
+	(junction
+		(at 140.97 127)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "1885b0b4-7b40-4d2e-9285-f7730c1324e4")
+	)
+	(junction
+		(at 153.035 120.015)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "7cb2a66d-1987-4f7e-859e-27a49f1a77e7")
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 53.34 280.67 0)
+		(at 174.625 150.495 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -10252,9 +10428,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "24357ec4-3504-46a4-9705-9e3d2a400d7e")
-		(property "Reference" "#PWR9166"
-			(at 53.34 287.02 0)
+		(uuid "c58fde46-29c7-4bc7-9cdd-f4519564c439")
+		(property "Reference" "#PWR9173"
+			(at 174.625 156.845 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10265,17 +10441,18 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 53.34 285.75 0)
+			(at 176.53 154.94 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify right)
 			)
 		)
 		(property "Footprint" ""
-			(at 55.245 238.76 0)
+			(at 174.625 150.495 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10286,7 +10463,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 55.245 238.76 0)
+			(at 174.625 150.495 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10297,7 +10474,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 55.245 238.76 0)
+			(at 174.625 150.495 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10308,12 +10485,12 @@
 			)
 		)
 		(pin "1"
-			(uuid "e073c9bd-e2d7-4ee9-a262-759eb83a782c")
+			(uuid "b334f3f6-a433-4cd2-9b62-84654e139d7d")
 		)
 		(instances
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "#PWR9166")
+					(reference "#PWR9173")
 					(unit 1)
 				)
 			)
@@ -10321,7 +10498,8 @@
 	)
 	(symbol
 		(lib_id "Custom:WSD20L50DN33")
-		(at 174.625 258.445 0)
+		(at 191.135 115.57 0)
+		(mirror y)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -10331,7 +10509,7 @@
 		(dnp no)
 		(uuid "a7ce2fb5-61e1-4631-a0f3-69794e575a32")
 		(property "Reference" "U10"
-			(at 152.0825 269.875 0)
+			(at 168.5925 127 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10341,7 +10519,7 @@
 			)
 		)
 		(property "Value" "WSD20L50DN33"
-			(at 152.0825 267.335 0)
+			(at 168.5925 124.46 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10351,7 +10529,7 @@
 			)
 		)
 		(property "Footprint" "Footprints:TSON Advance_TOS"
-			(at 167.64 255.27 0)
+			(at 184.15 112.395 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10363,7 +10541,7 @@
 			)
 		)
 		(property "Datasheet" "WSD20L50DN33"
-			(at 167.64 255.27 0)
+			(at 184.15 112.395 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10375,7 +10553,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 174.625 258.445 0)
+			(at 191.135 115.57 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10386,7 +10564,7 @@
 			)
 		)
 		(property "MPN" "WSD20L50DN33"
-			(at 174.625 258.445 0)
+			(at 191.135 115.57 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10397,7 +10575,7 @@
 			)
 		)
 		(property "Mfr" "Winsok"
-			(at 174.625 258.445 0)
+			(at 191.135 115.57 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10408,28 +10586,28 @@
 			)
 		)
 		(pin "1"
-			(uuid "0054d947-3847-4ae1-8ddf-ddd199009fff")
+			(uuid "57c4eed8-00a6-4552-bd26-29a3b7c75500")
 		)
 		(pin "3"
-			(uuid "97d57ff4-1d46-4feb-a4c6-2229f2c85ade")
+			(uuid "04475e0e-f7ef-40da-99c9-911ef680df57")
 		)
 		(pin "4"
-			(uuid "084dda27-48a9-4cd2-a876-fb1b8695d456")
+			(uuid "6cce2b2a-64fe-4f6c-8177-86d1f7bee700")
 		)
 		(pin "2"
-			(uuid "976bd4c3-51bc-425e-92d1-a50b04f3a887")
+			(uuid "df99a521-e82b-46fa-b359-11c2c19b3349")
 		)
 		(pin "8"
-			(uuid "e6d33098-8628-4db0-bad1-28e997335cee")
+			(uuid "ef6b6e52-6239-4b10-bfd6-bb90309ae647")
 		)
 		(pin "6"
-			(uuid "40cd17e7-baf2-4bbc-a36c-3ebc0cc9fb9f")
+			(uuid "d9aa6792-b30c-4a77-b4ea-4f3607831b58")
 		)
 		(pin "5"
-			(uuid "5a763d80-0192-40bd-ad1a-3e285674df20")
+			(uuid "7359c229-a651-493b-8e78-4fcbb728d008")
 		)
 		(pin "7"
-			(uuid "3280db8e-ba00-4aeb-8368-2bd6f47ab189")
+			(uuid "7d2b3ddd-a7dc-491c-92da-c51cb8403b8c")
 		)
 		(instances
 			(project "tinker-beetle"
@@ -10440,302 +10618,9 @@
 			)
 		)
 	)
-	(wire
-		(pts
-			(xy 181.61 255.27) (xy 181.61 257.81)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "ccf0e016-9d95-4275-8ed0-6973610d018b")
-	)
-	(wire
-		(pts
-			(xy 181.61 257.81) (xy 181.61 260.35)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "d9c4537b-32a6-479f-a4be-9a935ed93bef")
-	)
-	(wire
-		(pts
-			(xy 181.61 255.27) (xy 179.07 255.27)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "4f35fb22-68c0-4042-ba73-30923fb91405")
-	)
-	(global_label "VBAT_CON"
-		(shape input)
-		(at 179.07 255.27 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "6c2ea36f-3377-47fb-ad80-6bf4d47e016b")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 179.07 255.27 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 181.61 262.89) (xy 179.07 262.89)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "0bc1049e-9f72-435a-9698-c3503cd6cdb1")
-	)
-	(label "PYRO4_GATE"
-		(at 179.07 262.89 180)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right bottom)
-		)
-		(uuid "c85cf981-4703-41be-a85f-6917e55ad59d")
-	)
-	(wire
-		(pts
-			(xy 212.725 255.27) (xy 212.725 257.81)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "9434ef19-3d83-443a-bf30-bf4967df4ee9")
-	)
-	(wire
-		(pts
-			(xy 212.725 257.81) (xy 212.725 260.35)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "6338268e-dcbc-4e58-a1b3-b787e7f089f1")
-	)
-	(wire
-		(pts
-			(xy 212.725 260.35) (xy 212.725 262.89)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "48b717d9-ced2-4fcb-bb1e-5865b7ffd4e8")
-	)
-	(wire
-		(pts
-			(xy 212.725 255.27) (xy 215.265 255.27)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "d3077c04-2aab-45ed-be48-5c1e7a0a3b91")
-	)
-	(global_label "PYRO4_EXT"
-		(shape input)
-		(at 215.265 255.27 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "9d07fa07-b3db-462b-af1a-41bb4016b646")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 215.265 255.27 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:R_US")
-		(at 166.37 261.62 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "6dad1c63-2cc7-4329-8a67-1ae3202925c0")
-		(property "Reference" "R23"
-			(at 164.465 261.62 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "10 k"
-			(at 168.275 262.255 90)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
-			(at 166.116 262.636 90)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 166.37 261.62 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Resistor, US symbol"
-			(at 166.37 261.62 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "RC0402FR-0710KL"
-			(at 166.37 261.62 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Yageo"
-			(at 166.37 261.62 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "60dca421-edcc-47f7-8887-306882c0a637")
-		)
-		(pin "2"
-			(uuid "70c0b66e-9a9a-4306-af4f-04ed9b1ec5e3")
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "R23")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 166.37 257.81) (xy 166.37 255.27)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "88bbe9fc-6361-434d-9da8-4420df33da08")
-	)
-	(global_label "VBAT_CON"
-		(shape input)
-		(at 166.37 255.27 90)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "73f7a293-a5a7-4a53-ba5d-e13022566e4f")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 166.37 255.27 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 166.37 265.43) (xy 166.37 267.97)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "67336bc2-6a57-480d-a536-2320d02ae93b")
-	)
-	(label "PYRO4_GATE"
-		(at 166.37 267.97 270)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right bottom)
-		)
-		(uuid "c4ef31af-2ca7-45ac-b9b5-8296b4ca6d3f")
-	)
 	(symbol
 		(lib_id "Transistor_BJT:DTC123J")
-		(at 158.75 275.59 0)
+		(at 172.085 145.415 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -10745,7 +10630,7 @@
 		(dnp no)
 		(uuid "3174d50a-c50b-4c62-a6ed-6637330b30a7")
 		(property "Reference" "Q6"
-			(at 151.765 268.605 0)
+			(at 165.1 138.43 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10756,7 +10641,7 @@
 			)
 		)
 		(property "Value" "DTC123J"
-			(at 151.765 271.145 0)
+			(at 165.1 140.97 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10767,7 +10652,7 @@
 			)
 		)
 		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
-			(at 158.75 275.59 0)
+			(at 172.085 145.415 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10779,7 +10664,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 158.75 275.59 0)
+			(at 172.085 145.415 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10791,7 +10676,7 @@
 			)
 		)
 		(property "Description" "Digital NPN Transistor, 2k2/47k, SOT-23"
-			(at 158.75 275.59 0)
+			(at 172.085 145.415 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10802,7 +10687,7 @@
 			)
 		)
 		(property "MPN" "DTC123JETL"
-			(at 158.75 275.59 0)
+			(at 172.085 145.415 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10813,7 +10698,7 @@
 			)
 		)
 		(property "Mfr" "Rohm"
-			(at 158.75 275.59 0)
+			(at 172.085 145.415 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10824,13 +10709,13 @@
 			)
 		)
 		(pin "1"
-			(uuid "64d55dc5-1c03-4db0-ac72-075cf051fc4f")
+			(uuid "4cd4f7f9-122b-4c98-93d6-ba3e6e0dc62b")
 		)
 		(pin "2"
-			(uuid "cce759e2-45a0-4d06-9273-ee37f3c18ee0")
+			(uuid "2cf0a069-eb04-44ed-8ac5-bd673947b160")
 		)
 		(pin "3"
-			(uuid "d0ec4f7a-a077-47f8-b74c-99986339c94f")
+			(uuid "70f6e9a7-a6da-46d9-a55c-cd8a65642cea")
 		)
 		(instances
 			(project "tinker-beetle"
@@ -10841,63 +10726,9 @@
 			)
 		)
 	)
-	(wire
-		(pts
-			(xy 152.4 275.59) (xy 149.86 275.59)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "dae23ef7-c284-4130-8608-7d76b3456065")
-	)
-	(global_label "PYRO4_FIRE"
-		(shape input)
-		(at 149.86 275.59 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "5e831f66-1cb7-4eb3-ab79-1329a9abf33d")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 149.86 275.59 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 161.29 270.51) (xy 161.29 267.97)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "ea8679e7-9bfa-4737-a92e-b4bf51083ab0")
-	)
-	(label "PYRO4_GATE"
-		(at 161.29 267.97 90)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "87b09e4a-9a94-4f60-942e-7a9d85e3630c")
-	)
 	(symbol
-		(lib_id "power:GND")
-		(at 161.29 280.67 0)
+		(lib_id "Device:R_US")
+		(at 189.23 122.555 180)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -10905,10 +10736,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "573f847c-04b4-4f00-aff6-ec94ede58626")
-		(property "Reference" "#PWR9167"
-			(at 161.29 287.02 0)
-			(hide yes)
+		(uuid "6dad1c63-2cc7-4329-8a67-1ae3202925c0")
+		(property "Reference" "R23"
+			(at 191.135 122.555 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10917,8 +10747,8 @@
 				)
 			)
 		)
-		(property "Value" "GND"
-			(at 161.29 285.75 0)
+		(property "Value" "10 k"
+			(at 187.325 121.92 90)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -10927,8 +10757,8 @@
 				)
 			)
 		)
-		(property "Footprint" ""
-			(at 163.195 238.76 0)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 188.214 122.301 90)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10939,7 +10769,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 163.195 238.76 0)
+			(at 189.23 122.555 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10949,8 +10779,30 @@
 				)
 			)
 		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 163.195 238.76 0)
+		(property "Description" "Resistor, US symbol"
+			(at 189.23 122.555 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "RC0402FR-0710KL"
+			(at 189.23 122.555 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Yageo"
+			(at 189.23 122.555 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10961,54 +10813,23 @@
 			)
 		)
 		(pin "1"
-			(uuid "083022d4-8263-4b06-a3af-ed226ecb2809")
+			(uuid "6a59b78a-960e-44e9-a9fd-9d96347ca1bc")
+		)
+		(pin "2"
+			(uuid "06265f22-01fc-40dd-8b37-154233080590")
 		)
 		(instances
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "#PWR9167")
+					(reference "R23")
 					(unit 1)
 				)
 			)
 		)
 	)
-	(text "Current-limit trip: INA230 ALERT (open drain, low on a shunt over-limit) turns Q15 on and Q16 pulls U9's gate low."
-		(exclude_from_sim no)
-		(at 250.19 208.28 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "2a4a9509-5078-4155-a1fb-4946e1e0be58")
-	)
-	(text "R139 2.2 k bounds Q16's current while tripped. ALERT is transparent (LEN = 0): it lets go once the current is gone,"
-		(exclude_from_sim no)
-		(at 250.19 210.82 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "1ab992fa-2a96-40a2-967d-117629f3c3a5")
-	)
-	(text "and the out computer drops arm consent on the same over-limit. While armed, ALERT must carry SOL only (no conversion-ready pulses)."
-		(exclude_from_sim no)
-		(at 250.19 213.36 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "fbed22f3-263b-41af-9204-b89b03edff78")
-	)
 	(symbol
-		(lib_id "Transistor_BJT:DTA123J")
-		(at 264.16 229.87 0)
-		(mirror x)
+		(lib_id "Transistor_BJT:DTC123J")
+		(at 228.6 99.06 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -11016,9 +10837,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "863eb548-270e-4b36-beab-da645d9db36b")
-		(property "Reference" "Q15"
-			(at 255.27 225.425 0)
+		(uuid "5e44cab1-6869-4515-8dbe-f26eadb3548c")
+		(property "Reference" "Q16"
+			(at 221.615 92.075 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -11028,8 +10849,8 @@
 				(justify left)
 			)
 		)
-		(property "Value" "DTA123J"
-			(at 259.715 227.965 0)
+		(property "Value" "DTC123J"
+			(at 221.615 94.615 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -11040,7 +10861,7 @@
 			)
 		)
 		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
-			(at 264.16 229.87 0)
+			(at 228.6 99.06 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11052,7 +10873,116 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 264.16 229.87 0)
+			(at 228.6 99.06 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Description" "Digital NPN Transistor, 2k2/47k, SOT-23"
+			(at 228.6 99.06 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "DTC123JETL"
+			(at 228.6 99.06 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Rohm"
+			(at 228.6 99.06 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "5886c56e-c089-4d90-bf20-ed3dff49a219")
+		)
+		(pin "2"
+			(uuid "f57afb3b-e43c-4e7c-8d5d-3d51cec05e2e")
+		)
+		(pin "3"
+			(uuid "5197b7a7-764a-489e-8abc-392e8bfc6bd3")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
+					(reference "Q16")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Transistor_BJT:DTA123J")
+		(at 210.82 99.06 0)
+		(mirror x)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "863eb548-270e-4b36-beab-da645d9db36b")
+		(property "Reference" "Q15"
+			(at 201.93 94.615 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "DTA123J"
+			(at 206.375 97.155 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
+			(at 210.82 99.06 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Datasheet" ""
+			(at 210.82 99.06 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11064,7 +10994,7 @@
 			)
 		)
 		(property "Description" "Digital PNP Transistor, 2k2/2k2, SOT-416"
-			(at 264.16 229.87 0)
+			(at 210.82 99.06 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11075,7 +11005,7 @@
 			)
 		)
 		(property "MPN" "DTA123JETL"
-			(at 264.16 229.87 0)
+			(at 210.82 99.06 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11086,7 +11016,7 @@
 			)
 		)
 		(property "Mfr" "Rohm"
-			(at 264.16 229.87 0)
+			(at 210.82 99.06 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11115,288 +11045,8 @@
 		)
 	)
 	(symbol
-		(lib_id "power:+3V3")
-		(at 266.7 224.79 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "4001678a-2621-46e9-a5e5-c1c35f28c340")
-		(property "Reference" "#PWR9168"
-			(at 266.7 228.6 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "+3V3"
-			(at 266.7 220.345 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 266.7 224.79 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 266.7 224.79 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"+3V3\""
-			(at 266.7 224.79 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "c4cdfcda-c3ee-4c3a-b0aa-23d4d68dbe90")
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "#PWR9168")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 257.81 229.87) (xy 255.27 229.87)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "ad5d4c50-0e01-4c25-81c9-7cd5e851d893")
-	)
-	(global_label "INA_ALERT"
-		(shape input)
-		(at 255.27 229.87 180)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right)
-		)
-		(uuid "271ed3cb-48ea-4ff9-a958-b5d1d0cd19d0")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 255.27 229.87 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 266.7 234.95) (xy 266.7 237.49)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "071a028c-382b-41d3-92d3-047c37750666")
-	)
-	(label "ARM_TRIP"
-		(at 266.7 237.49 270)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right bottom)
-		)
-		(uuid "6bc04a70-1278-44b7-a4cb-6c0dee3acffd")
-	)
-	(symbol
-		(lib_id "Transistor_BJT:DTC123J")
-		(at 284.48 237.49 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "5e44cab1-6869-4515-8dbe-f26eadb3548c")
-		(property "Reference" "Q16"
-			(at 277.495 230.505 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "DTC123J"
-			(at 277.495 233.045 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Footprints:TRANS_SOT-416_EMT3-EMT3F_ROHM"
-			(at 284.48 237.49 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Datasheet" ""
-			(at 284.48 237.49 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Description" "Digital NPN Transistor, 2k2/47k, SOT-23"
-			(at 284.48 237.49 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "DTC123JETL"
-			(at 284.48 237.49 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Rohm"
-			(at 284.48 237.49 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "5886c56e-c089-4d90-bf20-ed3dff49a219")
-		)
-		(pin "2"
-			(uuid "f57afb3b-e43c-4e7c-8d5d-3d51cec05e2e")
-		)
-		(pin "3"
-			(uuid "5197b7a7-764a-489e-8abc-392e8bfc6bd3")
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "Q16")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(wire
-		(pts
-			(xy 278.13 237.49) (xy 275.59 237.49)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "675cd4b2-9c97-4bce-89c2-972a06973b0c")
-	)
-	(label "ARM_TRIP"
-		(at 275.59 237.49 180)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right bottom)
-		)
-		(uuid "0fd403de-c293-4a53-886b-67390cc66319")
-	)
-	(wire
-		(pts
-			(xy 287.02 232.41) (xy 287.02 229.87)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "86e73347-d946-4a1a-a0fc-c5ed285c926b")
-	)
-	(label "ARM_FET_GATE"
-		(at 287.02 229.87 90)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "7f687727-bc7b-4855-9597-8477c33f0699")
-	)
-	(symbol
 		(lib_id "power:GND")
-		(at 287.02 242.57 0)
+		(at 231.14 104.14 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -11404,9 +11054,9 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(uuid "62fe9467-5c5b-4f4d-9466-a7f092d6136e")
-		(property "Reference" "#PWR9169"
-			(at 287.02 248.92 0)
+		(uuid "99606e8f-795b-42d8-856d-05e755fed938")
+		(property "Reference" "#PWR9174"
+			(at 231.14 110.49 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11417,17 +11067,18 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 287.02 247.65 0)
+			(at 235.585 107.315 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
+				(justify right)
 			)
 		)
 		(property "Footprint" ""
-			(at 288.925 200.66 0)
+			(at 231.14 104.14 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11438,7 +11089,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 288.925 200.66 0)
+			(at 231.14 104.14 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11449,7 +11100,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 288.925 200.66 0)
+			(at 231.14 104.14 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -11460,25 +11111,173 @@
 			)
 		)
 		(pin "1"
-			(uuid "f4e75c5a-c05c-4d28-9afd-55be09204e35")
+			(uuid "ef8811ef-f693-494f-ac3e-840c4ecb6a57")
 		)
 		(instances
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
-					(reference "#PWR9169")
+					(reference "#PWR9174")
 					(unit 1)
 				)
 			)
 		)
 	)
-	(label "ARM_FET_GATE"
-		(at 245.745 93.98 0)
+	(symbol
+		(lib_id "power:+3V3")
+		(at 213.36 93.98 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "4dd1532c-8cdd-4e8e-9634-781b561e554f")
+		(property "Reference" "#PWR9175"
+			(at 213.36 97.79 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "+3V3"
+			(at 213.36 89.535 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 213.36 93.98 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 213.36 93.98 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+3V3\""
+			(at 213.36 93.98 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "efe02021-ffd0-40ae-83e7-a68997e3c5a5")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/ee020e52-8fb6-47c9-8c1d-1763f5da7dda"
+					(reference "#PWR9175")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(wire
+		(pts
+			(xy 231.14 93.98) (xy 245.745 93.98)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9f9d90f3-7996-433e-9af8-781b4444cf03")
+	)
+	(junction
+		(at 245.745 93.98)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "983746d5-eb52-4687-aa8e-b7b6ee9baa1f")
+	)
+	(wire
+		(pts
+			(xy 213.36 104.14) (xy 217.17 104.14)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2ddfb9be-09b6-4607-ad83-891bd976985b")
+	)
+	(wire
+		(pts
+			(xy 217.17 104.14) (xy 217.17 99.06)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1b002102-27fd-44b5-8621-8cd360d10d7d")
+	)
+	(wire
+		(pts
+			(xy 217.17 99.06) (xy 222.25 99.06)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "039c60c3-88e6-460d-b596-def7684a3efd")
+	)
+	(wire
+		(pts
+			(xy 204.47 99.06) (xy 201.93 99.06)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c84e8f7f-c7c0-4ef2-b7b9-ad5aee6fad27")
+	)
+	(global_label "INA_ALERT"
+		(shape input)
+		(at 201.93 99.06 180)
+		(fields_autoplaced yes)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
-			(justify left bottom)
+			(justify right)
 		)
-		(uuid "09f7b436-aff7-47de-a2ea-f6a94d8682d4")
+		(uuid "8f3ca920-c80e-4d01-9c20-032a7061fd0a")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 201.93 99.06 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
 	)
 	)
