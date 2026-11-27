@@ -464,8 +464,9 @@ TEST_F(ServoControlTest, ANeutralSettleCompletesOnceServiced) {
     // beginNeutralSettle() is also reached from the SERVO_CONFIG trim preview
     // and SERVO_TEST_STOP -- so a settle begun in another state was never
     // serviced and the fins stayed 6 deg past neutral, energised, for the rest
-    // of the session. That half is fixed in main.cpp (the service call is now
-    // unconditional); this pins the contract it relies on.
+    // of the session. That half is fixed in main.cpp: the service call runs on
+    // every pass, and since #1770 whatever servo_en says (it was still gated
+    // on servo_enabled before); this pins the contract it relies on.
     ASSERT_TRUE(servo.setFinCalibration(-45.0f, 45.0f));
     servo.beginNeutralSettle(0);
     ASSERT_TRUE(servo.isNeutralSettling());

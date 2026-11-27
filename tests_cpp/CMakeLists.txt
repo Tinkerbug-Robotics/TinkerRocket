@@ -78,6 +78,24 @@ target_include_directories(test_fin_eject_policy PRIVATE
 target_link_libraries(test_fin_eject_policy GTest::gtest_main)
 gtest_discover_tests(test_fin_eject_policy)
 
+# ---------- test_servo_pad_policy ----------
+# #1770: with servo control off a servo test's stop still settles to neutral
+# and relaxes, and the #363 failsafe stows (flight_computer/main/
+# servo_pad_policy.h); a pad session and flight with the real TR_ServoControl.
+add_executable(test_servo_pad_policy test_servo_pad_policy.cpp
+    ${LIB_DIR}/TR_ServoControl_ledc_mult/TR_ServoControl_ledc_mult.cpp
+    ${LIB_DIR}/TR_PID/TR_PID.cpp
+)
+target_include_directories(test_servo_pad_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/TR_ServoControl_ledc_mult
+    ${LIB_DIR}/TR_PID
+    ${LIB_DIR}/../projects/flight_computer/main   # servo_pad_policy.h only
+)
+target_link_libraries(test_servo_pad_policy GTest::gtest_main)
+gtest_discover_tests(test_servo_pad_policy)
+
 # ---------- test_roll_path_parity ----------
 # The FC mixes roll-only control in two places — the ground test via
 # TR_ControlMixer, the flight via TR_ServoControl — so this links both and

@@ -82,8 +82,9 @@ fun ServoTestScreen(session: DeviceSession, profiles: RocketProfileStore?, onBac
     // Keyed on session, not Unit, so the hook re-arms if the session identity
     // changes underneath the screen (OfflineMapsScreen keys the same way).
     // No state gate: SERVO_TEST_STOP has no state or session precondition in
-    // firmware -- it clears the flag, stows, and arms the pad wake -- so
-    // sending it when nothing is running is inert.
+    // firmware -- it clears the flag and, while a test runs or on the pad,
+    // stows and arms the pad wake (#1770) -- so sending it when nothing is
+    // running is harmless.
     DisposableEffect(session) {
         onDispose { session.sendBareCommand(BleCommandId.SERVO_TEST_STOP) }
     }
