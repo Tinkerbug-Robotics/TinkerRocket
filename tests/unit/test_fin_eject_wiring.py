@@ -284,9 +284,10 @@ def test_the_state_is_reset_at_launch_a_sims_reset_and_a_restore_and_nowhere_els
 
 
 def test_landed_never_redrives_fins_the_eject_cut():
+    # #1770 moved the rule into ServoPadPolicy::relaxAtLanding (host-tested there): the cut relaxes.
     src = code(read())
-    assert "if (config::SERVO_RELAX_ON_PAD || FinEjectPolicy::cut(fin_eject)) servo_control.idle(); " \
-           "else servo_control.stowControl();" in src
+    assert ("if (ServoPadPolicy::relaxAtLanding(servo_enabled, config::SERVO_RELAX_ON_PAD, "
+            "FinEjectPolicy::cut(fin_eject))) servo_control.idle(); else servo_control.stowControl();") in src
 
 
 def test_no_preprocessor_branch_keeps_it_out_of_a_build():

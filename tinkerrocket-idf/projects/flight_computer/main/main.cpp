@@ -117,6 +117,7 @@
 #include "nav_start_policy.h"     // #1762: the start without GNSS on every receiver, and a late fix's take-over (host-tested)
 #include "gnss_fix_policy.h"      // #1763: only a record with a usable fix is new GPS for the apogee and landing votes (host-tested)
 #include "fin_eject_policy.h"     // #1768: once the eject occurs the fins' pulses and rail are cut for the flight (host-tested)
+#include "servo_pad_policy.h"     // #1770: when the servos relax, with servo control on or off (host-tested)
 #if TR_RAW_NAV_SDR
 #include "sdr_nav_start_policy.h" // the board's boot check, and its names for the start rule (host-tested)
 #endif
@@ -13017,7 +13018,14 @@ static void loop_fc()
             else if (out_pending_command == SERVO_CTRL_DISABLE)
             {
                 servo_enabled = false;
+                // #1770: the boot sweep is serviced only with servo control on,
+                // so a disable mid-sweep left it running forever -- and the
+                // pad, which now relaxes servo-off fins, never relaxes while it
+                // runs.  Then stow, driven through the wake window before that
+                // relax, so the fins reach neutral first.
+                servo_control.cancelWiggle();
                 servo_control.stowControl();
+                servo_pad_wake_until_ms = now_ms + config::SERVO_PAD_TRIM_WAKE_MS;
                 prefs.begin("rocket", false);
                 prefs.putBool("servo_en", false);
                 prefs.end();
@@ -13276,7 +13284,12 @@ static void loop_fc()
                     // operator can enter cal from a live ground test and the
                     // stow below is overwritten on the very next tick, while
                     // the tumble is sampled against moving fins.  Force them
-                    // off the same way the #363 failsafe does.
+                    // off the same way the #363 failsafe does.  #1770: and stow
+                    // by its rule, with servo control off too when a servo
+                    // test or replay was driving the fins -- the session's exit
+                    // to READY relaxes them, so they must reach neutral first.
+                    const bool mag_cal_stow = ServoPadPolicy::stowOnCancel(
+                        servo_enabled, servo_test_active, servo_replay_active);
                     ground_test_active  = false;
                     servo_test_active   = false;
                     servo_replay_active = false;
@@ -13319,8 +13332,9 @@ static void loop_fc()
                     //     `case MAG_CALIBRATION:` block in the state
                     //     machine below, which also skips kinematicChecks
                     //     for the same reason.
-                    if (servo_enabled) {
+                    if (mag_cal_stow) {
                         servo_control.stowControl();
+                        servo_pad_wake_until_ms = now_ms + config::SERVO_PAD_TRIM_WAKE_MS;
                         ESP_LOGI(TAG, "[MAGCAL] start: servos stowed for cal session");
                     }
                     kinematics.reset();
@@ -14428,16 +14442,33 @@ static void loop_fc()
             }
             else if (out_pending_command == SERVO_TEST_STOP)
             {
-                servo_test_active = false;
                 // #407: stow via the anti-backlash approach (overshoot then
                 // settle to the fin-cal neutral, same as boot/trim) and arm the
                 // pad wake window so the stowed neutral stays driven ~6 s.
                 // Without the wake window the next READY/PRELAUNCH tick idle()s
                 // the servos and a loaded linkage droops within a tick, so the
                 // operator never sees where the test actually stowed.
-                servo_control.beginNeutralSettle(now_ms);
-                servo_pad_wake_until_ms = now_ms + config::SERVO_PAD_TRIM_WAKE_MS;
-                ESP_LOGI(TAG, "[SERVO TEST] Stopped - servos stowed (anti-backlash), wake armed");
+                // #1770: the settle's service now runs on every pass whatever
+                // servo_en says (below), so a stopped test reaches neutral, and
+                // the pad relaxes it once the window ends -- with servo control
+                // off too, where this settle used to be left 6 deg past neutral,
+                // powered, through the flight. A stop settles while a test runs
+                // or on the pad, as before (which also brings back fins a reboot
+                // mid-test left relaxed at the test's angles); off the pad with
+                // no test running it drives nothing, since LANDED would never
+                // relax the servos again (ServoPadPolicy::stopSettles).
+                const bool on_pad = rocket_state == READY || rocket_state == PRELAUNCH;
+                if (ServoPadPolicy::stopSettles(servo_test_active, on_pad))
+                {
+                    servo_control.beginNeutralSettle(now_ms);
+                    servo_pad_wake_until_ms = now_ms + config::SERVO_PAD_TRIM_WAKE_MS;
+                    ESP_LOGI(TAG, "[SERVO TEST] Stopped - servos stowed (anti-backlash), wake armed");
+                }
+                else
+                {
+                    ESP_LOGI(TAG, "[SERVO TEST] Stop off the pad with no test running - nothing to stow");
+                }
+                servo_test_active = false;
             }
             else if (out_pending_command == ROLL_PROFILE_PENDING)
             {
@@ -14918,7 +14949,11 @@ static void loop_fc()
                 servo_replay_active = false;
                 servo_control.stowControl();
                 servo_control.resetPID();
-                ESP_LOGI(TAG, "[SERVO REPLAY] Stopped - servos stowed");
+                // #1770: keep the stow driven long enough to reach neutral
+                // before the pad relaxes it, which it now does with servo
+                // control off too.
+                servo_pad_wake_until_ms = now_ms + config::SERVO_PAD_TRIM_WAKE_MS;
+                ESP_LOGI(TAG, "[SERVO REPLAY] Stopped - servos stowed, wake armed");
             }
             else if (out_pending_command == RECOVERY_END_PENDING)
             {
@@ -15667,10 +15702,23 @@ static void loop_fc()
         {
             ESP_LOGW(TAG, "[SAFETY] Launch detected with a test mode active -- "
                           "clearing test mode so flight logic runs (#363)");
+            // #1770: stow with servo control off too when a servo test or
+            // replay was driving the fins -- the flight would otherwise keep
+            // their last angles (ServoPadPolicy::stowOnCancel).  The wake
+            // window keeps this pass's PRELAUNCH relax (servo control off, or
+            // the pad relax) from cutting the stow before the fins reach
+            // neutral; INFLIGHT never relaxes them, so they hold neutral until
+            // the eject (#1768).
+            const bool stow = ServoPadPolicy::stowOnCancel(servo_enabled, servo_test_active,
+                                                           servo_replay_active);
             ground_test_active  = false;
             servo_test_active   = false;
             servo_replay_active = false;
-            if (servo_enabled) servo_control.stowControl();
+            if (stow)
+            {
+                servo_control.stowControl();
+                servo_pad_wake_until_ms = now_ms + config::SERVO_PAD_TRIM_WAKE_MS;
+            }
         }
 
         // #1121: the same failsafe, for the fourth mode that suppresses the
@@ -15844,9 +15892,14 @@ static void loop_fc()
         // of which is confined to those two states — so a settle started
         // elsewhere had no path to completion, and the fins stayed 6 degrees
         // past neutral and ENERGISED for the rest of the session.  The
-        // component now also carries its own deadline, so a missed hold window
-        // still finishes rather than latching the overshoot.
-        if (servo_enabled) servo_control.serviceNeutralSettle(now_ms);
+        // component has no deadline of its own (TR_ServoControl deliberately
+        // leaves completion to this call), so this is the only way back.
+        // #1770: whatever servo_en says.  The servo test drives the servos
+        // with servo control off too, and this call was gated on it, so a
+        // test's stop left all four fins 6 deg past neutral, powered, through
+        // the flight.  On a board with no servo pins begin() never ran and
+        // every pulse write returns early.
+        servo_control.serviceNeutralSettle(now_ms);
 
         switch (rocket_state)
         {
@@ -15947,11 +16000,12 @@ static void loop_fc()
                 // we wait for GNSS/launch.  Re-asserted each tick (idempotent);
                 // PWM resumes automatically when INFLIGHT first commands a pulse.
                 // Held off during the pad-trim wake window (#345 follow-up) so a
-                // just-applied trim stays driven long enough to see.
-                if (servo_enabled && config::SERVO_RELAX_ON_PAD &&
-                    !servo_control.isWiggling() &&
-                    !servo_control.isNeutralSettling() &&
-                    (int32_t)(now_ms - servo_pad_wake_until_ms) >= 0)
+                // just-applied trim stays driven long enough to see.  #1770:
+                // with servo control off too, whatever the pad relax says.
+                if (ServoPadPolicy::relaxOnPad(servo_enabled, config::SERVO_RELAX_ON_PAD,
+                                               servo_control.isWiggling(),
+                                               servo_control.isNeutralSettling(),
+                                               now_ms, servo_pad_wake_until_ms))
                     servo_control.idle();
 
                 // #1137 item 12: the "held a fix for 3 s" clause needs a fix
@@ -16029,10 +16083,11 @@ static void loop_fc()
                 // re-drives (and so re-energises) the servos the instant
                 // launch_flag flips below.  Held off during the pad-trim wake
                 // window (#345 follow-up) so a just-applied trim stays visible.
-                if (servo_enabled && config::SERVO_RELAX_ON_PAD &&
-                    !servo_control.isWiggling() &&
-                    !servo_control.isNeutralSettling() &&
-                    (int32_t)(now_ms - servo_pad_wake_until_ms) >= 0)
+                // #1770: with servo control off too, as in READY.
+                if (ServoPadPolicy::relaxOnPad(servo_enabled, config::SERVO_RELAX_ON_PAD,
+                                               servo_control.isWiggling(),
+                                               servo_control.isNeutralSettling(),
+                                               now_ms, servo_pad_wake_until_ms))
                     servo_control.idle();
 
                 if (kinematics.launch_flag)
@@ -16640,18 +16695,18 @@ static void loop_fc()
                                  (unsigned long)launch_time_millis);
                     }
                     clearFlightSnapshot();  // prevent stale recovery on next boot
-                    if (servo_enabled)
-                    {
-                        // Relax post-flight to stop the idle holding current
-                        // (the MOSFET-less interim of the pad relax); otherwise
-                        // hold center as before.  #1768: never re-drive fins
-                        // whose rail the eject cut (their outputs are locked,
-                        // so a stow would write nothing anyway).
-                        if (config::SERVO_RELAX_ON_PAD || FinEjectPolicy::cut(fin_eject))
-                            servo_control.idle();
-                        else
-                            servo_control.stowControl();
-                    }
+                    // Relax post-flight to stop the idle holding current (the
+                    // MOSFET-less interim of the pad relax); otherwise hold
+                    // center as before.  #1768: never re-drive fins whose rail
+                    // the eject cut (their outputs are locked, so a stow would
+                    // write nothing anyway).  #1770: and relax with servo
+                    // control off, whose fins the #363 failsafe may have stowed
+                    // for the flight.
+                    if (ServoPadPolicy::relaxAtLanding(servo_enabled, config::SERVO_RELAX_ON_PAD,
+                                                       FinEjectPolicy::cut(fin_eject)))
+                        servo_control.idle();
+                    else
+                        servo_control.stowControl();
                     // Reset guidance state
                     guidance.reset();
                     control_mixer.reset();
