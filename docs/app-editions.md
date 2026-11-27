@@ -7,6 +7,7 @@ The iOS and Android apps build as two editions from the same `main`:
 | Who it is for | Customers | Development, bench and flight testing |
 | Boards | Tinker-Beetle only | Every board |
 | Name on the phone | Tinker Rocket | Tinker Rocket Dev |
+| Icon | The rocket-bug | The rocket-bug with a green **D** badge in the top-right corner |
 | iOS bundle ID | `TinkerbugRobotics.TinkerRocket` | `TinkerbugRobotics.TinkerRocketApp` |
 | Android application ID | `com.tinkerbug.rocket` | `com.tinkerbug.tinkerrocket` |
 | iOS build | `Store` configuration, scheme **TinkerRocketApp Store** | `Debug` / `Release`, scheme **TinkerRocketApp** |
@@ -16,6 +17,14 @@ The iOS and Android apps build as two editions from the same `main`:
 The dev edition keeps the IDs the apps always had. Every phone that already has the
 app updates in place and keeps its flights, rocket profiles and offline map tiles.
 The store edition is a new app with its own IDs.
+
+## The dev icon
+
+The dev icon is the store icon with a white disc and a green D, drawn by
+`tools/make_dev_icons.py` into `AppIconDev.appiconset` (iOS; the Debug and
+Release configurations use it, Store keeps `AppIcon`) and `app/src/dev/res/`
+(Android; the dev flavor's icons override main's, themed icon included).
+Re-run the script whenever the store icon changes.
 
 ## Both on one phone
 
