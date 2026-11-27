@@ -32,6 +32,7 @@
 #include <sensor_staleness_policy.h> // #1137 items 10/12: debounced scorecard staleness
 #include <GroundRefFreeze.h>   // #1108: hold the ground datum while the vehicle is moving
 #include <RecoveryArmGate.h>   // #1176: arming gate for a restored flight
+#include <RestoredBurnout.h>   // #1776: burnout on a restore that has none
 #include <BurnoutDetector.h>      // shared burnout detector (#197/#256)
 #include <DeploymentDetector.h>   // shared recovery-deployment detector
 #include <TR_MagCalibrator.h>
@@ -1165,6 +1166,11 @@ static bool     recovery_gate_active = false;
 // back a flight whose apogee has been erased), and this gates the two trigger
 // conditions that consume it.
 static bool     recovery_apogee_armed = false;
+// #1776: on a restored flight whose snapshot has no burnout (the flight
+// token's launch-edge frame), burnout latches from this boot's own
+// past-thrust evidence (RestoredBurnout.h), so a section hanging nose-up under
+// the drogue still reaches the apogee vote.
+static RestoredBurnout::State restored_burnout_state;
 // #1176 step 6: the operator has asked, over BLE, to end this restored flight.
 // One-shot, consumed by the INFLIGHT case. Set only after the FC itself has
 // checked that the vehicle is demonstrably still — the OC cannot make that
@@ -9719,6 +9725,12 @@ static void setup_fc()
             RecoveryArmGate::reset(recovery_arm_state, now_ms);
             recovery_gate_active  = true;
             recovery_apogee_armed = false;
+            // #1776: and the restored-burnout evidence, from this boot
+            RestoredBurnout::reset(restored_burnout_state);
+            if (!burnout_detected)
+                ESP_LOGW(TAG, "[RECOVERY] the snapshot has no burnout: it latches on the live "
+                              "detector, or on this boot's evidence of being past thrust once the "
+                              "gate opens (#1776)");
 
             // Owner's decision 4: a boot that came up believing a flight is in
             // progress must be UNMISTAKABLE at the prep table, because with a
@@ -15695,6 +15707,28 @@ static void loop_fc()
                                           "flight; deployment channels never "
                                           "armed.");
                         }
+                    }
+                    // #1776: a restore whose snapshot has no burnout (the
+                    // flight token's launch-edge frame, #1717) latches it once
+                    // the gate is Open and this boot's own sensors show the
+                    // vehicle past thrust: a held barometric descent or free
+                    // fall, with the specific force held under 2 g.  Without
+                    // it, a section hanging nose-up under the drogue reads
+                    // +1 g on its axis, the live detector below never
+                    // latches, and neither the apogee vote nor (with a healthy
+                    // IMU) the barometer backstop ever runs.  Latched here, the
+                    // vote reads it from the next pass, as it reads the live
+                    // detector's.
+                    const RestoredBurnout::Evidence rb =
+                        RestoredBurnout::step(restored_burnout_state, !burnout_detected,
+                                              recovery_arm_state, r);
+                    if (rb != RestoredBurnout::Evidence::None)
+                    {
+                        burnout_detected = true;
+                        burnout_time_ms  = now_ms;
+                        ESP_LOGW(TAG, "[RECOVERY] Burnout latched on this boot's evidence (%s, "
+                                      "under 2 g): the apogee vote runs (#1776)",
+                                 RestoredBurnout::evidenceName(rb));
                     }
                     // Hand the restored apogee over only once Open has
                     // persisted. Latched: a later lull must not withdraw it
