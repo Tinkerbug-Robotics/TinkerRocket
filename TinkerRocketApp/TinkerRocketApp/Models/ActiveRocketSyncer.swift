@@ -594,12 +594,13 @@ final class ActiveRocketSyncer: ObservableObject {
         device.sendImuRateConfig(profile.imuRateHz)
         device.sendGnssLogConfig(profile.gnssLogSetting)   // an out computer without cmd 79 ignores it
         device.sendAntennaOffsetConfig(profile.antennaOffset)   // and one without cmd 81 this
-        device.sendPyroConfig(channels: [
+        let pyro: [(enabled: Bool, mode: UInt8, value: Float)] = [
             (profile.pyro1Enabled, profile.pyro1TriggerMode, profile.pyro1TriggerValue),
             (profile.pyro2Enabled, profile.pyro2TriggerMode, profile.pyro2TriggerValue),
             (profile.pyro3Enabled, profile.pyro3TriggerMode, profile.pyro3TriggerValue),
             (profile.pyro4Enabled, profile.pyro4TriggerMode, profile.pyro4TriggerValue),
-        ])
+        ]
+        let pyroSent = device.sendPyroConfig(channels: pyro)
 
         syncMagCal(profile: profile, device: device)
         syncSensorCal(profile: profile, device: device)
@@ -607,6 +608,15 @@ final class ActiveRocketSyncer: ObservableObject {
         // This profile now owns this board — and it has to own it EXCLUSIVELY,
         // or the next connect resolves the tie by name instead of by choice.
         store.bind(profile.id, toUnitID: device.unitID)
+
+        // #1775: sendPyroConfig held back a pyro config the rocket would
+        // refuse (a channel left mid-edit, or one adopted from a record saved
+        // before the check). Everything else went; this says the deployment
+        // settings did not, rather than "Profile matches this rocket".
+        if !pyroSent, let ch = PyroTriggerRule.firstRefused(pyro) {
+            syncState = .failed(PyroTriggerRule.notSentText(channel: ch))
+            return
+        }
 
         // Optimistic, like the rest of the app's config writes (no per-command
         // ack on this link).  Hold "syncing" briefly so the badge is visible.

@@ -55,6 +55,7 @@ import com.tinkerbug.tinkerrocket.protocol.AntennaOffset
 import com.tinkerbug.tinkerrocket.protocol.BleCommandId
 import com.tinkerbug.tinkerrocket.protocol.Commands
 import com.tinkerbug.tinkerrocket.protocol.PyroContinuity
+import com.tinkerbug.tinkerrocket.protocol.PyroTriggerRule
 import com.tinkerbug.tinkerrocket.session.LoraAutoApply
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer
 import com.tinkerbug.tinkerrocket.session.ActiveRocketSyncer.CalAdvisory
@@ -1771,7 +1772,13 @@ private fun PyroChannelSection(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 NumField(if (isTime) "Delay" else "Altitude", display, Modifier.weight(1f)) { s ->
-                    s.toFloatOrNull()?.let { v ->
+                    // #1775: an entry that is not a finite number ("NaN"
+                    // parses) leaves the profile value as it is, as an
+                    // unparseable one always did. A finite one the rocket
+                    // would refuse is stored, so the field and the profile
+                    // agree: the range caption below turns red, and the
+                    // syncer's PYRO push sends nothing until it passes.
+                    PyroTriggerRule.entry(s)?.let { v ->
                         onValue(
                             if (isTime) v
                             else UnitFormatter.altitudeToMeters(v.toDouble(), units).toFloat(),
@@ -1788,6 +1795,16 @@ private fun PyroChannelSection(
             Caption(
                 if (isTime) "Fires this many seconds after apogee is detected."
                 else "Fires when the rocket descends through this altitude (AGL).",
+            )
+            // #1775: red, and the pyro config held back (the syncer's PYRO
+            // push), while this channel's saved trigger is one the rocket
+            // refuses: a channel switched to altitude before its value is set,
+            // or a value typed outside the range.
+            Text(
+                PyroTriggerRule.rangeText(mode, units == com.tinkerbug.tinkerrocket.session.UnitSystem.IMPERIAL),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (PyroTriggerRule.accepts(mode, value)) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.error,
             )
         }
         session?.let { PyroTestControls(it, channel, onTestFire) }

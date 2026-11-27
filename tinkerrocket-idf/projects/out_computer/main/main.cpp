@@ -109,6 +109,7 @@ static inline std::string itos(int v)
 #include <BleDownloadChunk.h>   // #1160 + nextSegment: what the download sends next, in what chunks
 #include <RocketComputerTypes.h>
 #include <RollProfileGate.h>    // #1115: shared roll-profile acceptance gate (host-tested)
+#include <PyroConfigGate.h>     // #1775: shared pyro trigger acceptance check (host-tested)
 #include <ServoConfigGate.h>    // #1141 item 3: shared servo-config acceptance gate (host-tested)
 #include <TR_INA230.h>
 #include <TR_FlightLog.h>
@@ -10259,6 +10260,16 @@ static void loadCachedPeripheralConfigFromNvs()
             cfg_pyro_trigger_mode[i]  = mode[i];
             cfg_pyro_trigger_value[i] = val[i];
         }
+        // #1775: kept as stored. The cache is the last config this OC relayed,
+        // and only the rail-off readback and the overlap warning read it; the
+        // FC flies its own copy, whose pad health bit reads BAD for a channel
+        // like this.
+        const PyroConfigVerdict nvs_verdict = pyroConfigCheck(pcfg);
+        if (nvs_verdict.rc != PYRO_CFG_OK)
+        {
+            ESP_LOGW("CFG", "NVS Pyro: channel %u fails the trigger check (%s); the FC refuses such a config",
+                     (unsigned)nvs_verdict.channel, pyroConfigRcName(nvs_verdict.rc));
+        }
     }
     prefs.end();
     ESP_LOGI("CFG", "NVS Pyro: ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f",
@@ -14283,30 +14294,48 @@ static void loop_oc()
             if (plen >= sizeof(PyroConfigData)) {
                 PyroConfigData pcfg;
                 memcpy(&pcfg, payload, sizeof(pcfg));
-                const uint8_t en[4]   = { pcfg.ch1_enabled,      pcfg.ch2_enabled,
-                                          pcfg.ch3_enabled,      pcfg.ch4_enabled };
-                const uint8_t mode[4] = { pcfg.ch1_trigger_mode, pcfg.ch2_trigger_mode,
-                                          pcfg.ch3_trigger_mode, pcfg.ch4_trigger_mode };
-                const float   val[4]  = { pcfg.ch1_trigger_value, pcfg.ch2_trigger_value,
-                                          pcfg.ch3_trigger_value, pcfg.ch4_trigger_value };
-                for (int i = 0; i < 4; ++i) {
-                    cfg_pyro_enabled[i]       = en[i];
-                    cfg_pyro_trigger_mode[i]  = mode[i];
-                    cfg_pyro_trigger_value[i] = val[i];
+                const PyroConfigVerdict verdict = pyroConfigCheck(pcfg);
+                if (verdict.rc != PYRO_CFG_OK) {
+                    // #1775: refuse it HERE, so the bad config reaches neither this
+                    // cache, this NVS nor the FC (which checks it again). REFUSE,
+                    // never clamp (PyroConfigGate.h). The iOS dashboard sheet writes
+                    // the offered value into its own cache before sending, so the
+                    // readback is re-sent now: the tiles then show what the rocket
+                    // holds, from the FC's report or this cache.
+                    ESP_LOGW("BLE", "Pyro config REFUSED (channel %u: %s), not relayed or saved: "
+                                    "ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f",
+                             (unsigned)verdict.channel, pyroConfigRcName(verdict.rc),
+                             pcfg.ch1_enabled, pcfg.ch1_trigger_mode, (double)pcfg.ch1_trigger_value,
+                             pcfg.ch2_enabled, pcfg.ch2_trigger_mode, (double)pcfg.ch2_trigger_value,
+                             pcfg.ch3_enabled, pcfg.ch3_trigger_mode, (double)pcfg.ch3_trigger_value,
+                             pcfg.ch4_enabled, pcfg.ch4_trigger_mode, (double)pcfg.ch4_trigger_value);
+                    sendPyroConfigReadback();
+                } else {
+                    const uint8_t en[4]   = { pcfg.ch1_enabled,      pcfg.ch2_enabled,
+                                              pcfg.ch3_enabled,      pcfg.ch4_enabled };
+                    const uint8_t mode[4] = { pcfg.ch1_trigger_mode, pcfg.ch2_trigger_mode,
+                                              pcfg.ch3_trigger_mode, pcfg.ch4_trigger_mode };
+                    const float   val[4]  = { pcfg.ch1_trigger_value, pcfg.ch2_trigger_value,
+                                              pcfg.ch3_trigger_value, pcfg.ch4_trigger_value };
+                    for (int i = 0; i < 4; ++i) {
+                        cfg_pyro_enabled[i]       = en[i];
+                        cfg_pyro_trigger_mode[i]  = mode[i];
+                        cfg_pyro_trigger_value[i] = val[i];
+                    }
+                    // Queue for FC via I2C
+                    setPendingCommandWithConfig(PYRO_CONFIG_PENDING, PYRO_CONFIG_MSG, &pcfg, sizeof(pcfg));
+                    // Persist to NVS
+                    Preferences prefs;
+                    prefs.begin("pyro", false);
+                    size_t written = prefs.putBytes("cfg", &pcfg, sizeof(pcfg));
+                    prefs.end();
+                    ESP_LOGI("BLE", "Pyro config: ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f (NVS wrote %u bytes)",
+                             pcfg.ch1_enabled, pcfg.ch1_trigger_mode, (double)pcfg.ch1_trigger_value,
+                             pcfg.ch2_enabled, pcfg.ch2_trigger_mode, (double)pcfg.ch2_trigger_value,
+                             pcfg.ch3_enabled, pcfg.ch3_trigger_mode, (double)pcfg.ch3_trigger_value,
+                             pcfg.ch4_enabled, pcfg.ch4_trigger_mode, (double)pcfg.ch4_trigger_value,
+                             (unsigned)written);
                 }
-                // Queue for FC via I2C
-                                setPendingCommandWithConfig(PYRO_CONFIG_PENDING, PYRO_CONFIG_MSG, &pcfg, sizeof(pcfg));
-                // Persist to NVS
-                Preferences prefs;
-                prefs.begin("pyro", false);
-                size_t written = prefs.putBytes("cfg", &pcfg, sizeof(pcfg));
-                prefs.end();
-                ESP_LOGI("BLE", "Pyro config: ch1=%u/%u/%.1f  ch2=%u/%u/%.1f  ch3=%u/%u/%.1f  ch4=%u/%u/%.1f (NVS wrote %u bytes)",
-                         pcfg.ch1_enabled, pcfg.ch1_trigger_mode, (double)pcfg.ch1_trigger_value,
-                         pcfg.ch2_enabled, pcfg.ch2_trigger_mode, (double)pcfg.ch2_trigger_value,
-                         pcfg.ch3_enabled, pcfg.ch3_trigger_mode, (double)pcfg.ch3_trigger_value,
-                         pcfg.ch4_enabled, pcfg.ch4_trigger_mode, (double)pcfg.ch4_trigger_value,
-                         (unsigned)written);
             } else {
                 ESP_LOGW("BLE", "Pyro config: payload too short (%u < %u)",
                          (unsigned)plen, (unsigned)sizeof(PyroConfigData));

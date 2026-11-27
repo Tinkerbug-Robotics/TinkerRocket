@@ -928,6 +928,67 @@ class ActiveRocketSyncerTest {
     }
 
     /**
+     * #1775: the PYRO push never sends a config the rocket would refuse. The
+     * Settings screen pushes on every toggle, so a channel switched to
+     * altitude before its value is set would send 0 m; held back, the rocket
+     * keeps what it holds, and once the value passes the config goes.
+     */
+    @Test
+    fun pyroPush_aConfigTheRocketWouldRefuseIsHeldBack() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA") }
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        val id = assertNotNull(r.store.activeId.value)
+        r.store.update(id) { it.copy(pyro3Enabled = true, pyro3TriggerMode = 1, pyro3TriggerValue = 0f) }
+        val sent = r.fw.commandFrames.size
+        r.syncer.pushGroup(ActiveRocketSyncer.ConfigGroup.PYRO)
+        runCurrent()
+        assertTrue(r.fw.commandFrames.drop(sent).none { it[0].toInt() == BleCommandId.PYRO_CONFIG })
+
+        r.store.update(id) { it.copy(pyro3TriggerValue = 150f) }
+        r.syncer.pushGroup(ActiveRocketSyncer.ConfigGroup.PYRO)
+        runCurrent()
+        assertEquals(1, r.fw.commandFrames.drop(sent).count { it[0].toInt() == BleCommandId.PYRO_CONFIG })
+    }
+
+    /**
+     * #1775: the whole-profile push with a pyro trigger the rocket would
+     * refuse sends everything else and says the deployment settings did not
+     * go, instead of Synced.
+     */
+    @Test
+    fun pushProfile_aRefusedPyroConfigIsHeldBackAndSaysSo() = runTest {
+        val r = rig { it.copy(lastUsedUnitID = "boardA") }
+        r.syncer.attach(r.session, r.store)
+        advanceTimeBy(1100)
+        runCurrent()
+
+        val id = assertNotNull(r.store.activeId.value)
+        r.store.update(id) { it.copy(pyro2Enabled = true, pyro2TriggerMode = 1, pyro2TriggerValue = 0f) }
+        val sent = r.fw.commandFrames.size
+        r.syncer.pushProfileToRocket()
+        runCurrent()
+        val frames = r.fw.commandFrames.drop(sent)
+        assertTrue(frames.none { it[0].toInt() == BleCommandId.PYRO_CONFIG })
+        assertTrue(frames.isNotEmpty(), "everything else still goes")
+        advanceTimeBy(ActiveRocketSyncer.SYNCED_DELAY_MS + 100)
+        runCurrent()
+        assertEquals(
+            ActiveRocketSyncer.SyncState.Failed(com.tinkerbug.tinkerrocket.protocol.PyroTriggerRule.notSentText(2)),
+            r.syncer.syncState.value,
+        )
+
+        r.store.update(id) { it.copy(pyro2TriggerValue = 150f) }
+        r.syncer.pushProfileToRocket()
+        advanceTimeBy(ActiveRocketSyncer.SYNCED_DELAY_MS + 100)
+        runCurrent()
+        assertEquals(1, r.fw.commandFrames.drop(sent).count { it[0].toInt() == BleCommandId.PYRO_CONFIG })
+        assertEquals(ActiveRocketSyncer.SyncState.Synced, r.syncer.syncState.value)
+    }
+
+    /**
      * Send all with the rail off: the cmd 81 carries the profile's offset
      * unchanged, so the profile still holds what the one-shot armed with, but
      * the send is the user's act.  The flight computer's boot report (its old

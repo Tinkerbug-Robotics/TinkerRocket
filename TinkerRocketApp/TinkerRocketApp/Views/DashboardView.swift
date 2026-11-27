@@ -3027,6 +3027,55 @@ struct PyroConfigSheet: View {
     @State private var enabled: Bool = false
     @State private var triggerMode: Int = 0  // 0=time, 1=altitude
     @State private var triggerValue: String = ""
+    // #1775: the trigger as it was loaded, so text left unchanged sends the
+    // stored value rather than a re-parse of its rounded display.
+    @State private var loadedMode: Int = 0
+    @State private var loadedValue: Float = 0
+    @State private var loadedText: String = ""
+
+    /// #1775: what Save would send for the value, nil when it cannot be sent.
+    private var pendingValue: Float? {
+        PyroTriggerRule.valueToSend(text: triggerValue, mode: UInt8(clamping: triggerMode),
+                                    unitSystem: unitSystem, loadedText: loadedText,
+                                    loadedMode: UInt8(clamping: loadedMode),
+                                    loadedValue: loadedValue)
+    }
+
+    /// #1775: another enabled channel the rocket holds with a trigger it
+    /// refuses (a config saved before the check). Save sends all four, and the
+    /// rocket refuses the whole frame, so that one must be set first.
+    private var otherRefusedChannel: Int? {
+        guard let cfg = device.rocketConfig else { return nil }
+        let held: [(enabled: Bool, mode: UInt8, value: Float)] = [
+            (cfg.pyro1Enabled, cfg.pyro1TriggerMode, cfg.pyro1TriggerValue),
+            (cfg.pyro2Enabled, cfg.pyro2TriggerMode, cfg.pyro2TriggerValue),
+            (cfg.pyro3Enabled, cfg.pyro3TriggerMode, cfg.pyro3TriggerValue),
+            (cfg.pyro4Enabled, cfg.pyro4TriggerMode, cfg.pyro4TriggerValue),
+        ]
+        return (1...4).first { ch in
+            ch != channel && PyroTriggerRule.anyRefused([held[ch - 1]])
+        }
+    }
+
+    /// #1775: Save sends only a config the rocket accepts; it would refuse any
+    /// other and keep the one it holds.
+    private var canSave: Bool {
+        if otherRefusedChannel != nil { return false }
+        guard enabled else { return true }
+        guard let v = pendingValue else { return false }
+        return PyroTriggerRule.accepts(mode: UInt8(clamping: triggerMode), value: v)
+    }
+
+    private var captionText: String {
+        if let other = otherRefusedChannel {
+            // Two such channels would each wait on the other here; Settings
+            // edits all four before it sends.
+            return "Channel \(other) holds a trigger the rocket refuses, so it would refuse this save "
+                + "too. Set channel \(other) first, or all four in Settings."
+        }
+        let range = PyroTriggerRule.rangeText(mode: UInt8(clamping: triggerMode), unitSystem: unitSystem)
+        return (enabled && pendingValue == nil) ? "Enter a number. " + range : range
+    }
 
     var body: some View {
         NavigationView {
@@ -3046,6 +3095,12 @@ struct PyroConfigSheet: View {
                         .multilineTextAlignment(.trailing)
                         .frame(width: 100)
                 }
+
+                // Always present, so the Form's rows do not change while the
+                // value field has focus; red while Save is held off.
+                Text(captionText)
+                    .font(.caption)
+                    .foregroundColor(canSave ? .secondary : .red)
             }
             .navigationTitle("Pyro Channel \(channel)")
             .navigationBarTitleDisplayMode(.inline)
@@ -3055,6 +3110,7 @@ struct PyroConfigSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { saveAndSend(); dismiss() }
+                        .disabled(!canSave)
                 }
             }
             .onAppear { loadCurrent() }
@@ -3082,6 +3138,15 @@ struct PyroConfigSheet: View {
             triggerValue = formatTriggerValue(cfg.pyro4TriggerValue, mode: triggerMode)
         default: break
         }
+        loadedMode = triggerMode
+        loadedText = triggerValue
+        switch channel {
+        case 1: loadedValue = cfg.pyro1TriggerValue
+        case 2: loadedValue = cfg.pyro2TriggerValue
+        case 3: loadedValue = cfg.pyro3TriggerValue
+        case 4: loadedValue = cfg.pyro4TriggerValue
+        default: break
+        }
     }
 
     /// Time stays in seconds; altitude is stored in meters but shown/edited
@@ -3091,14 +3156,12 @@ struct PyroConfigSheet: View {
         return String(format: "%.0f", UnitFormatter.metersToDisplay(Double(v), system: unitSystem))
     }
 
-    private func parseTriggerValue(_ s: String, mode: Int) -> Float {
-        let entered = Float(s) ?? 0
-        if mode == 0 { return entered }
-        return Float(UnitFormatter.displayToMeters(Double(entered), system: unitSystem))
-    }
-
     func saveAndSend() {
-        let val = parseTriggerValue(triggerValue, mode: triggerMode)
+        // #1775: Save is disabled unless canSave; this guards a call that
+        // bypasses the button. A disabled channel whose text does not parse
+        // keeps its stored value: it is never read, and never sent as 0.
+        guard canSave else { return }
+        let val = pendingValue ?? loadedValue
         guard var cfg = device.rocketConfig else { return }
         switch channel {
         case 1:

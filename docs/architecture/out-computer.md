@@ -193,6 +193,13 @@ session out on its own now, so a drop is no longer permanent — but still a fai
 With the rail off the queue simply holds. Connecting and configuring before power-on
 works by design — the whole sync drains in order once the FC boots.
 
+Two configs are checked here before they are queued, so a bad one never reaches the
+FC's NVS: the roll profile (#1115, `RollProfileGate.h`) and the pyro channel config
+(#1775, `PyroConfigGate.h`, command 34). A pyro config with an enabled channel that
+cannot fire when needed is refused whole. Neither the OC's cache nor its NVS takes it,
+and the pyro readback is re-sent, so the app's tiles show what the rocket holds. The FC
+checks it again on its own apply path (see the flight computer doc's Pyro section).
+
 The queue also outlives the FC itself, which is right for a sync and wrong for a
 one-shot. The serving slot advances only on polls the OC receives, so an FC reset inside
 a command's three-poll repeat window freezes the slot on that command, and the rebooted
