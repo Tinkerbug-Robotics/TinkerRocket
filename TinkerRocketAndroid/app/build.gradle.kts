@@ -65,6 +65,34 @@ android {
         buildConfigField("String", "TR_GIT_SHA", "\"$trGitSha\"")
     }
 
+    // Two editions from one codebase (docs/app-editions.md; AppEdition.kt):
+    //
+    //   dev    Every board. Keeps the applicationId every sideloaded phone
+    //          already has, so updating in place keeps its flights, profiles
+    //          and offline tiles. Named "Tinker Rocket Dev" so the two can sit
+    //          side by side on one phone.
+    //   store  The Play Store app: the Tinker-Beetle only. Its own
+    //          applicationId, so it installs beside the dev app, never over it.
+    //
+    // Both build from the same main; TR_STORE is the only difference the code
+    // sees. Each flavor runs the whole unit suite (`./gradlew test`), so the
+    // store build is compiled and tested on every PR.
+    flavorDimensions += "edition"
+    productFlavors {
+        create("dev") {
+            dimension = "edition"
+            isDefault = true
+            manifestPlaceholders["appLabel"] = "Tinker Rocket Dev"
+            buildConfigField("boolean", "TR_STORE", "false")
+        }
+        create("store") {
+            dimension = "edition"
+            applicationId = "com.tinkerbug.rocket"
+            manifestPlaceholders["appLabel"] = "Tinker Rocket"
+            buildConfigField("boolean", "TR_STORE", "true")
+        }
+    }
+
     buildFeatures {
         compose = true
         // For the Maps key constant below — AGP 9 defaults buildConfig off.
@@ -117,7 +145,7 @@ android {
             // and "revert before committing" is a step someone eventually
             // forgets. An env var does the same job with neither problem:
             //
-            //     TR_ANDROID_APP_ID_SUFFIX=.bench ./gradlew :app:assembleDebug
+            //     TR_ANDROID_APP_ID_SUFFIX=.bench ./gradlew :app:assembleDevDebug
             //
             // Empty/unset (the default, and what CI sees) leaves the applicationId
             // exactly as it was.

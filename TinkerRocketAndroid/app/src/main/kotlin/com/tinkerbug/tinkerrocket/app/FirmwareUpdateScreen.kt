@@ -89,6 +89,8 @@ fun FirmwareUpdateScreen(
             // survive a field with no signal is the last thing that should
             // evaporate on the drive there.
             FirmwareCache(java.io.File(context.filesDir, "firmware"), HttpFirmwareFetch.sha256),
+            // The store edition lists rocket images for the Beetle only (AppEdition.kt).
+            edition = currentEdition,
         )
     }
     val catalogState by catalog.state.collectAsState()

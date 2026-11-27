@@ -480,7 +480,9 @@ struct RelayRocketSectionView: View {
                     rocketFix: rocketFix,
                     trackingHealthy: trackingHealthy,
                     staleOpacity: freshness.cardOpacity,
-                    staleAgeSec: freshness.staleAgeSec(now: now)
+                    staleAgeSec: freshness.staleAgeSec(now: now),
+                    // A relayed rocket names no board: the edition decides.
+                    showsCamera: via.features.camera
                 )
                 // NOT dimmed: the controls still work on a stale rocket, and
                 // a faded button reads as disabled.
@@ -497,21 +499,24 @@ struct RelayRocketSectionView: View {
             Text("Controls")
                 .font(.headline)
 
-            Button {
-                let desired: UInt8 = remote.telemetry.camera_recording ? 0 : 1
-                via.sendRelayCommand(targetRocketID: remote.rocketID,
-                                     innerCommand: 1,
-                                     innerPayload: Data([desired]))
-            } label: {
-                HStack {
-                    Image(systemName: remote.telemetry.camera_recording ? "video.fill" : "video")
-                    Text(remote.telemetry.camera_recording ? "Stop Camera" : "Start Camera")
+            // Boards with a camera port only (AppFeatures.camera).
+            if via.features.camera {
+                Button {
+                    let desired: UInt8 = remote.telemetry.camera_recording ? 0 : 1
+                    via.sendRelayCommand(targetRocketID: remote.rocketID,
+                                         innerCommand: 1,
+                                         innerPayload: Data([desired]))
+                } label: {
+                    HStack {
+                        Image(systemName: remote.telemetry.camera_recording ? "video.fill" : "video")
+                        Text(remote.telemetry.camera_recording ? "Stop Camera" : "Start Camera")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(remote.telemetry.camera_recording ? Color.red : Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
                 }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(remote.telemetry.camera_recording ? Color.red : Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(10)
             }
 
             Button {

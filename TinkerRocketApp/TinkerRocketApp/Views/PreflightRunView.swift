@@ -208,10 +208,13 @@ struct PreflightRunView: View {
                              telemetry: device.telemetry,
                              syncState: syncer.syncState,
                              profile: profile,
-                             guidance: GuidanceStateCheck.evaluate(
-                                 profile: profile, config: device.rocketConfig,
-                                 isConnected: device.isConnected,
-                                 isBaseStation: device.isBaseStation))
+                             guidance: device.features.finControl
+                                 ? GuidanceStateCheck.evaluate(
+                                     profile: profile, config: device.rocketConfig,
+                                     isConnected: device.isConnected,
+                                     isBaseStation: device.isBaseStation)
+                                 : .notApplicable,
+                             cameraAvailable: device.features.camera)
     }
 }
 
@@ -239,10 +242,13 @@ struct PreflightAdvisoryRow: View {
                                                telemetry: device.telemetry,
                                                syncState: syncer.syncState,
                                                profile: profile,
-                                               guidance: GuidanceStateCheck.evaluate(
-                                                   profile: profile, config: device.rocketConfig,
-                                                   isConnected: device.isConnected,
-                                                   isBaseStation: device.isBaseStation))
+                                               guidance: device.features.finControl
+                                                   ? GuidanceStateCheck.evaluate(
+                                                       profile: profile, config: device.rocketConfig,
+                                                       isConnected: device.isConnected,
+                                                       isBaseStation: device.isBaseStation)
+                                                   : .notApplicable,
+                                               cameraAvailable: device.features.camera)
                 let progress = PreflightChecklist.progress(items: items,
                                                            config: preflight.config(for: profile.id),
                                                            ctx: ctx)

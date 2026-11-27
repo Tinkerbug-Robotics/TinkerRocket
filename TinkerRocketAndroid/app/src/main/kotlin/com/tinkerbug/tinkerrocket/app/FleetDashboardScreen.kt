@@ -670,7 +670,11 @@ private fun RelayRocketSection(
             // pointing at where it was last heard.
             rocketFix = subject.key?.let { fixes[it] },
         )
-        RocketStatusCards(telemetry, isBaseStation = true, dataStatus = dataStatus, dataAgeMs = ageMs)
+        RocketStatusCards(
+            telemetry, isBaseStation = true, dataStatus = dataStatus, dataAgeMs = ageMs,
+            // A relayed rocket names no board: the edition decides.
+            showsCamera = rememberFeatures(section.baseStation.session).camera,
+        )
     }
     ControlsCard(section.baseStation.session, telemetry, section, showBaseStationLog = false)
 }

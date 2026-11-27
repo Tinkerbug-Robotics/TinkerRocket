@@ -117,6 +117,10 @@ public data class FirmwareManifest(
  * would leave an operator with a board provisioned wrongly, or not at all, with
  * no way to flash anything — and the flash button still refuses a wrong
  * project, which is the case that actually matters.
+ *
+ * The one exception is the store edition, which supports the Beetle only: it
+ * never offers another board's flight or out computer image
+ * ([AppFeatures.offersFirmware]), so a customer cannot flash a Mantis build.
  */
 public object FirmwareCatalog {
 
@@ -124,10 +128,12 @@ public object FirmwareCatalog {
         manifest: FirmwareManifest,
         expectedProject: String,
         provisionedBoard: String? = null,
+        edition: AppEdition = AppEdition.DEV,
     ): List<FirmwareImage> {
         val want = provisionedBoard?.trim()?.lowercase()?.ifEmpty { null }
         return manifest.images
             .filter { it.project == expectedProject }
+            .filter { AppFeatures.offersFirmware(it, edition) }
             .sortedWith(
                 compareBy(
                     { img ->
@@ -171,9 +177,10 @@ public object FirmwareCatalog {
         manifest: FirmwareManifest,
         expectedProject: String,
         provisionedBoard: String? = null,
+        edition: AppEdition = AppEdition.DEV,
     ): FirmwareImage? {
         val want = provisionedBoard?.trim()?.lowercase()?.ifEmpty { null }
-        val candidates = forUnit(manifest, expectedProject, want)
+        val candidates = forUnit(manifest, expectedProject, want, edition)
         if (candidates.isEmpty()) return null
         val head = candidates.first()
         // head.board == null means the sort found a universal image and put it

@@ -183,6 +183,26 @@ private struct SettingsContent: View {
         case pyro = "Pyro"
     }
 
+    /// The tabs this rocket has (AppEdition.swift): no Control tab without
+    /// fin servos, no Camera tab without a camera port — the Beetle has
+    /// neither, and the store edition shows neither.
+    private func tabShown(_ t: SettingsTab) -> Bool {
+        let features = device.features
+        switch t {
+        case .control: return features.finControl
+        case .camera:  return features.camera
+        case .general, .pyro: return true
+        }
+    }
+    private var visibleTabs: [SettingsTab] { SettingsTab.allCases.filter(tabShown) }
+    /// The tab on screen. A rocket's identity arrives after the sheet opens,
+    /// so a tab picked before it can turn out to be one this board lacks:
+    /// that lands on General rather than on a tab with no button.
+    private var shownTab: SettingsTab { tabShown(tab) ? tab : .general }
+    private var shownTabBinding: Binding<SettingsTab> {
+        Binding(get: { shownTab }, set: { tab = $0 })
+    }
+
     private var currentFreqMHz: Float { device.rocketConfig?.loraFreqMHz ?? 915.0 }
 
     /// What this sheet may offer right now (SettingsAccess.swift has the rule
@@ -620,13 +640,13 @@ private struct SettingsContent: View {
     @ViewBuilder
     private var rocketSettingsSections: some View {
         Section {
-            Picker("Group", selection: $tab) {
-                ForEach(SettingsTab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            Picker("Group", selection: shownTabBinding) {
+                ForEach(visibleTabs, id: \.self) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
         }
 
-        switch tab {
+        switch shownTab {
         case .control:  controlSections
         case .camera:   cameraSections
         case .pyro:     pyroSections

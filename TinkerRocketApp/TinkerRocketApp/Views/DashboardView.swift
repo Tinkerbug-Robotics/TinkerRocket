@@ -947,6 +947,13 @@ struct ConnectedDashboardView: View {
                     .opacity(staleOpacity)
             }
 
+            // Store edition (AppEdition.swift): it supports the Beetle only.
+            // Anything else still connects and shows its telemetry, but its
+            // board-specific screens are hidden, so say why.
+            if !device.features.boardSupported {
+                UnsupportedBoardBannerView()
+            }
+
             // #393: gate on the rocket's REPORTED sim state (fs bit 8) OR the
             // local launch latch.  The latch alone dies on BLE reconnect
             // (BLEDevice is recreated), which made the Stop-sim control vanish
@@ -995,7 +1002,8 @@ struct ConnectedDashboardView: View {
                 showRocketViews: showRocketViews,
                 // On SYNCING (searching, no rocket data yet) keep the BS-only
                 // battery so the operator still has a live indicator.
-                showBSOnlyBattery: device.isBaseStation && dataStatus == .syncing
+                showBSOnlyBattery: device.isBaseStation && dataStatus == .syncing,
+                showsCamera: device.features.camera
             )
 
             if !device.isBaseStation {
@@ -1116,6 +1124,9 @@ struct RocketTelemetryCards: View {
     /// BS link that is syncing: show the BS-only battery so the operator keeps
     /// a live indicator before any rocket data arrives.
     var showBSOnlyBattery: Bool = false
+    /// Whether the rocket's board has a camera port (AppFeatures.camera): the
+    /// Status card's Camera badge goes when it has none.
+    var showsCamera: Bool = true
 
     var body: some View {
         Group {
@@ -1188,7 +1199,8 @@ struct RocketTelemetryCards: View {
                         .opacity(staleOpacity)
                 }
 
-                StatusFlagsView(telemetry: telemetry, isBaseStation: isBaseStation)
+                StatusFlagsView(telemetry: telemetry, isBaseStation: isBaseStation,
+                                showsCamera: showsCamera)
                     .opacity(showRocketViews ? staleOpacity : 1.0)
 
                 // Flight-event flag chips — Android → iOS back-port
@@ -1764,6 +1776,30 @@ struct GnssAbsentBannerView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(Color.orange.opacity(0.5), lineWidth: 1)
         )
+    }
+}
+
+/// Store edition only: the connected rocket is not a Beetle. It still
+/// connects and shows its telemetry; its board-specific screens are hidden.
+struct UnsupportedBoardBannerView: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.orange)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Flight computer not supported")
+                    .font(.subheadline.weight(.semibold))
+                Text("This version of Tinker Rocket supports the Tinker-Beetle. "
+                     + "This rocket's flight computer is a different board, so its "
+                     + "settings and tools for that board are not shown.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12))
+        .cornerRadius(10)
     }
 }
 
@@ -2433,6 +2469,8 @@ struct FlightEventFlagsView: View {
 struct StatusFlagsView: View {
     let telemetry: TelemetryData
     var isBaseStation: Bool = false
+    /// No Camera badge for a board without a camera port (AppFeatures.camera).
+    var showsCamera: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -2440,10 +2478,12 @@ struct StatusFlagsView: View {
                 .font(.headline)
 
             HStack(spacing: 20) {
-                StatusBadge(
-                    label: "Camera",
-                    active: telemetry.camera_recording
-                )
+                if showsCamera {
+                    StatusBadge(
+                        label: "Camera",
+                        active: telemetry.camera_recording
+                    )
+                }
                 StatusBadge(
                     label: isBaseStation ? "Rocket Log" : "Logging",
                     active: telemetry.rocketLoggingActive
@@ -3117,42 +3157,45 @@ struct ControlsView: View {
             Text("Controls")
                 .font(.headline)
 
-            Button(action: {
-                // #390: on a BS link, target the focused rocket explicitly
-                // (cmd 50 relay) with the desired state computed from ITS
-                // telemetry — the legacy BS camera toggle broadcast to every
-                // rocket in range and keyed its on/off decision off whichever
-                // rocket was heard last.
-                if device.isBaseStation, let rid = device.focusRocketID {
-                    let desired: UInt8 = device.telemetry.camera_recording ? 0 : 1
-                    device.sendRelayCommand(targetRocketID: rid,
-                                            innerCommand: 1,
-                                            innerPayload: Data([desired]))
-                } else {
-                    // Direct link: send the desired state too.  A bare toggle
-                    // inverts whenever the app and the OC disagree about the
-                    // current state (a "start" tap stopping the camera —
-                    // bench 2026-08-16); firmware still accepts the bare form.
-                    let desired: UInt8 = device.telemetry.camera_recording ? 0 : 1
-                    device.sendRawCommand(1, payload: Data([desired]))
+            // Boards with a camera port only (AppFeatures.camera).
+            if device.features.camera {
+                Button(action: {
+                    // #390: on a BS link, target the focused rocket explicitly
+                    // (cmd 50 relay) with the desired state computed from ITS
+                    // telemetry — the legacy BS camera toggle broadcast to every
+                    // rocket in range and keyed its on/off decision off whichever
+                    // rocket was heard last.
+                    if device.isBaseStation, let rid = device.focusRocketID {
+                        let desired: UInt8 = device.telemetry.camera_recording ? 0 : 1
+                        device.sendRelayCommand(targetRocketID: rid,
+                                                innerCommand: 1,
+                                                innerPayload: Data([desired]))
+                    } else {
+                        // Direct link: send the desired state too.  A bare toggle
+                        // inverts whenever the app and the OC disagree about the
+                        // current state (a "start" tap stopping the camera —
+                        // bench 2026-08-16); firmware still accepts the bare form.
+                        let desired: UInt8 = device.telemetry.camera_recording ? 0 : 1
+                        device.sendRawCommand(1, payload: Data([desired]))
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: device.telemetry.camera_recording ? "video.fill" : "video")
+                        Text(device.telemetry.camera_recording ? "Stop Camera" : "Start Camera")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(device.telemetry.camera_recording ? Color.red : Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
                 }
-            }) {
-                HStack {
-                    Image(systemName: device.telemetry.camera_recording ? "video.fill" : "video")
-                    Text(device.telemetry.camera_recording ? "Stop Camera" : "Start Camera")
-                }
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(device.telemetry.camera_recording ? Color.red : Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(10)
+                // #1089: on a base-station link with nothing focused, a bare cmd 1
+                // makes the BS recompute the target from its own guessed state and
+                // broadcast the toggle to every rocket in range. Disable it, the
+                // same guard the rocket-log button below already carries. Android
+                // greys both.
+                .disabled(device.isBaseStation && device.focusRocketID == nil)
             }
-            // #1089: on a base-station link with nothing focused, a bare cmd 1
-            // makes the BS recompute the target from its own guessed state and
-            // broadcast the toggle to every rocket in range. Disable it, the
-            // same guard the rocket-log button below already carries. Android
-            // greys both.
-            .disabled(device.isBaseStation && device.focusRocketID == nil)
 
             // Rocket flash recording and the BS CSV are separate controls
             // (phone-tested): the rocket starts NOT logging while the BS
@@ -3283,8 +3326,10 @@ struct TestingControlsView: View {
 
                 // Ground Test button — direct links only (#390): the BS has
                 // no dispatch for cmds 15/16, so on a relay link this was a
-                // dead button that silently dropped the tap.
-                if !device.isBaseStation {
+                // dead button that silently dropped the tap. It drives the
+                // fins from live sensors, so only where there are fin servos
+                // (AppFeatures.finControl).
+                if !device.isBaseStation && device.features.finControl {
                     Button(action: toggleGroundTest) {
                         HStack {
                             Image(systemName: device.groundTestActive ? "stop.fill" : "gyroscope")
@@ -3312,22 +3357,24 @@ struct TestingControlsView: View {
                     .padding(.horizontal, 8)
                 }
 
-                // Servo Test button
-                Button {
-                    activeSheet = .servoTest(device)
-                } label: {
-                    HStack {
-                        Image(systemName: "slider.horizontal.3")
-                        Text("Servo Test")
+                // Servo Test button — fin boards only (AppFeatures.finControl).
+                if device.features.finControl {
+                    Button {
+                        activeSheet = .servoTest(device)
+                    } label: {
+                        HStack {
+                            Image(systemName: "slider.horizontal.3")
+                            Text("Servo Test")
+                        }
+                        .font(.system(.body, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .foregroundColor(.white)
+                        .background(canStartGroundTest ? Color.teal : Color.teal.opacity(0.4))
+                        .cornerRadius(10)
                     }
-                    .font(.system(.body, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .foregroundColor(.white)
-                    .background(canStartGroundTest ? Color.teal : Color.teal.opacity(0.4))
-                    .cornerRadius(10)
+                    .disabled(!canStartGroundTest)
                 }
-                .disabled(!canStartGroundTest)
 
                 // #150: Frequency Scan, back on this card (the #390 detail
                 // screen it briefly moved to was cut — the strip is a

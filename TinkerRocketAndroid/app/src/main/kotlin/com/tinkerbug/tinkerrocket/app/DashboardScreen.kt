@@ -233,6 +233,9 @@ private fun DeviceDashboardContent(
     val simLaunched by session.simLaunched.collectAsState()
     val onPad = telemetry.state == "READY" || telemetry.state == "PRELAUNCH"
     val groundTestActive by session.groundTestActive.collectAsState()
+    // What this rocket's board has (AppEdition.kt): a Beetle has no fins to
+    // test, and the store edition shows no fin tools at all.
+    val features = rememberFeatures(session)
     // #1061: the rocket's REPORTED sim bit OR the local launch latch. The
     // latch alone dies on a BLE reconnect (a new DeviceSession per reconnect),
     // which would make the Stop control vanish mid-sim; telemetry keeps the
@@ -376,7 +379,8 @@ private fun DeviceDashboardContent(
         // GTV Blue, 2026-11-01: the app showed station-keeping on and the
         // flight computer flew with it off.  This is the flight computer's own
         // word against the active profile (GuidanceStateCheck).
-        if (profileStore != null) {
+        // Guidance flies the fins: no line for a board without them.
+        if (profileStore != null && features.finControl) {
             val profileList by profileStore.profiles.collectAsState()
             val activeId by profileStore.activeId.collectAsState()
             GuidanceStateLine(
@@ -629,6 +633,28 @@ private fun DeviceDashboardContent(
             }
         }
 
+        // Store edition (AppEdition.kt): it supports the Beetle only. Anything
+        // else still connects and shows its telemetry, but its board-specific
+        // screens are hidden, so say why.
+        if (!features.boardSupported) {
+            com.tinkerbug.tinkerrocket.app.theme.TrCard {
+                Column {
+                    Text(
+                        "Flight computer not supported",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = tr.statusWarn,
+                    )
+                    Text(
+                        "This version of Tinker Rocket supports the Tinker-Beetle. " +
+                            "This rocket's flight computer is a different board, so its " +
+                            "settings and tools for that board are not shown.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
         // #1084: Ground Test runs the FC's closed-loop bench mix and has NO
         // idle or link-loss timeout — its only failsafe is launch detection —
         // so the banner carrying Stop is part of the feature, not decoration.
@@ -659,7 +685,7 @@ private fun DeviceDashboardContent(
             }
         }
 
-        RocketStatusCards(telemetry, session.isBaseStation, dataStatus, dataAgeMs)
+        RocketStatusCards(telemetry, session.isBaseStation, dataStatus, dataAgeMs, features.camera)
 
         // Pyro tiles: iOS PyroChannelsView twin (2x2 grid).  Badge ladder per
         // tile:
@@ -865,21 +891,27 @@ private fun DeviceDashboardContent(
                         // iOS's third term, !groundTestActive, has no Android equivalent
                         // yet -- the Ground Test screen is not ported -- so it is
                         // vacuously satisfied rather than omitted by oversight.
-                        com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                            "Servo test", tr.servoTest, { onTool("servo") },
-                            enabled = onPad && !simLaunched && !groundTestActive,
-                        )
+                        // Servo Test and Ground Test move the fins: boards with
+                        // fin servos only (AppFeatures.finControl).
+                        if (features.finControl) {
+                            com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
+                                "Servo test", tr.servoTest, { onTool("servo") },
+                                enabled = onPad && !simLaunched && !groundTestActive,
+                            )
+                        }
                         // #1084: cmds 15/16, direct links only — the base
                         // station has no dispatch for them, so on a relay link
                         // this would be a tap that goes nowhere (iOS hides it
                         // there for the same reason). Same three gates as iOS's
                         // canStartGroundTest.
-                        com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
-                            if (groundTestActive) "Stop test" else "Ground test",
-                            if (groundTestActive) tr.statusWarn else tr.servoTest,
-                            { session.setGroundTestActive(!groundTestActive) },
-                            enabled = groundTestActive || (onPad && !simLaunched),
-                        )
+                        if (features.finControl) {
+                            com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
+                                if (groundTestActive) "Stop test" else "Ground test",
+                                if (groundTestActive) tr.statusWarn else tr.servoTest,
+                                { session.setGroundTestActive(!groundTestActive) },
+                                enabled = groundTestActive || (onPad && !simLaunched),
+                            )
+                        }
                         com.tinkerbug.tinkerrocket.app.theme.TrCompactButton(
                             "Mag cal", tr.myDevices, { onTool("magcal") })
                         // #1059: the on-pad gyro + high-g calibration, beside the
@@ -1025,12 +1057,14 @@ internal fun RocketStatusCards(
     isBaseStation: Boolean,
     dataStatus: TelemetryData.DataStatus,
     dataAgeMs: Long,
+    /** Whether the rocket's board has a camera port (AppFeatures.camera). */
+    showsCamera: Boolean = true,
 ) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         // Status card (iOS StatusFlagsView port): camera + logging badges,
         // active file, BS silence-close countdown.  Before the flag chips —
         // the iOS order (StatusFlagsView, then FlightEventFlagsView).
-        StatusCard(telemetry, isBaseStation)
+        StatusCard(telemetry, isBaseStation, showsCamera)
 
         // Flight event flags.  No LOG chip — the Status card above owns
         // logging (re-converged with iOS 2026-07-30).
@@ -1485,13 +1519,13 @@ private fun StatusBadge(label: String, active: Boolean) {
  * which is why the LOG chip left when this card arrived.
  */
 @Composable
-private fun StatusCard(telemetry: TelemetryData, isBaseStation: Boolean) {
+private fun StatusCard(telemetry: TelemetryData, isBaseStation: Boolean, showsCamera: Boolean = true) {
     val tr = com.tinkerbug.tinkerrocket.app.theme.TrTheme.colors
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Status", style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                StatusBadge("Camera", telemetry.cameraRecording)
+                if (showsCamera) StatusBadge("Camera", telemetry.cameraRecording)
                 StatusBadge(
                     if (isBaseStation) "Rocket log" else "Logging",
                     telemetry.rocketLoggingActive,
@@ -1585,6 +1619,9 @@ internal fun ControlsCard(
     /** The base station's own SD log toggle; off in a relayed rocket's section. */
     showBaseStationLog: Boolean = session.isBaseStation,
 ) {
+    // A relayed rocket names no board, so on a base station link the edition
+    // decides (AppFeatures with a null board).
+    val showsCamera = rememberFeatures(session).camera
     val focus by session.focusRocketId.collectAsState()
     // #1650: the section's own rocket — bare on a direct link, the cmd-50
     // envelope to ITS rocket id on a relay.  Without a section (a base
@@ -1613,15 +1650,18 @@ internal fun ControlsCard(
                 // app and the OC disagree about the current state (a "start"
                 // tap stopping the camera — bench 2026-08-16).
                 val cam = telemetry.cameraRecording
-                Button(
-                    onClick = {
-                        send?.invoke(
-                            com.tinkerbug.tinkerrocket.protocol.Commands.cameraToggleWithState(!cam),
-                        )
-                    },
-                    enabled = send != null,
-                    modifier = Modifier.weight(1f),
-                ) { Text(if (cam) "Stop camera" else "Start camera") }
+                // Boards with a camera port only (AppFeatures.camera).
+                if (showsCamera) {
+                    Button(
+                        onClick = {
+                            send?.invoke(
+                                com.tinkerbug.tinkerrocket.protocol.Commands.cameraToggleWithState(!cam),
+                            )
+                        },
+                        enabled = send != null,
+                        modifier = Modifier.weight(1f),
+                    ) { Text(if (cam) "Stop camera" else "Start camera") }
+                }
 
                 val log = telemetry.rocketLoggingActive
                 Button(

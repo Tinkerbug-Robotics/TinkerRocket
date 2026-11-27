@@ -305,6 +305,22 @@ class PreflightTest {
         )
     }
 
+    /**
+     * A Beetle has no camera port, and a profile defaults to RunCam: the step
+     * must stand aside for the board rather than wait on "Not recording".
+     */
+    @Test
+    fun cameraRecording_standsAsideOnABoardWithoutACamera() {
+        val withCam = RocketProfile.makeDefault("cam", nowMs = 0)   // cameraType 2 = RunCam
+        assertEquals(
+            PreflightAutoStatus.NotApplicable("No camera on this board"),
+            PreflightChecklist.autoStatus(
+                PreflightItemKind.CAMERA_RECORDING,
+                connectedCtx(fs = 0, profile = withCam).copy(cameraAvailable = false),
+            ),
+        )
+    }
+
     @Test
     fun loggingActive_readsFsBit() {
         assertEquals(

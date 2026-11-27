@@ -49,10 +49,13 @@ struct ActiveRocketHeader: View {
                 // The keyline is the profile; this is the flight computer's
                 // own word on guidance, when the two disagree or it has not
                 // given one (GuidanceStateCheck).
-                GuidanceStateLine(check: GuidanceStateCheck.evaluate(
-                    profile: p, config: device.rocketConfig,
-                    isConnected: device.isConnected,
-                    isBaseStation: device.isBaseStation))
+                // Guidance flies the fins: no line for a board without them.
+                if device.features.finControl {
+                    GuidanceStateLine(check: GuidanceStateCheck.evaluate(
+                        profile: p, config: device.rocketConfig,
+                        isConnected: device.isConnected,
+                        isBaseStation: device.isBaseStation))
+                }
             } else if !device.isBaseStation {
                 Text("Tap to pick or create a rocket.")
                     .font(.caption).foregroundColor(.secondary)
@@ -72,14 +75,23 @@ struct ActiveRocketHeader: View {
     }
 
     private func keyline(_ p: RocketProfile) -> String {
-        let mode = p.controlModeLabel
-        let cam: String = {
-            switch p.cameraType { case 1: return "GoPro"; case 2: return "RunCam"; default: return "No cam" }
-        }()
+        // The control mode and camera only where the board has fins and a
+        // camera (AppFeatures): a Beetle has neither, and a summary saying
+        // "Null Roll \u{2022} RunCam" for it would describe hardware it lacks.
+        let features = device.features
+        var parts: [String] = []
+        if features.finControl { parts.append(p.controlModeLabel) }
+        if features.camera {
+            switch p.cameraType {
+            case 1: parts.append("GoPro")
+            case 2: parts.append("RunCam")
+            default: parts.append("No cam")
+            }
+        }
         let anyPyro = p.pyro1Enabled || p.pyro2Enabled || p.pyro3Enabled || p.pyro4Enabled
-        let pyro = anyPyro ? "Pyro on" : "Pyro off"
-        let cal = p.magCal == nil ? "Uncalibrated" : "Cal saved"
-        return "\(mode) \u{2022} \(cam) \u{2022} \(pyro) \u{2022} \(cal)"
+        parts.append(anyPyro ? "Pyro on" : "Pyro off")
+        parts.append(p.magCal == nil ? "Uncalibrated" : "Cal saved")
+        return parts.joined(separator: " \u{2022} ")
     }
 }
 

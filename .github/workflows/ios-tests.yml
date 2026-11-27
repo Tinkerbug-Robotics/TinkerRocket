@@ -79,3 +79,20 @@ jobs:
             -parallel-testing-enabled NO \
             -resultBundlePath TestResults \
             | xcpretty
+
+      - name: Build the store edition
+        # The tests run the dev edition (Debug). The store edition is the
+        # Store configuration — TR_STORE, its own bundle ID, Release-style
+        # optimization — and nothing else builds it, so it would otherwise
+        # only be compiled on the day of an App Store upload
+        # (docs/app-editions.md). Simulator build, no signing needed.
+        working-directory: TinkerRocketApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project TinkerRocketApp.xcodeproj \
+            -scheme "TinkerRocketApp Store" \
+            -configuration Store \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty
