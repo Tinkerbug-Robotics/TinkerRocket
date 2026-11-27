@@ -28,6 +28,7 @@
 #include "ShadowLink.h"
 #include "fixtures/raw_meas_golden.h"
 #include "gnss/atmo.h"
+#include "../tinkerrocket-idf/projects/flight_computer/main/restore_control_policy.h"   // #1769
 
 using gnss_raw::RawGnssShadow;
 using gnss_raw::ShadowImu;
@@ -5585,3 +5586,271 @@ TEST(RawGnssShadow, AStaleReceiverInTheImuFreeDescentIsStillKeptOut)
         }
 }
 
+
+// ── Roll control after a reboot in the boost (#1769) ──
+
+namespace
+{
+
+// main.cpp's restore hold (flight_computer/main/restore_control_policy.h):
+// the fins neutral past the 500 ms settle until the filter's velocity is
+// trusted, by the EKF row's own EKF_VEL_VAR_OK.
+constexpr float kRestoreVarOk = 4.0f;          // config::EKF_VEL_VAR_OK
+constexpr double kRestorePosSigmaM = 100.0;    // config::RAW_RESTORE_POS_SIGMA_M
+constexpr double kRestoreVelSigmaMps = 20.0;   // config::RAW_RESTORE_VEL_SIGMA_MPS
+constexpr double kRestoreAttSigmaDeg = 15.0;   // config::RAW_RESTORE_ATT_SIGMA_DEG
+
+// The gain schedule's scale at a speed: TR_ServoControl::applyGainSchedule
+// with config.h's V_REF 50 and V_MIN 25, capped at 3 (measured on the real
+// controller in test_restore_control_policy.cpp).
+double scheduleScale(double v)
+{
+    const double r = 50.0 / std::max(std::fabs(v), 25.0);
+    return std::min(r * r, 3.0);
+}
+
+struct BoostRestoreCase
+{
+    double t_launch = 6.0;
+    double boost_mps2 = 40.0;       // up, for burn_s: 200 m/s at burnout
+    double burn_s = 5.0;
+    double restore_after_launch_s = 5.0;   // the reboot's restore: at burnout (the review's first case)
+    double gap_s = 3.0;             // the snapshot that old: 80 m/s against 200
+    double gnss_back_s = 4.0;       // after the restore: the receiver's velocity back (< 0: never)
+    double t_end_after_restore = 14.0;
+};
+
+struct BoostRestoreRun
+{
+    double restored_at = -1.0;
+    double release_s = -1.0;            // after the restore: the hold's release (-1: never)
+    double err_at_release = -1.0;       // |filter speed - true| there
+    double err_max_after = 0.0;         //   and the largest from then on
+    double gain_lo_after = 1e9, gain_hi_after = 0.0;   // the scheduled gain over the true speed's, from then on
+    double gain_hi_before_fix = 0.0;    // the old rule's: from the settle, on any healthy state
+    double gain_hi_before_fix_s = -1.0;
+    uint32_t baro_fused = 0;
+    double vert_trusted_s = -1.0;       // after the restore: the vertical variance alone first under the bound
+    double vd_err_max_from_6s = 0.0;    // the largest climb-rate error from 6 s after the restore on
+};
+
+// The pad to t_launch (GNSS, a barometer at the true height ten a second);
+// a boost of boost_mps2 with drag (16 m/s^2 at 200 m/s, the review's harness)
+// and GNSS lost from ignition; at restore_after_launch_s a reboot: a new
+// filter restored from the snapshot gap_s old, its height the barometer's
+// now (as main.cpp rebases it); a coast with drag; GNSS back gnss_back_s
+// after the restore. Body = NED, level, as flyCoast.
+BoostRestoreRun flyBoostRestore(const BoostRestoreCase& o, RawGnssShadow::Config cfg)
+{
+    double lat, lon, h;
+    ecef_to_geo(kGoldenRmRx, &lat, &lon, &h);
+    double r0[3];
+    geo_to_ecef(lat, lon, h, r0);
+    const double sl = std::sin(lat), cl = std::cos(lat), so = std::sin(lon), co = std::cos(lon);
+    auto nedToEcefVec = [&](const double n[3], double out[3]) {
+        const double e[3] = {n[1], n[0], -n[2]};
+        out[0] = -so * e[0] - sl * co * e[1] + cl * co * e[2];
+        out[1] = co * e[0] - sl * so * e[1] + cl * so * e[2];
+        out[2] = cl * e[1] + sl * e[2];
+    };
+    cfg.meas.troposphere = false;
+    cfg.restore_pos_sigma_m = kRestorePosSigmaM;
+    cfg.restore_vel_sigma_mps = kRestoreVelSigmaMps;
+    cfg.restore_att_sigma_deg = kRestoreAttSigmaDeg;
+    cfg.restore_seed_bias = true;
+    auto make = [&]() {
+        auto p = std::make_unique<RawGnssShadow>(cfg);
+        for (int i = 0; i < kGoldenRmEphN; ++i)
+            p->onEphemeris(kGoldenRmEph[i].bytes, static_cast<size_t>(kGoldenRmEph[i].len));
+        return p;
+    };
+    std::unique_ptr<RawGnssShadow> shp = make();
+    SynthSky sky(cfg.meas);
+    shp->onSeed(padSeed(kT0, lat, lon, h));
+    const double tow0 = goldenEpochs()[0].epoch.tow_s;
+    const double dt = 0.002, t_launch = o.t_launch, t_bo = t_launch + o.burn_s;
+    const double t_restore = t_launch + o.restore_after_launch_s;
+    const double t_back = o.gnss_back_s >= 0.0 ? t_restore + o.gnss_back_s : 1.0e9;
+    const double t_end = t_restore + o.t_end_after_restore;
+    const int gap_steps = static_cast<int>(std::lround(o.gap_s / dt));
+    double p_ned[3] = {}, v_ned[3] = {};
+    std::vector<double> hist_vd, hist_pd;   // the truth each step: the snapshot's, gap_s back
+    std::vector<TimedRawEpoch> due;
+    int next_epoch = 1;
+    BoostRestoreRun run;
+    bool released = false;
+    for (double t = dt; t <= t_end + 1e-9; t += dt)
+    {
+        double a_n[3] = {0.0, 0.0, 0.0};
+        if (t > t_launch)
+        {
+            const double drag = 16.0 * (v_ned[2] / 200.0) * (v_ned[2] / 200.0);   // against the climb: down
+            a_n[2] = (t <= t_bo ? -o.boost_mps2 : kG) + (v_ned[2] < 0.0 ? drag : -drag);
+        }
+        for (int i = 0; i < 3; ++i)
+        {
+            p_ned[i] += v_ned[i] * dt + 0.5 * a_n[i] * dt * dt;
+            v_ned[i] += a_n[i] * dt;
+        }
+        hist_vd.push_back(v_ned[2]);
+        hist_pd.push_back(p_ned[2]);
+        const int64_t t64 = kT0 + static_cast<int64_t>(std::llround(t * 1e6));
+        if (t >= t_restore && run.restored_at < 0.0)
+        {
+            // the reboot: a new filter, restored from the snapshot gap_s old
+            const size_t k = hist_vd.size() > static_cast<size_t>(gap_steps) ? hist_vd.size() - 1 - gap_steps : 0;
+            double dr[3], r[3], la, lo, hh;
+            nedToEcefVec(p_ned, dr);
+            for (int i = 0; i < 3; ++i)
+                r[i] = r0[i] + dr[i];
+            ecef_to_geo(r, &la, &lo, &hh);   // the barometer's height now (rebaseRestoreHeight)
+            ShadowSeed seed{};
+            seed.time_us = static_cast<uint32_t>(t64);
+            seed.lla[0] = la;
+            seed.lla[1] = lo;
+            seed.lla[2] = hh;
+            seed.vel_ned[2] = static_cast<float>(hist_vd[k]);
+            seed.quat[0] = 1.0f;
+            seed.restore = 1;
+            shp = make();
+            shp->onSeed(seed);
+            run.restored_at = t;
+        }
+        RawGnssShadow& sh = *shp;
+        if (std::lround(t / dt) % 50 == 25)
+            sh.onBaro(gnss_raw::ShadowBaro{static_cast<uint32_t>(t64), static_cast<float>(-p_ned[2])});
+        ShadowImu s{};
+        s.time_us = static_cast<uint32_t>(t64);
+        s.acc[2] = static_cast<float>(a_n[2] - kG);   // body = NED (level): f = a - g
+        s.flags = t < t_launch ? gnss_raw::kShadowLevel : gnss_raw::kShadowInFlight;
+        sh.onImu(s, t64);
+        if (t + 1e-9 >= next_epoch * 0.1)
+        {
+            const bool lost = t >= t_launch && t < t_back;
+            if (!lost)
+            {
+                double dr[3], r[3], v_e[3];
+                nedToEcefVec(p_ned, dr);
+                nedToEcefVec(v_ned, v_e);
+                for (int i = 0; i < 3; ++i)
+                    r[i] = r0[i] + dr[i];
+                TimedRawEpoch e;
+                e.epoch = sky.epoch(tow0 + next_epoch * 0.1, r, v_e);
+                e.mcu_us = t64;
+                e.gps_week = kGoldenWeek;
+                due.push_back(e);
+            }
+            next_epoch++;
+        }
+        while (!due.empty() && t64 - due.front().mcu_us >= 200000)
+        {
+            sh.onEpoch(due.front());
+            due.erase(due.begin());
+        }
+        if (run.restored_at < 0.0)
+            continue;
+
+        // what main.cpp reads: the published state, as RawNavAdapter answers it
+        gnss_raw::ShadowNav n{};
+        sh.navState(n);
+        bool healthy = n.running != 0;
+        for (int i = 0; i < 3; ++i)
+            healthy = healthy && std::isfinite(n.vel_ned[i]);
+        const float var_vel[3] = {n.var[3], n.var[4], n.var[5]};
+        const bool trusted = RestoreControlPolicy::velocityTrusted(healthy, var_vel, kRestoreVarOk);
+        const double since_ms = (t - run.restored_at) * 1000.0;
+        const double v_true = std::fabs(v_ned[2]);
+        const double v_filt = std::sqrt(double(n.vel_ned[0]) * n.vel_ned[0] + double(n.vel_ned[1]) * n.vel_ned[1] +
+                                        double(n.vel_ned[2]) * n.vel_ned[2]);
+        const double gain = scheduleScale(v_filt) / scheduleScale(v_true);
+        // before #1769: the settle, then the schedule on any healthy state
+        if (since_ms >= 500.0 && healthy && gain > run.gain_hi_before_fix)
+        {
+            run.gain_hi_before_fix = gain;
+            run.gain_hi_before_fix_s = t - run.restored_at;
+        }
+        if (!released && !RestoreControlPolicy::holdFins(static_cast<uint32_t>(since_ms), 500, true, trusted))
+        {
+            released = true;
+            run.release_s = t - run.restored_at;
+            run.err_at_release = std::fabs(v_filt - v_true);
+        }
+        if (run.vert_trusted_s < 0.0 && since_ms >= 500.0 && healthy && n.var[5] >= 0.0f &&
+            n.var[5] < kRestoreVarOk)
+            run.vert_trusted_s = t - run.restored_at;
+        if (t - run.restored_at >= 6.0)
+            run.vd_err_max_from_6s = std::max(run.vd_err_max_from_6s, std::fabs(double(n.vel_ned[2]) - v_ned[2]));
+        if (released && healthy)
+        {
+            run.err_max_after = std::max(run.err_max_after, std::fabs(v_filt - v_true));
+            run.gain_lo_after = std::min(run.gain_lo_after, gain);
+            run.gain_hi_after = std::max(run.gain_hi_after, gain);
+        }
+    }
+    run.baro_fused = shp->stats().baro_fused;
+    return run;
+}
+
+}  // namespace
+
+// #1769: the review's two cases, each with GNSS back 4 s after the restore:
+// a reboot at burnout, restored from a snapshot 3 s old (80 m/s against
+// 200); and one with 2 s of burn left, from a snapshot 2 s old (40 against
+// 120). Before the fix the schedule ran on the restored speed from the settle
+// on; now the fins hold neutral until the filter's velocity is trusted, and
+// from then on the gain is the true speed's. Every receiver's flight
+// safeguards.
+TEST(RawGnssShadow, TheRestoreHoldWaitsForATrustedSpeed)
+{
+    const char* names[] = {"mosaic-G5", "gnss-sdr-dev", "PX1105R"};
+    BoostRestoreCase in_burn;
+    in_burn.restore_after_launch_s = 3.0;
+    in_burn.gap_s = 2.0;
+    const BoostRestoreCase cases[] = {BoostRestoreCase{}, in_burn};
+    const char* case_names[] = {"at burnout", "2 s of burn left"};
+    for (int c = 0; c < 2; ++c)
+        for (int rx = 0; rx < 3; ++rx)
+        {
+            const BoostRestoreRun a = flyBoostRestore(cases[c], safeguarded(rx));
+            std::printf("boost restore %s, %s: before #1769 the gain up to %.1fx (%.1f s after); now held %.2f s, "
+                        "%.2f m/s off there, at most %.2f after, the gain %.3f-%.3fx\n",
+                        case_names[c], names[rx], a.gain_hi_before_fix, a.gain_hi_before_fix_s, a.release_s,
+                        a.err_at_release, a.err_max_after, a.gain_lo_after, a.gain_hi_after);
+            ASSERT_GE(a.restored_at, 0.0) << names[rx];
+            EXPECT_GT(a.gain_hi_before_fix, 3.0) << case_names[c] << ", " << names[rx];
+            ASSERT_GT(a.release_s, cases[c].gnss_back_s) << case_names[c] << ", " << names[rx]
+                                                         << ": not before GNSS is back";
+            EXPECT_LT(a.err_max_after, 3.0) << case_names[c] << ", " << names[rx];
+            EXPECT_GT(a.gain_lo_after, 0.9) << case_names[c] << ", " << names[rx];
+            EXPECT_LT(a.gain_hi_after, 1.1) << case_names[c] << ", " << names[rx];
+        }
+}
+
+// #1769: the same reboot with GNSS never back. On the barometer alone the
+// horizontal velocity stays the restore's 20 m/s unsure, and grows: the fins
+// hold neutral to the end. That is the worst-axis test's choice, not the
+// vertical's: here the barometer has the climb rate right again (under 1 m/s
+// off) well before the vertical variance falls under the bound, which it
+// does only late in the coast, and a flight that is not straight up has a
+// horizontal velocity the snapshot left as stale as its climb.
+TEST(RawGnssShadow, TheRestoreHoldHoldsOnTheBarometerAlone)
+{
+    BoostRestoreCase o;
+    o.gnss_back_s = -1.0;
+    const char* names[] = {"mosaic-G5", "gnss-sdr-dev", "PX1105R"};
+    for (int rx = 0; rx < 3; ++rx)
+    {
+        const BoostRestoreRun a = flyBoostRestore(o, safeguarded(rx));
+        std::printf("boost restore, no GNSS, %s: before #1769 the gain up to %.1fx; barometer samples fused %u; "
+                    "the climb rate within %.2f m/s from 6 s on, its variance under the bound %.2f s after; "
+                    "released %.2f s after\n",
+                    names[rx], a.gain_hi_before_fix, a.baro_fused, a.vd_err_max_from_6s, a.vert_trusted_s,
+                    a.release_s);
+        ASSERT_GE(a.restored_at, 0.0) << names[rx];
+        EXPECT_GT(a.gain_hi_before_fix, 10.0) << names[rx];
+        EXPECT_LT(a.release_s, 0.0) << names[rx];
+        // what the vertical alone would have done: right from 6 s, trusted only late in the coast (past 10 s)
+        EXPECT_LT(a.vd_err_max_from_6s, 1.0) << names[rx];
+        EXPECT_GT(a.vert_trusted_s, 10.0) << names[rx];
+    }
+}

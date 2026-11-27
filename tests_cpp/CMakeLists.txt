@@ -78,6 +78,38 @@ target_include_directories(test_fin_eject_policy PRIVATE
 target_link_libraries(test_fin_eject_policy GTest::gtest_main)
 gtest_discover_tests(test_fin_eject_policy)
 
+# ---------- test_restore_control_policy ----------
+# #1769: after an FC reboot in flight the fins hold neutral until the restored
+# filter's velocity is trusted, and angle mode stays off (flight_computer/main/
+# restore_control_policy.h); the real RawNavAdapter and GpsInsEKF after a
+# restore, and a restored flight with the real TR_ServoControl.
+add_executable(test_restore_control_policy test_restore_control_policy.cpp
+    ${LIB_DIR}/TR_ServoControl_ledc_mult/TR_ServoControl_ledc_mult.cpp
+    ${LIB_DIR}/TR_PID/TR_PID.cpp
+    ${LIB_DIR}/TR_GpsInsEKF/TR_GpsInsEKF.cpp
+    ${LIB_DIR}/TR_GeoMag/TR_GeoMag.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssEKF.cpp
+    ${LIB_DIR}/TR_RawGnssEKF/TR_RawGnssCarrier.cpp
+)
+target_include_directories(test_restore_control_policy PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${LIB_DIR}/TR_ServoControl_ledc_mult
+    ${LIB_DIR}/TR_PID
+    ${LIB_DIR}/TR_GpsInsEKF
+    ${LIB_DIR}/TR_GeoMag
+    ${LIB_DIR}/TR_RawGnssEKF
+    ${LIB_DIR}/TR_RawGnssShadow
+    ${LIB_DIR}/TR_GNSSRaw
+    ${LIB_DIR}/TR_GNSSRaw/include
+    ${LIB_DIR}/../projects/flight_computer/main   # restore_control_policy.h, raw_nav_adapter.h
+)
+# the adapter as the V10's raw images build it (its hold over a stop in flight)
+target_compile_definitions(test_restore_control_policy PRIVATE
+    TR_RAW_NAV_MOSAIC=1 TR_RAW_NAV_SDR=1 TR_RAW_NAV_PX1105R=1)
+target_link_libraries(test_restore_control_policy GTest::gtest_main)
+gtest_discover_tests(test_restore_control_policy)
+
 # ---------- test_servo_pad_policy ----------
 # #1770: with servo control off a servo test's stop still settles to neutral
 # and relaxes, and the #363 failsafe stows (flight_computer/main/

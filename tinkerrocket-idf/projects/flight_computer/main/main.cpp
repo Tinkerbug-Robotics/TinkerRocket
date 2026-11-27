@@ -68,6 +68,7 @@
 #include "flight_timeout_policy.h"  // #1753: the INFLIGHT timeout holds for an owed or just-fired channel
 #include "thrust_axis_policy.h"     // #1755: the boost thrust axis against an AUTO frame
 #include "pyro_restore_policy.h"    // #1760: a fire that had started is not repeated after a reset
+#include "restore_control_policy.h" // #1769: roll control after a restore waits for a trusted velocity
 #include "mount_health_policy.h"    // #1755: the apps' "Mounting" dot: an AUTO frame confirmed on the pad lately
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include "servo_pin_policy.h"    // servoPinsValid(): a Beetle int -1 pin is unmapped, not GPIO 0xFFFFFFFF
@@ -1166,7 +1167,13 @@ static bool     recovery_apogee_armed = false;
 // checked that the vehicle is demonstrably still — the OC cannot make that
 // judgement and deliberately does not try.
 static bool     recovery_override_requested = false;
-static bool     reboot_recovery = false;      // true during servo settle period after recovery
+// #1769: true from a restore until the fins may move again: the 500 ms settle,
+// then until the restored filter's velocity is trusted (restore_control_policy.h)
+static bool     reboot_recovery = false;
+static bool     restore_hold_noted = false;  // the hold past the settle, logged once
+// #1769: the restore brought back a filter (the snapshot's ekf_initialized);
+// read only on a restored flight (reboot_recovery_telem)
+static bool     restore_had_filter = false;
 static bool     reboot_recovery_telem = false; // true for rest of flight (telemetry flag)
 // #1188 (#1176 decision 4): the OC reports on every status poll whether THIS
 // session began with it raising our rail from a flight token rather than with
@@ -5195,6 +5202,12 @@ static void startRawShadow()
     // satellite under the chute); and act's attitude gate
     cfg.restore_pos_sigma_m = config::RAW_RESTORE_POS_SIGMA_M;
     cfg.restore_vel_sigma_mps = config::RAW_RESTORE_VEL_SIGMA_MPS;
+    // #1769: the restore hold waits for the velocity's variance to fall under
+    // the EKF row's EKF_VEL_VAR_OK; a restore that started under it would
+    // release the fins at once, on the snapshot's speed
+    static_assert(config::RAW_RESTORE_VEL_SIGMA_MPS * config::RAW_RESTORE_VEL_SIGMA_MPS >
+                      4.0 * config::EKF_VEL_VAR_OK,
+                  "a restored raw filter must start far outside the trusted velocity (#1769)");
     cfg.restore_att_sigma_deg = config::RAW_RESTORE_ATT_SIGMA_DEG;
     cfg.restore_seed_bias = true;
     cfg.level_on_fused_epochs = true;
@@ -9352,9 +9365,10 @@ static void setup_fc()
             // The control-authority speed gate is NOT in the snapshot, so it
             // starts shut and has to re-satisfy after a mid-flight reboot.
             // That is deliberate rather than an omission: reboot_recovery
-            // already stows the fins through the settle, and a boost/coast
-            // reboot re-opens the gate on the first tick (the vehicle is fast;
-            // with the default gate of 0, whatever the speed).  What ends
+            // already stows the fins through the settle and until the
+            // restored velocity is trusted (#1769), and a boost/coast reboot
+            // re-opens the gate on the first tick after that (the vehicle is
+            // fast; with the default gate of 0, on the first tick).  What ends
             // control on the descent is #1768's fin_eject: a reboot after the
             // eject cuts the fins' pulses and rail on its first INFLIGHT pass
             // (fin_cut_restored, from the snapshot's servo byte; and
@@ -9630,6 +9644,9 @@ static void setup_fc()
                 // Inflate covariance for reboot uncertainty.
                 for (int i = 0; i < 3; i++) ekf.inflateCovDiag(i, 25.0f);     // pos: 5m sigma
                 for (int i = 3; i < 6; i++) ekf.inflateCovDiag(i, 25.0f);     // vel: 5 m/s
+                // #1769: and so outside the restore hold's trusted velocity
+                static_assert(25.0f > 4.0f * config::EKF_VEL_VAR_OK,
+                              "a restored GpsInsEKF must start far outside the trusted velocity (#1769)");
                 for (int i = 6; i < 9; i++) ekf.inflateCovDiag(i, 0.03f);     // attitude: ~10°
                 ESP_LOGW(TAG, "[RECOVERY] EKF state restored (P diag from snap, off-diag rebuilding)");
             }
@@ -9654,9 +9671,14 @@ static void setup_fc()
             ESP_LOGW(TAG, "[RECOVERY] Deployment channels INHIBITED until live "
                           "flight evidence — restored apogee withheld");
 
-            // Hold servos neutral for 500ms while EKF settles
+            // Hold servos neutral for 500ms while EKF settles, and past that
+            // until the restored filter's velocity is trusted again (#1769,
+            // restore_control_policy.h): the snapshot's speed is the gap's
+            // flight short, and the gain schedule runs on it.
             reboot_recovery = true;
             reboot_recovery_telem = true;
+            restore_hold_noted = false;
+            restore_had_filter = ekf_initialized;
             servo_settle_end_ms = now_ms + 500;
 
             // Mark launch flag so kinematic checks don't re-trigger launch detection
@@ -16132,13 +16154,39 @@ static void loop_fc()
                     }
                 }
 
-                // Servo settling after reboot recovery — hold neutral until EKF stabilizes
-                if (reboot_recovery && now_ms >= servo_settle_end_ms) {
-                    reboot_recovery = false;  // keep PSF_REBOOT_RECOVERY flag in telemetry
-                    ESP_LOGI(TAG, "[RECOVERY] Servo settle complete, %s",
-                             FinEjectPolicy::cut(fin_eject)
-                                 ? "past the eject: the fins' power stays cut (#1768)"
-                                 : "control resumed");
+                // Servo settling after reboot recovery: hold neutral for the
+                // settle, and past it until the restored filter's velocity is
+                // trusted (#1769): healthy, and every axis's variance under
+                // the EKF row's own EKF_VEL_VAR_OK. The restore leaves it far
+                // over that, and only a measurement brings it down, so the
+                // gain schedule never runs on the snapshot's stale speed. A
+                // restore that found no filter flies the pure gyro after the
+                // settle, as before the reset, and for the rest of the flight
+                // (filterUsableForControl below). The release is latched.
+                if (reboot_recovery) {
+                    float var_vel[3];
+                    ekf.getCovVel(var_vel);
+                    const bool vel_trusted = RestoreControlPolicy::velocityTrusted(
+                        ekf.isHealthy(), var_vel, config::EKF_VEL_VAR_OK);
+                    if (!RestoreControlPolicy::holdFins(now_ms, servo_settle_end_ms,
+                                                        restore_had_filter, vel_trusted)) {
+                        reboot_recovery = false;  // keep PSF_REBOOT_RECOVERY flag in telemetry
+                        ESP_LOGI(TAG, "[RECOVERY] Servo settle complete, %s",
+                                 FinEjectPolicy::cut(fin_eject)
+                                     ? "past the eject: the fins' power stays cut (#1768)"
+                                     : restore_had_filter
+                                           ? "the restored velocity is trusted: control resumed (#1769)"
+                                           : "no filter restored: pure gyro for the flight (#1769)");
+                    } else if (!restore_hold_noted &&
+                               (int32_t)(now_ms - servo_settle_end_ms) >= 0) {
+                        restore_hold_noted = true;
+                        ESP_LOGW(TAG, "[RECOVERY] Servo settle complete; fins held neutral until the "
+                                      "restored velocity is trusted (filter %s, variance "
+                                      "%.1f/%.1f/%.1f, need < %.1f) (#1769)",
+                                 ekf.isHealthy() ? "healthy" : "not running yet",
+                                 (double)var_vel[0], (double)var_vel[1], (double)var_vel[2],
+                                 (double)config::EKF_VEL_VAR_OK);
+                    }
                 }
 
                 // --- Burnout detection — runs independently of servo/roll
@@ -16259,7 +16307,13 @@ static void loop_fc()
                         {
                             roll_speed_gate_open = true;   // gate disabled
                         }
-                        else if (ekf_initialized && ism6_fresh)
+                        // #1769: not on a restored flight's speed before the
+                        // restore hold has found it trusted, nor on a filter
+                        // started in flight after a restore that found none
+                        // (health is not asked here, as before)
+                        else if (ism6_fresh && !reboot_recovery &&
+                                 RestoreControlPolicy::filterUsableForControl(
+                                     ekf_initialized, true, reboot_recovery_telem, restore_had_filter))
                         {
                             const float gate_speed = sqrtf(imu_vel[0]*imu_vel[0] +
                                                            imu_vel[1]*imu_vel[1] +
@@ -16273,7 +16327,9 @@ static void loop_fc()
                                               (unsigned long)t_since_launch_ms);
                             }
                         }
-                        if (!roll_speed_gate_open && !roll_speed_gate_warned &&
+                        // (#1769: not while the restore hold, not the gate, is
+                        // what keeps the fins neutral)
+                        if (!roll_speed_gate_open && !roll_speed_gate_warned && !reboot_recovery &&
                             t_since_launch_ms >= config::ROLL_CONTROL_SPEED_GATE_WARN_MS)
                         {
                             roll_speed_gate_warned = true;
@@ -16340,7 +16396,11 @@ static void loop_fc()
                         // branch with speed pinned at 0, which is the schedule's
                         // MAXIMUM gain, instead of the pure-gyro fallback that
                         // exists for exactly this case.
-                        const bool ekf_ctrl_healthy = ekf_initialized && ekf.isHealthy();
+                        // #1769: and on a restored flight, the filter the
+                        // restore brought back: never one started in flight
+                        // after a restore that found none (at zero velocity)
+                        const bool ekf_ctrl_healthy = RestoreControlPolicy::filterUsableForControl(
+                            ekf_initialized, ekf.isHealthy(), reboot_recovery_telem, restore_had_filter);
                         static bool ekf_ctrl_healthy_prev = true;
                         if (ekf_ctrl_healthy != ekf_ctrl_healthy_prev) {
                             ESP_LOGW(TAG, "[CTRL] EKF health %s — roll control %s",
@@ -16516,8 +16576,12 @@ static void loop_fc()
                             // ekf_ctrl_healthy, so the explicit term here is
                             // redundant rather than contradictory. Kept for
                             // readability; the policy header is the source of truth.
+                            // #1769: never on a restored flight's roll, the
+                            // snapshot's plus the gap's (restore_control_policy.h)
                             const bool angle_mode_active =
-                                use_angle_control && ekf_ctrl_healthy; // #265
+                                RestoreControlPolicy::angleModeAllowed(
+                                    use_angle_control, ekf_ctrl_healthy, // #265
+                                    reboot_recovery_telem);
                             RollProfileQuery seg = {0.0f, ROLL_SEG_NULL_RATE};
                             if (angle_mode_active)
                             {
