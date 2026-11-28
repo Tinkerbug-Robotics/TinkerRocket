@@ -1058,6 +1058,17 @@ static uint32_t servo_pad_wake_until_ms = 0;
 // boots straight into a recovered flight never sweeps a fin.
 static bool servo_boot_selftest_pending = false;
 static bool prev_sim_active = false;
+// What the OC reads as launch (NSF_LAUNCH): it opens the flight's log on the
+// rising edge (#1780 keys on it too).
+static inline bool nsfLaunchReported()
+{
+    return kinematics.launch_flag || (rocket_state == INFLIGHT);
+}
+// #1780: a sim given up after launch owes the OC an END_FLIGHT to end the
+// sim's log, as the OC ends it itself on a user Stop and LANDED does with its
+// own END_FLIGHT: sent, retried until queued (sim_flight::serviceOcLogEnd),
+// and dropped at the next launch.
+static bool sim_oc_log_end_owed = false;
 // #1104: true from the sim START edge until the next resetFlightStateForSim().
 // The pyro dry-fire gate and the snapshot's sim stamp key on this (OR'd with
 // isSimActive(), see sim_flight::simulated) rather than on isSimActive()
@@ -10279,6 +10290,7 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     max_speed_mps = 0.0f;
     landed_actions_done = false;
     landed_sends = LandedSends::State{};             // #1779: with the latch above
+    sim_oc_log_end_owed = false;                     // #1780: not this flight's log to end
     landed_debounce = landing_transition::State{};   // #297, #1137
     // Clear apogee/landing flags so they start clean at launch.
     // launch_flag is intentionally preserved (it got us here).
@@ -17075,8 +17087,9 @@ static void loop_fc()
 
         {
             const bool curr_sim_active = sensor_collector.isSimActive();
-            switch (sim_flight::classify(prev_sim_active, curr_sim_active,
-                                         rocket_state == LANDED))
+            const sim_flight::Edge sim_edge =
+                sim_flight::classify(prev_sim_active, curr_sim_active, rocket_state == LANDED);
+            switch (sim_edge)
             {
                 case sim_flight::Edge::Start:
                     resetFlightStateForSim("start");
@@ -17087,6 +17100,15 @@ static void loop_fc()
                                   "treating it as Stop: pyros safed, flight "
                                   "state reset (#1104)",
                              (unsigned)rocket_state);
+                    // #1780: and end the OC's log of it, as a user Stop does
+                    // on the OC and LANDED does with END_FLIGHT, before the
+                    // reset drops the launch the OC opened it on
+                    if (sim_flight::endsOcLog(sim_edge, nsfLaunchReported()))
+                    {
+                        sim_oc_log_end_owed = true;
+                        ESP_LOGW(TAG, "[SIM] given up after launch: END_FLIGHT to the OC "
+                                      "ends the sim's log (#1780)");
+                    }
                     resetFlightStateForSim("ended early");
                     break;
                 case sim_flight::Edge::EndedLanded:   // flown out: hold LANDED
@@ -17094,6 +17116,9 @@ static void loop_fc()
                     break;
             }
             prev_sim_active = curr_sim_active;
+            // #1780: the given-up sim's END_FLIGHT, retried until it is queued
+            sim_flight::serviceOcLogEnd(sim_oc_log_end_owed,
+                                        [] { return enqueueI2STx(END_FLIGHT, nullptr, 0); });
         }
 
         // ---- Sim-mode diagnostic (once per second) ----
@@ -17180,7 +17205,7 @@ static void loop_fc()
         if (kinematics.alt_landed_flag || (rocket_state == LANDED)) non_sensor_data.flags |= NSF_ALT_LANDED;
         if (kinematics.alt_apogee_flag) non_sensor_data.flags |= NSF_ALT_APOGEE;
         if (kinematics.vel_u_apogee_flag) non_sensor_data.flags |= NSF_VEL_APOGEE;
-        if (kinematics.launch_flag || (rocket_state == INFLIGHT)) non_sensor_data.flags |= NSF_LAUNCH;
+        if (nsfLaunchReported()) non_sensor_data.flags |= NSF_LAUNCH;
         if (burnout_detected) non_sensor_data.flags |= NSF_BURNOUT;
         if (guidance_active)  non_sensor_data.flags |= NSF_GUIDANCE;
         // Apogee detector outputs + master vote (#142/#143) plus relocated

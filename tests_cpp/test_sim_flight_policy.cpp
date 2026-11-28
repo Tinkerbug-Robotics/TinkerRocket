@@ -41,6 +41,8 @@ using sim_flight::reportsSim;
 using sim_flight::simulated;
 using sim_flight::startRefused;
 using sim_flight::stopApplies;
+using sim_flight::endsOcLog;
+using sim_flight::serviceOcLogEnd;
 
 // ── The edge rule ───────────────────────────────────────────────────────────
 
@@ -343,6 +345,122 @@ TEST(SimFlightPolicy, theFlagIsTheDryFireGatesPredicate)
     for (const bool latched : {false, true})
         for (const bool active : {false, true})
             EXPECT_EQ(reportsSim(latched, active), simulated(latched, active)) << latched << active;
+}
+
+// ── #1780: the OC's flight log after a sim's give-up ───────────────────────
+
+// Only the give-up, and only once launch was reported: the OC opened a log on
+// that edge. A user Stop is ended on the OC itself, a flown-out sim by
+// LANDED's END_FLIGHT, and a sim given up before launch left the OC only the
+// flight it prepares at PRELAUNCH, which the next real PRELAUNCH uses.
+TEST(SimFlightPolicy, onlyAGiveUpAfterLaunchOwesTheOcAnEndFlight)
+{
+    EXPECT_TRUE(endsOcLog(Edge::EndedEarly, /*launch_reported=*/true));
+    EXPECT_FALSE(endsOcLog(Edge::EndedEarly, false));
+    for (const bool launched : {false, true})
+    {
+        EXPECT_FALSE(endsOcLog(Edge::Start, launched)) << launched;
+        EXPECT_FALSE(endsOcLog(Edge::EndedLanded, launched)) << launched;
+        EXPECT_FALSE(endsOcLog(Edge::None, launched)) << launched;
+    }
+}
+
+TEST(SimFlightPolicy, theOwedEndFlightIsRetriedUntilItGoesIn)
+{
+    bool owed = true;
+    int tries = 0;
+    for (int pass = 0; pass < 10; ++pass)
+        serviceOcLogEnd(owed, [&] { return ++tries >= 4; });
+    EXPECT_EQ(tries, 4) << "on every pass until queued, then never again";
+    EXPECT_FALSE(owed);
+
+    bool none = false;
+    int calls = 0;
+    for (int pass = 0; pass < 10; ++pass) serviceOcLogEnd(none, [&] { ++calls; return true; });
+    EXPECT_EQ(calls, 0) << "nothing owed, nothing sent";
+}
+
+// The OC's log session as main.cpp drives it: opened on the NSF_LAUNCH rising
+// edge, ended by END_FLIGHT (or a user Stop), and a prepare at PRELAUNCH is a
+// no-op while a flight is active (prepareFlight: already active, skipping).
+struct OcLog
+{
+    bool active = false;     // a flight is open (prepared, or logging)
+    bool logging = false;
+    int  flights = 0;        // flights prepared
+    int  logged_into = 0;    // the flight the frames go to
+    bool prev_launch = false;
+    void prelaunch()
+    {
+        if (active) return;
+        active = true;
+        ++flights;
+    }
+    void nonSensor(bool launch)
+    {
+        if (launch && !prev_launch)
+        {
+            prelaunch();        // the launch edge prepares one if none is
+            logging = true;
+            logged_into = flights;
+        }
+        prev_launch = launch;
+    }
+    void endFlight() { active = false; logging = false; }
+};
+
+struct Bench
+{
+    OcLog oc;
+    bool owed = false;
+    int  queue_full_passes = 0;
+    bool fix = true;
+    // A sim launches and is given up INFLIGHT, then a real flight: PRELAUNCH,
+    // launch. `launch_reported` is NSF_LAUNCH at the give-up.
+    void run(bool launch_reported)
+    {
+        oc.prelaunch();                         // the sim's PRELAUNCH
+        oc.nonSensor(launch_reported);          // the sim's launch, if any
+        const Edge e = classify(true, false, /*fc_landed=*/false);
+        if (fix && endsOcLog(e, launch_reported)) owed = true;
+        oc.nonSensor(false);                    // READY: launch drops
+        for (int pass = 0; pass < 50; ++pass)
+            serviceOcLogEnd(owed, [&] {
+                if (pass < queue_full_passes) return false;
+                oc.endFlight();
+                return true;
+            });
+        oc.prelaunch();                         // the real flight's PRELAUNCH
+        oc.nonSensor(true);                     // and its launch
+    }
+};
+
+TEST(SimFlightPolicy, aGiveUpAfterLaunchLetsTheNextFlightOpenItsOwnLog)
+{
+    Bench b;
+    b.queue_full_passes = 7;
+    b.run(/*launch_reported=*/true);
+    EXPECT_FALSE(b.owed);
+    EXPECT_EQ(b.oc.flights, 2) << "the real flight is a flight of its own";
+    EXPECT_EQ(b.oc.logged_into, 2);
+}
+
+TEST(SimFlightPolicy, beforeTheFixTheRealFlightWasAppendedToTheSims)
+{
+    Bench b;
+    b.fix = false;
+    b.run(true);
+    EXPECT_EQ(b.oc.flights, 1);
+    EXPECT_EQ(b.oc.logged_into, 1) << "the real flight logged into the sim's";
+}
+
+TEST(SimFlightPolicy, aGiveUpBeforeLaunchLeavesThePreparedFlightForTheNextOne)
+{
+    Bench b;
+    b.run(/*launch_reported=*/false);
+    EXPECT_FALSE(b.owed) << "no END_FLIGHT: there was no log to end";
+    EXPECT_EQ(b.oc.flights, 1) << "the flight prepared at the sim's PRELAUNCH";
+    EXPECT_EQ(b.oc.logged_into, 1) << "is the real flight's, empty until now";
 }
 
 }  // namespace

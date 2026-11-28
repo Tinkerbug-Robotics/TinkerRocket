@@ -128,4 +128,31 @@ constexpr bool startRefused(bool command_lockout_state)
     return command_lockout_state;
 }
 
+/// #1780: does this edge leave the OC a flight log to end?  The OC opens one
+/// on the FC's NSF_LAUNCH rising edge (`launch_reported`: the launch latched,
+/// or INFLIGHT) and ends it on END_FLIGHT, which the FC sends from LANDED, or
+/// on a user Stop, which the OC acts on itself before passing it to the FC.
+/// The give-up (EndedEarly) is neither: the FC drops straight to READY, so
+/// the log stayed open, every pad frame after it was written into the sim's
+/// flight, and the next real flight was appended to that flight. If the open
+/// range then ran into the next stored flight, its pages were dropped.
+/// So on that edge, with launch reported, the FC sends END_FLIGHT itself.
+/// Without launch reported the OC opened no log; what it holds is the flight
+/// it prepares at PRELAUNCH, which the next real PRELAUNCH uses as it is.
+constexpr bool endsOcLog(Edge e, bool launch_reported)
+{
+    return e == Edge::EndedEarly && launch_reported;
+}
+
+/// One pass of the END_FLIGHT owed by endsOcLog(): sent, and retried on every
+/// pass until its enqueue goes through, as LANDED retries its own (the I2S
+/// queue takes it with no wait). `send_end` enqueues it and says whether it
+/// went in. The FC drops what is still owed at its next launch: by then the
+/// OC is opening that flight's log, which this must not end.
+template <typename SendEnd>
+inline void serviceOcLogEnd(bool& owed, SendEnd&& send_end)
+{
+    if (owed && send_end()) owed = false;
+}
+
 }  // namespace sim_flight

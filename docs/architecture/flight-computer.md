@@ -162,6 +162,19 @@ start a second flight without a reboot (#317). The simulator's Stop command is t
 deliberate re-arm, and it counts only when a sim flight was started this boot; a Stop
 that reaches a real flight's `LANDED` is ignored (#1113).
 
+**A sim given up after launch ends the OC's log of it (#1780).** When a sim's landing
+hold gives up (90 s with the FC not in `LANDED`, #971), the FC treats it as a Stop and
+drops to `READY` (#1104). The OC opened the sim's log on the FC's launch flag. It ends a
+log on END_FLIGHT, which the FC sends from `LANDED`, on a user Stop, which the OC acts on
+itself, and on its own log stop or power-off. The give-up is none of these, so the log
+stayed open, the pad wait was written into the sim's flight, and the next real flight was
+appended to it. If the open range then ran into the next stored flight, the real flight's
+pages were dropped. Now the FC sends END_FLIGHT
+for a sim given up after launch, retried until it is queued
+(`sim_flight::endsOcLog`, `serviceOcLogEnd`). What is still owed is dropped at the next
+launch, whose log it must not end. A sim given up before launch is left alone: the OC
+holds only the flight it prepared at `PRELAUNCH`, which the next real flight uses.
+
 `MAG_CALIBRATION` is a bench-only state entered by app command and refused in
 `INFLIGHT`/`LANDED`. While in it, kinematic checks are skipped, EKF init is inhibited, and
 pyro servicing cannot run — the user is physically tumbling the rocket, and every automatic

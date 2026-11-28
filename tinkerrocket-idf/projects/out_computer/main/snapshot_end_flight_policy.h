@@ -2,17 +2,22 @@
 
 // #1779: END_FLIGHT retires a snapshot the FC's LANDED clear did not reach.
 //
-// The FC sends END_FLIGHT only from LANDED, once its LANDED snapshot clear is
-// in the same FIFO queue (flight_computer/main/landed_sends_policy.h). If the
-// OC's RAM cache still reads INFLIGHT when END_FLIGHT arrives, that clear was
-// lost on the link. The FC sends the clear again every second while LANDED;
-// this covers the time until the next one arrives. Left so, the cache would keep the flight's last in-flight frame and
-// serve it for 30 min, and an FC reset in that time would restore INFLIGHT on
-// the ground. So the OC marks that frame LANDED, in place, in the cache and in
-// its RTC copy (#1717). The OC then holds what a delivered clear leaves: a
+// The FC sends END_FLIGHT only at a flight's end: from LANDED, once its LANDED
+// snapshot clear is in the same FIFO queue
+// (flight_computer/main/landed_sends_policy.h), and when a sim it launched
+// gives up, behind the clear its reset sends once (#1780). If the OC's RAM
+// cache still reads INFLIGHT when END_FLIGHT arrives, that clear was lost: on
+// the link, or, for the sim's, to a full queue. The FC sends the LANDED clear
+// again every second while LANDED; this covers the time until the next one
+// arrives, and it is all a given-up sim's frame gets. Left so, the cache would keep the flight's
+// last in-flight frame and serve it for 30 min, and an FC reset in that time
+// would restore INFLIGHT on the ground. So the OC marks that frame LANDED, in
+// place, in the cache and in its RTC copy (#1717). The OC then holds what a delivered clear leaves: a
 // cache that is not servable, and an RTC copy that, intact but not servable,
 // says the flight is over on a later boot of the OC (Verdict::Over). The V7/V8
-// MRAM slot is not marked; the FC's next repeated clear writes it.
+// MRAM slot is not marked; after a landing the FC's next repeated clear writes
+// it, and a given-up sim's frame can stay there (the FC refuses a sim's frame
+// on a restore).
 //
 // Only the state byte changes. The frame's own CRCs are left as they were, so
 // it no longer reads as a valid frame on the link. It is never sent: every

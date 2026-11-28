@@ -74,11 +74,13 @@ def test_landed_retries_the_clear_then_end_flight_on_every_pass():
     assert case.rstrip().endswith(SERVICE + " break; }"), "the case's last step"
 
 
-def test_end_flight_is_sent_from_landed_alone():
-    """The OC's backstop rests on it: END_FLIGHT comes only from LANDED, after the clear."""
+def test_end_flight_is_sent_only_at_a_flights_end():
+    """The OC's backstop rests on it: END_FLIGHT comes only from LANDED, after the clear, and from a sim given up
+    after launch (#1780), behind the clear its reset sends once."""
     src = code(FC_CPP)
-    assert src.count("enqueueI2STx(END_FLIGHT") == 1
+    assert src.count("enqueueI2STx(END_FLIGHT") == 2
     assert "enqueueI2STx(END_FLIGHT" in landed_case(src)
+    assert "sim_flight::serviceOcLogEnd(sim_oc_log_end_owed, [] { return enqueueI2STx(END_FLIGHT, nullptr, 0); });" in src
     assert "end_flight_sent" not in src, "one latch for both"
 
 
