@@ -304,8 +304,9 @@ END_FLIGHT only behind it, and then sends it again every second for as long as i
 in LANDED (`landed_sends_policy.h`). Neither frame is acknowledged, so the repeat is what
 reaches an OC that missed both, from a receive overrun or a reset of its own across the
 landing. Until the next repeat, END_FLIGHT covers a clear lost on the link. The FC sends
-END_FLIGHT only from LANDED, so END_FLIGHT arriving while the cache still reads `INFLIGHT`
-marks that frame `LANDED` in place, in the cache and in the RTC copy
+END_FLIGHT only at a flight's end, behind a clear: from LANDED, and when a sim it launched
+gives up, behind the clear its reset sends once (#1780). So END_FLIGHT arriving while the cache still reads `INFLIGHT` marks that
+frame `LANDED` in place, in the cache and in the RTC copy
 (`snapshot_end_flight_policy.h`). The cache is then not servable, and the RTC copy keeps
 its last word. Only the state byte changes, so the marked frame no longer passes its
 CRCs; it is never sent, since every serve path needs an `INFLIGHT` frame. A clear that

@@ -6348,8 +6348,9 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     else if (type == END_FLIGHT)
     {
         msg_count_end_flight++;
-        // #1779: the FC sends END_FLIGHT only from LANDED, after its LANDED
-        // snapshot clear. A cache still reading INFLIGHT missed that clear:
+        // #1779: the FC sends END_FLIGHT only at a flight's end (LANDED, or a
+        // sim given up after launch, #1780), behind a snapshot clear. A cache
+        // still reading INFLIGHT missed that clear:
         // mark it LANDED, and its RTC copy, so an FC reset after landing is
         // not handed this flight (snapshot_end_flight_policy.h). END_FLIGHT
         // comes over I2S, so this is the I2S parser task, which writes the
@@ -6363,7 +6364,7 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
         const bool rtc_retired = SnapshotEndFlight::markLanded(snapshot_rtc);
         if (retired || rtc_retired)
             ESP_LOGW("OC", "[RECOVERY] END_FLIGHT with the snapshot still INFLIGHT: the FC's "
-                           "LANDED clear was lost; marked LANDED (cache %d, RTC copy %d)",
+                           "clear before it was lost; marked LANDED (cache %d, RTC copy %d)",
                      retired ? 1 : 0, rtc_retired ? 1 : 0);
         logger.endLogging();
         flightlogEndFlight();
