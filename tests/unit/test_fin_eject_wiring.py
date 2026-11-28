@@ -259,7 +259,7 @@ def test_the_snapshot_carries_the_cut_and_the_restore_reads_it():
             "(FinEjectPolicy::cut(fin_eject) ? SNAP_SERVO_FINS_CUT : 0u));") in src
     assert "servo_enabled = (snap.servo_enabled & SNAP_SERVO_ENABLED) != 0;" in src
     restore = src.index("fin_cut_restored = (snap.servo_enabled & SNAP_SERVO_FINS_CUT) != 0;")
-    rebase = src.index("launch_time_millis = now_ms - snap.flight_elapsed_ms;")
+    rebase = src.index("launch_time_millis = RestoreClock::launchMs(snap.flight_elapsed_ms);")
     assert rebase < restore and not re.search(r"\bstatic \w+ \w+\(", src[rebase:restore])
     assert src.count("static bool fin_cut_restored = false;") == 1
     launch = function_body(src, "static void enterInflight(uint32_t now_ms, const char* from_state)")
@@ -273,7 +273,7 @@ def test_the_state_is_reset_at_launch_a_sims_reset_and_a_restore_and_nowhere_els
     assert src.count("static FinEjectPolicy::State fin_eject;") == 1
     assert src.count("FinEjectPolicy::reset(fin_eject);") == 3
     restore = src.index("FinEjectPolicy::reset(fin_eject); if (snap.pyro_apogee_detected) {")
-    rebase = src.index("launch_time_millis = now_ms - snap.flight_elapsed_ms;")
+    rebase = src.index("launch_time_millis = RestoreClock::launchMs(snap.flight_elapsed_ms);")
     assert rebase < restore and not re.search(r"\bstatic \w+ \w+\(", src[rebase:restore])
     uses = [m.start() for m in re.finditer(r"\bfin_eject\b", src)]
     allowed = {src.index("static FinEjectPolicy::State fin_eject;") + len("static FinEjectPolicy::State "),

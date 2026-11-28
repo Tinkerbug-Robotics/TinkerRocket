@@ -71,6 +71,7 @@
 #include "thrust_axis_policy.h"     // #1755: the boost thrust axis against an AUTO frame
 #include "pyro_restore_policy.h"    // #1760: a fire that had started is not repeated after a reset
 #include "restore_control_policy.h" // #1769: roll control after a restore waits for a trusted velocity
+#include "restore_clock_policy.h"   // #1777: the restored flight clock counts this boot from its start
 #include "mount_health_policy.h"    // #1755: the apps' "Mounting" dot: an AUTO frame confirmed on the pad lately
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include "servo_pin_policy.h"    // servoPinsValid(): a Beetle int -1 pin is unmapped, not GPIO 0xFFFFFFFF
@@ -1160,6 +1161,9 @@ static inline bool enqueueI2STx(uint8_t type, const uint8_t *payload, size_t len
 // about an ordinary flight changes.
 static RecoveryArmGate::State recovery_arm_state;
 static bool     recovery_gate_active = false;
+// #1777: this boot's time of the restore. An OC answer counts as evidence for
+// the LANDED power-hold release only from here (pwr_hold::answerFromMs).
+static uint32_t recovery_restore_ms = 0;
 // Latched once the gate has been Open long enough to hand over the restored
 // apogee. Separate from pyro_apogee_detected on purpose: that is restored
 // normally so the snapshot keeps round-tripping (a second reboot must not read
@@ -1976,8 +1980,7 @@ static void servicePyroChannels(uint32_t now_ms)
                 pyro_apogee_detected &&
                 (!recovery_gate_active || recovery_apogee_armed);
             if (apogee_usable && mode == PYRO_TRIGGER_TIME_AFTER_APOGEE) {
-                const float elapsed_s = (float)(now_ms - pyro_apogee_time_ms) / 1000.0f;
-                if (elapsed_s >= val) should_fire = true;
+                if (RestoreClock::timeAfterApogeeDue(now_ms, pyro_apogee_time_ms, val)) should_fire = true;
             } else if (apogee_usable && mode == PYRO_TRIGGER_ALTITUDE_ON_DESCENT) {
                 // #834 item 4: pressure_alt_m/_rate are a KF estimate that
                 // free-runs at a frozen rate with a dead barometer, so the raw
@@ -9427,8 +9430,15 @@ static void setup_fc()
             }
 #endif
 
-            // Rebase timestamps to new time_ms() epoch
-            launch_time_millis = now_ms - snap.flight_elapsed_ms;
+            // #1777: rebase the flight's times on this boot's start, not on
+            // this moment, so the setup, the receiver's bring-up and the asks
+            // before the restore stay in the flight's clock. It misses only
+            // the snapshot's age, the reset and the start before the timer:
+            // late by those, never early (restore_clock_policy.h).
+            launch_time_millis = RestoreClock::launchMs(snap.flight_elapsed_ms);
+            ESP_LOGW(TAG, "[RECOVERY] flight clock from this boot's start: the %lu ms before the "
+                          "restore count as flight time (#1777)",
+                     (unsigned long)now_ms);
             // The control-authority speed gate is NOT in the snapshot, so it
             // starts shut and has to re-satisfy after a mid-flight reboot.
             // That is deliberate rather than an omission: reboot_recovery
@@ -9446,11 +9456,11 @@ static void setup_fc()
             FinEjectPolicy::reset(fin_eject);
             if (snap.pyro_apogee_detected) {
                 pyro_apogee_detected = true;
-                pyro_apogee_time_ms = launch_time_millis + snap.apogee_elapsed_ms;
+                pyro_apogee_time_ms = RestoreClock::eventMs(launch_time_millis, snap.apogee_elapsed_ms);
             }
             if (snap.burnout_detected) {
                 burnout_detected = true;
-                burnout_time_ms = launch_time_millis + snap.burnout_elapsed_ms;
+                burnout_time_ms = RestoreClock::eventMs(launch_time_millis, snap.burnout_elapsed_ms);
             }
 
             // Restore pyro state (safety-critical: no double-fire). With
@@ -9642,13 +9652,10 @@ static void setup_fc()
                 // value happens to equal the first post-recovery IMU stamp,
                 // the #440 frozen-timestamp guard drops the tick instead.
                 //
-                // Every other epoch-relative field in this restore is already
-                // rebased — launch_time_millis, apogee and burnout all go
-                // through `now_ms - snap.*` above — which is what makes this
-                // one a missed case rather than a deliberate model of the
-                // reset gap. Modelling that gap would need the snapshot to
-                // carry an elapsed-since-launch form, and the value would
-                // still have to be rebased.
+                // The flight's own times are rebased above, from the
+                // snapshot's elapsed-since-launch form onto this boot's start
+                // (#1777). This one is the filter's step stamp, not a flight
+                // time: it takes this moment, so the first step is ~2 ms.
                 ekf_state.t_prev_us = (uint32_t)time_us();
                 // v5: euler is not on the wire any more. setState() derives it
                 // from the restored quaternion, so leaving it zero here is
@@ -9725,6 +9732,7 @@ static void setup_fc()
             RecoveryArmGate::reset(recovery_arm_state, now_ms);
             recovery_gate_active  = true;
             recovery_apogee_armed = false;
+            recovery_restore_ms   = now_ms;
             // #1776: and the restored-burnout evidence, from this boot
             RestoredBurnout::reset(restored_burnout_state);
             if (!burnout_detected)
@@ -16858,9 +16866,18 @@ static void loop_fc()
                     // direction: the cost is a battery pull, and the cost of
                     // the other error is a rocket that goes silent where it
                     // landed.
+                    //
+                    // #1777: on a flight this boot restored, an answer counts
+                    // only from the restore. The setup polled and asked the OC
+                    // before it, and the restored launch is before this boot's
+                    // start, so those answers would all read as from after
+                    // launch.
+                    const uint32_t answer_from_ms =
+                        pwr_hold::answerFromMs(launch_time_millis, recovery_gate_active,
+                                               recovery_restore_ms);
                     const bool oc_alive_since_launch =
                         pwr_hold::ocAliveSinceLaunch(out_ready, out_ready_last_ms,
-                                                     launch_time_millis);
+                                                     answer_from_ms);
                     if (oc_alive_since_launch)
                     {
                         pwrHoldRelease("landed");
@@ -16869,13 +16886,13 @@ static void loop_fc()
                     {
                         pwr_hold_orphan_keep = true;
                         ESP_LOGE(TAG, "[PWR] LANDED with no OC answer since "
-                                      "launch (out_ready=%d last_ms=%lu launch_ms=%lu) "
+                                      "launch or the restore (out_ready=%d last_ms=%lu from_ms=%lu) "
                                       "— KEEPING the power hold for recovery "
                                       "tracking (battery pull to power off; "
                                       "auto-releases if the OC comes back).",
                                  out_ready ? 1 : 0,
                                  (unsigned long)out_ready_last_ms,
-                                 (unsigned long)launch_time_millis);
+                                 (unsigned long)answer_from_ms);
                     }
                     clearFlightSnapshot();  // prevent stale recovery on next boot
                     // Relax post-flight to stop the idle holding current (the
