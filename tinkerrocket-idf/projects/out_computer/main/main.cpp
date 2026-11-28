@@ -92,6 +92,7 @@ static inline std::string itos(int v)
 #include "snapshot_rtc_copy.h"        // #1717: the snapshot cache's copy in RTC memory
 #include "snapshot_reseed_policy.h"   // #1717: the cut-off flight found before the deferred scan
 #include "snapshot_replay_filter.h"   // #383/#846: which of the FC's snapshots the OC keeps
+#include "snapshot_end_flight_policy.h"   // #1779: END_FLIGHT retires a snapshot the LANDED clear missed
 #include "lora_slot_follow_policy.h"  // three rockets: the base station's transmit grid (uplink 82)
 #if TR_OC_ANTENNA_OFFSET
 #include "antenna_readback_policy.h"  // whose GNSS antenna offset the config readback serves
@@ -6347,6 +6348,23 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
     else if (type == END_FLIGHT)
     {
         msg_count_end_flight++;
+        // #1779: the FC sends END_FLIGHT only from LANDED, after its LANDED
+        // snapshot clear. A cache still reading INFLIGHT missed that clear:
+        // mark it LANDED, and its RTC copy, so an FC reset after landing is
+        // not handed this flight (snapshot_end_flight_policy.h). END_FLIGHT
+        // comes over I2S, so this is the I2S parser task, which writes the
+        // cache and the copy with every snapshot. Their other writers, setup's
+        // seed from the copy and the boot's re-seed (run again by a logger
+        // retry, #1228), fill only an empty cache.
+        portENTER_CRITICAL(&snapshot_cache_mux);
+        const bool retired = snapshot_cache_valid &&
+                             SnapshotEndFlight::markLanded(snapshot_cache, kSnapFrameLen);
+        portEXIT_CRITICAL(&snapshot_cache_mux);
+        const bool rtc_retired = SnapshotEndFlight::markLanded(snapshot_rtc);
+        if (retired || rtc_retired)
+            ESP_LOGW("OC", "[RECOVERY] END_FLIGHT with the snapshot still INFLIGHT: the FC's "
+                           "LANDED clear was lost; marked LANDED (cache %d, RTC copy %d)",
+                     retired ? 1 : 0, rtc_retired ? 1 : 0);
         logger.endLogging();
         flightlogEndFlight();
     }

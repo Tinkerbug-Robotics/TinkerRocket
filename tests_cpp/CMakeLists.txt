@@ -1457,6 +1457,32 @@ target_include_directories(test_snapshot_reseed PRIVATE
 target_link_libraries(test_snapshot_reseed GTest::gtest_main)
 gtest_discover_tests(test_snapshot_reseed)
 
+# ---------- test_landed_clear (#1779) ----------
+# The FC's LANDED snapshot clear is retried until it is in the I2S queue,
+# ahead of END_FLIGHT (landed_sends_policy.h), and the OC, given END_FLIGHT
+# while its cache still reads INFLIGHT, marks the cache and its RTC copy
+# LANDED (snapshot_end_flight_policy.h).
+add_executable(test_landed_clear
+    test_landed_clear.cpp
+    ${LIB_DIR}/CRC/CRC.cpp
+    ${LIB_DIR}/CRC/CRC8.cpp
+    ${LIB_DIR}/CRC/CRC12.cpp
+    ${LIB_DIR}/CRC/CRC16.cpp
+    ${LIB_DIR}/CRC/CRC32.cpp
+    ${LIB_DIR}/CRC/CRC64.cpp
+    ${LIB_DIR}/CRC/CrcFastReverse.cpp
+    ${LIB_DIR}/CRC/FastCRC32.cpp
+)
+target_include_directories(test_landed_clear PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/CRC
+    ${LIB_DIR}/TR_RocketComputerTypes
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/flight_computer/main
+)
+target_link_libraries(test_landed_clear GTest::gtest_main)
+gtest_discover_tests(test_landed_clear)
+
 # ---------- test_snapshot_replay_filter (#383, #846) ----------
 # Which of the FC's 10 Hz SNAPSHOT_MSG frames the OC keeps: DMA replays are
 # dropped, clears never are, and a clear sent with no flight in progress (its
