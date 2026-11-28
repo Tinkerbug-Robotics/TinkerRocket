@@ -2843,6 +2843,20 @@ target_include_directories(test_restored_burnout PRIVATE
 target_link_libraries(test_restored_burnout GTest::gtest_main)
 gtest_discover_tests(test_restored_burnout)
 
+# ---------- test_restore_clock (#1777) ----------
+# A restore in flight rebases the flight's times on this boot's start, so the
+# setup before the restore stays in the flight's clock: a time-after-apogee
+# channel still owed fires late only by the snapshot's age and the reset, never
+# early. Driven with the real recovery arm gate and its apogee hand-over.
+add_executable(test_restore_clock test_restore_clock.cpp)
+target_include_directories(test_restore_clock PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LIB_DIR}/../projects/flight_computer/main
+    ${LIB_DIR}/TR_KinematicChecks
+)
+target_link_libraries(test_restore_clock GTest::gtest_main)
+gtest_discover_tests(test_restore_clock)
+
 # ---------- test_modem_config_ack (#835 item 7) ----------
 add_executable(test_modem_config_ack test_modem_config_ack.cpp)
 target_include_directories(test_modem_config_ack PRIVATE

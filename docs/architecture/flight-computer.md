@@ -477,6 +477,24 @@ drogue that fired before the reset fires again once apogee is called. A section 
 nose-down already did so before #1776. The fix for that is a restore that carries the
 real channel state (#1717).
 
+**A restored flight's clock counts this boot from its start.** The snapshot keeps the
+flight's times as elapsed from launch, and the restore puts them back on `time_ms()`, which
+reads 0 at this boot's start whatever the reset was. Until #1777 the restore rebased them
+on its own moment instead, so this boot's setup before the restore dropped out of the
+flight's clock. That setup is the receiver's bring-up and the asks to the OC: by the
+issue's estimate a second or two on the V10 board with a raw receiver's hint, and up to
+tens of seconds where the receiver comes up first. A time-after-apogee channel still owed
+at the reset then fired that much late. `restore_clock_policy.h` now counts from the
+boot's start. The clock misses only the snapshot's age at the reset, the reset, and the
+start before the timer runs, so it runs late by those and is never early. The age is under
+the 100 ms snapshot period while the flight loop runs, but seconds when the task watchdog
+resets a hung loop. The restore logs the setup it counted. The launch time lands below 0
+and wraps as an unsigned, so read it, and the apogee and burnout times, only as a
+difference from now. `tests/unit/test_restore_clock_wiring.py` checks every reader in
+`main.cpp`. On a restored flight the LANDED power-hold release counts an OC answer only
+from the restore (`pwr_hold::answerFromMs`), since every answer of this boot's setup would
+otherwise read as from after launch.
+
 **The EKF is handed the last accepted GNSS fix, unchanged, on every tick.** The filter
 fuses each fix's timestamp once and skips a repeat, so which fixes have been consumed is
 tracked in one place: the filter. The loop used to keep its own consumed markers and,

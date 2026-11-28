@@ -43,4 +43,16 @@ inline bool ocAliveSinceLaunch(bool     out_ready,
     return out_ready && (int32_t)(out_ready_last_ms - launch_ms) > 0;
 }
 
+/// #1777: the moment an answer has to come after to count as evidence at
+/// LANDED. On a flight this boot restored, that is the restore, not the
+/// launch. This boot's setup polled and asked the OC before the restore, and
+/// the restore puts the launch before this boot's start
+/// (restore_clock_policy.h), so every one of those answers would read as from
+/// after launch. At landing they are as stale as a pad answer on a flight
+/// that never reset.
+inline uint32_t answerFromMs(uint32_t launch_ms, bool restored, uint32_t restore_ms)
+{
+    return restored ? restore_ms : launch_ms;
+}
+
 }  // namespace pwr_hold
