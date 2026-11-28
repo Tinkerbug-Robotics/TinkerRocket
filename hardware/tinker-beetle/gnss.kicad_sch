@@ -5139,7 +5139,7 @@
 		)
 		(uuid "88315aac-cf9e-50ca-8b2e-b6e6dd0026d3")
 	)
-	(text "U12: C63 470 pF + L12 7.5 nH per the AT2659S data sheet; RFOUT is matched on chip, C67 blocks DC.\nU13: C69 100 pF + L13 9.1 nH per the ATR2652S data sheet's 1150-1300 MHz circuit (22.5 dB, 0.75 dB noise figure);\nRFOUT needs no match, C72 100 pF blocks DC. Pin 5 (EN) is its enable, high = on, tied to V_LNA."
+	(text "U12: C63 100 pF + L12 7.5 nH, the AT2659S data sheet circuit with 100 pF for its 470 pF (both past self-resonance at L1); RFOUT is matched on chip, C67 blocks DC.\nU13: C69 100 pF + L13 9.1 nH per the ATR2652S data sheet's 1150-1300 MHz circuit (22.5 dB, 0.75 dB noise figure);\nRFOUT needs no match, C72 100 pF blocks DC. Pin 5 (EN) is its enable, high = on, tied to V_LNA."
 		(exclude_from_sim no)
 		(at 228.6 71.12 0)
 		(effects
@@ -5150,7 +5150,7 @@
 		)
 		(uuid "8f38059f-ff81-45cb-bf05-b3ff2e9dbef2")
 	)
-	(text "LNA supply: V_MCU_SWTCH -> R25 (10 ohm) -> V_LNA rail -> U12 pin 6 VDD (and pin 5 SHDN) and U13 pin 6 VDD (and pin 5 EN).\nC70 (100 pF) and C71 go at U12 pin 6; C64 (100 pF) and C66 go at U13 pin 6: the 100 pF first, within 2 mm, each with its own ground via.\nC75 sits by R25. U12 is drawn flipped so both LNA supply pins face the rail. LNA current = V(V_MCU_SWTCH - V_LNA) / 10 ohm, about 9 mA."
+	(text "LNA supply: V_MCU_SWTCH -> R25 (22 ohm) -> V_LNA rail -> U12 pin 6 VDD (and pin 5 SHDN) and U13 pin 6 VDD (and pin 5 EN).\nC70 (100 pF) and C71 go at U12 pin 6; C64 (100 pF) and C66 go at U13 pin 6: the 100 pF first, within 2 mm, each with its own ground via.\nC75 sits by R25. U12 is drawn flipped so both LNA supply pins face the rail. LNA current = V(V_MCU_SWTCH - V_LNA) / 22 ohm, about 9 mA (0.2 V)."
 		(exclude_from_sim no)
 		(at 228.6 53.34 0)
 		(effects
@@ -8774,7 +8774,7 @@
 				)
 			)
 		)
-		(property "Value" "470 pF"
+		(property "Value" "100 pF"
 			(at 101.6 43.18 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8806,7 +8806,7 @@
 				)
 			)
 		)
-		(property "Description" "U12 input DC block (AT2659S data sheet C1)"
+		(property "Description" "U12 input DC block: 100 pF for the AT2659S data sheet's 470 pF (C1); both are past self-resonance at L1, under 1 ohm apart"
 			(at 101.6 50.8 0)
 			(hide yes)
 			(show_name no)
@@ -8817,7 +8817,7 @@
 				)
 			)
 		)
-		(property "MPN" "GRM1555C1H471JA01D"
+		(property "MPN" "GRM1555C1H101JA01D"
 			(at 101.6 50.8 0)
 			(hide yes)
 			(show_name no)
@@ -8850,7 +8850,7 @@
 				)
 			)
 		)
-		(property "Dist_PN" "C76971"
+		(property "Dist_PN" "C77177"
 			(at 101.6 50.8 0)
 			(hide yes)
 			(show_name no)
@@ -10418,7 +10418,7 @@
 				)
 			)
 		)
-		(property "Value" "10"
+		(property "Value" "22"
 			(at 148.59 63.5 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -10461,7 +10461,7 @@
 				)
 			)
 		)
-		(property "MPN" "RC0402FR-0710RL"
+		(property "MPN" "RC0402FR-0722RL"
 			(at 236.22 43.18 0)
 			(hide yes)
 			(show_name no)
@@ -10494,7 +10494,7 @@
 				)
 			)
 		)
-		(property "Dist_PN" "C138066"
+		(property "Dist_PN" "C114765"
 			(at 236.22 43.18 0)
 			(hide yes)
 			(show_name no)
@@ -13495,123 +13495,6 @@
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/668eabf5-e267-5970-84d5-0d65f171b9e0"
 					(reference "SH1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Custom:BMI-S-202-C")
-		(at 355.60 152.4 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board no)
-		(in_pos_files no)
-		(dnp no)
-		(uuid "da2a2b06-757c-440d-8283-076d92529c40")
-		(property "Reference" "SH2"
-			(at 355.60 147.32 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "BMI-S-202-C"
-			(at 355.60 149.098 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 355.60 152.4 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" "http://cdn.lairdtech.com/home/brandworld/files/Board%20Level%20Shields%20Catalog%20Download.pdf"
-			(at 355.60 152.4 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Snap-on cover for the SH1 frame (BMI-S-202-F); not on the board, fitted by hand after the patch pin is soldered and the front end tuned"
-			(at 355.60 152.4 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "BMI-S-202-C"
-			(at 355.60 152.4 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Laird (DuPont)"
-			(at 355.60 152.4 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Dist" "DigiKey"
-			(at 355.60 152.4 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Dist_PN" ""
-			(at 355.60 152.4 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/668eabf5-e267-5970-84d5-0d65f171b9e0"
-					(reference "SH2")
 					(unit 1)
 				)
 			)
@@ -16916,6 +16799,123 @@
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/668eabf5-e267-5970-84d5-0d65f171b9e0"
 					(reference "C61")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Custom:BMI-S-202-C")
+		(at 355.6 152.4 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board no)
+		(in_pos_files no)
+		(dnp no)
+		(uuid "da2a2b06-757c-440d-8283-076d92529c40")
+		(property "Reference" "SH2"
+			(at 355.6 147.32 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "BMI-S-202-C"
+			(at 355.6 149.098 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 355.6 152.4 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" "http://cdn.lairdtech.com/home/brandworld/files/Board%20Level%20Shields%20Catalog%20Download.pdf"
+			(at 355.6 152.4 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Snap-on cover for the SH1 frame (BMI-S-202-F); not on the board, fitted by hand after the patch pin is soldered and the front end tuned"
+			(at 355.6 152.4 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "BMI-S-202-C"
+			(at 355.6 152.4 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Laird (DuPont)"
+			(at 355.6 152.4 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Dist" "DigiKey"
+			(at 355.6 152.4 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Dist_PN" ""
+			(at 355.6 152.4 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/668eabf5-e267-5970-84d5-0d65f171b9e0"
+					(reference "SH2")
 					(unit 1)
 				)
 			)

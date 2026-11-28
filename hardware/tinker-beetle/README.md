@@ -572,6 +572,25 @@ Three stale items were listed here; **all three are now resolved** (2026-09-03):
 with the local plot in `gerbers/tinker-beetle-v2.0.0/`. The title blocks now read `V3`, so the
 back silkscreen (`Beetle\n${REVISION}`) says V3 for the next order. The V1 text below is history.
 
+**2026-11-27: V3 drops four BOM lines** (91 part numbers to 87; still 281 parts). Only values and
+part numbers changed: every footprint, pad and net is the same, so the layout needed nothing.
+
+- `R61` 33.2 k to 49.9 k, `R62` 5.11 k to 49.9 k, `R63` 5.11 k to 100 k. Once PR1 and CP2 are both
+  above VREF (1.01-1.1 V), `U21` (TPS2121) just compares them, so only the two ratios matter:
+  CP2 = VBATT x 0.333 (was 0.249) and PR1 = VBUS x 0.667 (was 0.5). USB still gives way to the
+  battery below VBUS = 0.499 x VBATT (was 0.498), 4.19 V on a full 2S pack. The USB divider draws
+  33 uA instead of 0.49 mA. PR1 now reaches its 6 V absolute maximum at VBUS = 9.0 V instead of
+  12 V; the USB-C port is a 5 V sink that never asks for more.
+- `D7` and `D11` blue XL-1005UBC to green XL-1005UGC, an InGaN emerald die (3.0 V at 25 mA, the
+  blue is 3.3 V at 20 mA), so `D11` on the GPIO45 strap keeps a high forward voltage. All five
+  LEDs are green now.
+- `R25` 10 ohm to 22 ohm, the LNA feed: about 0.2 V across it at the LNAs' 9 mA, so `V_LNA` is
+  2.7-2.85 V on supercap hold-up. The AT2659S is rated 1.4-3.6 V and the ATR2652S 1.5-3.6 V.
+- `C63` 470 pF to 100 pF, the U12 input DC block, now on the `C64`/`C69`/`C70`/`C72` line. Both
+  caps are past self-resonance at 1575 MHz, where their reactances differ by under 1 ohm against
+  `L12`'s 74 ohm, inside its 2 % tolerance. This is the one point where the L1 path departs from
+  the AT2659S data sheet and from the PX100 carrier.
+
 **This board is `V1`.** The title block carries `(rev "V1")` and the back
 silkscreen renders `TR-Mini\n${REVISION}` from it, so the revision reaches the
 board from one place and cannot drift from the documentation.

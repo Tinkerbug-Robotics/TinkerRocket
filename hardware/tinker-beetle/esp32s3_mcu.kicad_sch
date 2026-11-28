@@ -3455,6 +3455,12 @@
 		(uuid "938007db-3931-4a5c-9785-7033866a1410")
 	)
 	(junction
+		(at 219.71 27.305)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "98f91086-4bd9-42b9-8673-2aee40a82942")
+	)
+	(junction
 		(at 262.89 40.64)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3533,32 +3539,16 @@
 		(uuid "e982335d-91d2-41d9-8ac2-92a6c6a4ea1e")
 	)
 	(no_connect
-		(at 161.925 86.36)
-		(uuid "e5a76e51-de91-4422-b2f1-5d0c2988bfa6")
-	)
-	(no_connect
-		(at 161.925 88.9)
-		(uuid "9ce04388-61da-4037-9c93-e0ae5ca50f57")
-	)
-	(no_connect
-		(at 212.725 53.34)
-		(uuid "40fb3cd3-f324-4006-af89-7d70815e55ae")
-	)
-	(no_connect
-		(at 212.725 55.88)
-		(uuid "a1cd4fc9-81e5-4ff6-8d1c-9252bebe18ed")
-	)
-	(no_connect
-		(at 212.725 60.96)
-		(uuid "d74cf747-e583-4ae0-b0a4-1089b14279a8")
-	)
-	(no_connect
-		(at 212.725 68.58)
-		(uuid "852385b5-a3bf-40d7-a72f-e029f2c6d585")
+		(at 212.725 83.82)
+		(uuid "0cce5d9a-3a11-426d-b5f6-6745304e36df")
 	)
 	(no_connect
 		(at 212.725 73.66)
 		(uuid "158996b2-e50a-478b-89fa-cb58d513ada7")
+	)
+	(no_connect
+		(at 109.22 34.29)
+		(uuid "1f5d0386-d4a6-4d4d-9d0a-d45190e0a114")
 	)
 	(no_connect
 		(at 212.725 76.2)
@@ -3569,20 +3559,8 @@
 		(uuid "3b208e7a-5d81-4030-b2f5-9a4218af5a09")
 	)
 	(no_connect
-		(at 212.725 83.82)
-		(uuid "0cce5d9a-3a11-426d-b5f6-6745304e36df")
-	)
-	(no_connect
-		(at 212.725 86.36)
-		(uuid "a627007d-9ebb-4799-9473-c5b12cca3116")
-	)
-	(no_connect
-		(at 212.725 116.84)
-		(uuid "83dbf3bf-f43b-4aea-be20-c5482d7ccba4")
-	)
-	(no_connect
-		(at 109.22 34.29)
-		(uuid "1f5d0386-d4a6-4d4d-9d0a-d45190e0a114")
+		(at 212.725 53.34)
+		(uuid "40fb3cd3-f324-4006-af89-7d70815e55ae")
 	)
 	(no_connect
 		(at 161.925 111.76)
@@ -3601,8 +3579,28 @@
 		(uuid "57357643-76d0-4895-bef5-094c4d12fc6b")
 	)
 	(no_connect
+		(at 212.725 116.84)
+		(uuid "83dbf3bf-f43b-4aea-be20-c5482d7ccba4")
+	)
+	(no_connect
+		(at 212.725 68.58)
+		(uuid "852385b5-a3bf-40d7-a72f-e029f2c6d585")
+	)
+	(no_connect
 		(at 161.925 106.68)
 		(uuid "9a5719aa-7bd0-440b-8968-3b07c20dc136")
+	)
+	(no_connect
+		(at 161.925 88.9)
+		(uuid "9ce04388-61da-4037-9c93-e0ae5ca50f57")
+	)
+	(no_connect
+		(at 212.725 55.88)
+		(uuid "a1cd4fc9-81e5-4ff6-8d1c-9252bebe18ed")
+	)
+	(no_connect
+		(at 212.725 86.36)
+		(uuid "a627007d-9ebb-4799-9473-c5b12cca3116")
 	)
 	(no_connect
 		(at 133.35 34.29)
@@ -3613,8 +3611,16 @@
 		(uuid "bf2202ce-2274-443b-be8a-a3be2bc17a31")
 	)
 	(no_connect
+		(at 212.725 60.96)
+		(uuid "d74cf747-e583-4ae0-b0a4-1089b14279a8")
+	)
+	(no_connect
 		(at 161.925 116.84)
 		(uuid "e241a3a7-2ee7-4e35-a188-eceaf6f23ce4")
+	)
+	(no_connect
+		(at 161.925 86.36)
+		(uuid "e5a76e51-de91-4422-b2f1-5d0c2988bfa6")
 	)
 	(no_connect
 		(at 161.925 101.6)
@@ -3792,22 +3798,6 @@
 	)
 	(wire
 		(pts
-			(xy 219.71 27.305) (xy 224.79 27.305)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "66d06f5f-32e6-4e88-8ba7-3f6bfe908108")
-	)
-	(junction
-		(at 219.71 27.305)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "98f91086-4bd9-42b9-8673-2aee40a82942")
-	)
-	(wire
-		(pts
 			(xy 154.94 35.56) (xy 154.94 36.83)
 		)
 		(stroke
@@ -3965,6 +3955,16 @@
 			(type default)
 		)
 		(uuid "666ec526-f630-4546-96ed-46a414026a20")
+	)
+	(wire
+		(pts
+			(xy 219.71 27.305) (xy 224.79 27.305)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "66d06f5f-32e6-4e88-8ba7-3f6bfe908108")
 	)
 	(wire
 		(pts
@@ -7804,6 +7804,109 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:C")
+		(at 219.71 31.115 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "68e81f4f-bddc-4a1b-a0bb-f5dca262ffc4")
+		(property "Reference" "C162"
+			(at 215.9 24.13 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "100 nF"
+			(at 215.9 25.908 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
+			(at 220.675 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 219.71 31.115 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "at U15 pin 29 (VDD_SPI)"
+			(at 219.71 31.115 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "MPN" "CL05B104KO5NNNC"
+			(at 219.71 31.115 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Mfr" "Samsung"
+			(at 219.71 31.115 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "159899a0-5729-49da-9ebe-b6577c9e3082")
+		)
+		(pin "2"
+			(uuid "dc5b5ef5-554d-436f-a969-4518dd8ed004")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/eab70588-b031-4461-adac-e038e88381cb"
+					(reference "C162")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:+3V3")
 		(at 232.41 45.085 0)
 		(unit 1)
@@ -9458,6 +9561,84 @@
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/eab70588-b031-4461-adac-e038e88381cb"
 					(reference "C20")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 219.71 34.925 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(uuid "a0ba57f8-74c7-4668-a49b-415aff2a44ed")
+		(property "Reference" "#PWR9162"
+			(at 219.71 41.275 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 221.615 38.735 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 219.71 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 219.71 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 219.71 34.925 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "2bda2bda-1fbe-4fbb-ab2a-e335f699c226")
+		)
+		(instances
+			(project "tinker-beetle"
+				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/eab70588-b031-4461-adac-e038e88381cb"
+					(reference "#PWR9162")
 					(unit 1)
 				)
 			)
@@ -11820,187 +12001,6 @@
 			(project "tinker-beetle"
 				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/eab70588-b031-4461-adac-e038e88381cb"
 					(reference "R140")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Device:C")
-		(at 219.71 31.115 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "68e81f4f-bddc-4a1b-a0bb-f5dca262ffc4")
-		(property "Reference" "C162"
-			(at 215.9 24.13 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "100 nF"
-			(at 215.9 25.908 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "Capacitor_SMD:C_0402_1005Metric"
-			(at 220.675 34.925 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 219.71 31.115 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "at U15 pin 29 (VDD_SPI)"
-			(at 219.71 31.115 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "MPN" "CL05B104KO5NNNC"
-			(at 219.71 31.115 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Mfr" "Samsung"
-			(at 219.71 31.115 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "159899a0-5729-49da-9ebe-b6577c9e3082")
-		)
-		(pin "2"
-			(uuid "dc5b5ef5-554d-436f-a969-4518dd8ed004")
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/eab70588-b031-4461-adac-e038e88381cb"
-					(reference "C162")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 219.71 34.925 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "a0ba57f8-74c7-4668-a49b-415aff2a44ed")
-		(property "Reference" "#PWR9162"
-			(at 219.71 41.275 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 221.615 38.735 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify right)
-			)
-		)
-		(property "Footprint" ""
-			(at 219.71 34.925 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 219.71 34.925 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 219.71 34.925 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "2bda2bda-1fbe-4fbb-ab2a-e335f699c226")
-		)
-		(instances
-			(project "tinker-beetle"
-				(path "/ae61c2c4-72e9-4776-93ae-2e716b9dc70f/eab70588-b031-4461-adac-e038e88381cb"
-					(reference "#PWR9162")
 					(unit 1)
 				)
 			)
