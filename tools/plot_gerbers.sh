@@ -6,7 +6,11 @@
 # this script only checks that it agrees with the git tag, and writes the full
 # descriptor into a README.txt beside the gerbers.
 #
-#   tools/plot_gerbers.sh <board> [--allow-dirty] [--outdir DIR]
+#   tools/plot_gerbers.sh <board> [--allow-dirty] [--outdir DIR] [--aux-origin]
+#
+# --aux-origin plots the gerbers and the drill file from the board's drill/place (aux) origin instead of KiCad's
+# page origin, so they share one frame with a placement (CPL) file exported from that origin, as a JLC
+# assembly order expects. Without it, the output is unchanged.
 #
 # <board> is a folder under hardware/: a product-line board (tinker-mantis) or a
 # retired one under hardware/legacy/ (legacy/base-station, or just base-station).
@@ -18,17 +22,18 @@ KICAD_CLI="${KICAD_CLI:-/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 board="${1:-}"; shift || true
-allow_dirty=0; outdir=""
+allow_dirty=0; outdir=""; aux_origin=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --allow-dirty) allow_dirty=1 ;;
     --outdir) outdir="$2"; shift ;;
+    --aux-origin) aux_origin=1 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac; shift
 done
 
 if [ -z "$board" ]; then
-  echo "usage: $(basename "$0") <board> [--allow-dirty] [--outdir DIR]" >&2
+  echo "usage: $(basename "$0") <board> [--allow-dirty] [--outdir DIR] [--aux-origin]" >&2
   echo "boards:" >&2
   for d in "$REPO"/hardware/*/ "$REPO"/hardware/legacy/*/; do
     d="${d%/}"; n="$(basename "$d")"
@@ -98,8 +103,15 @@ fi
 # ---- plot ------------------------------------------------------------------
 mkdir -p "$outdir"
 echo "plotting $board  rev=${rev:-<none>}  $describe"
-"$KICAD_CLI" pcb export gerbers --output "$outdir/" "$pcb" >/dev/null
-"$KICAD_CLI" pcb export drill   --output "$outdir/" "$pcb" >/dev/null
+origin="KiCad page origin"
+gerber_opts=(); drill_opts=()
+if [ "$aux_origin" -eq 1 ]; then
+  origin="board drill/place (aux) origin"
+  gerber_opts=(--use-drill-file-origin); drill_opts=(--drill-origin plot)
+fi
+# the ${a[@]+"${a[@]}"} form keeps an empty array legal under set -u in macOS's bash 3.2
+"$KICAD_CLI" pcb export gerbers ${gerber_opts[@]+"${gerber_opts[@]}"} --output "$outdir/" "$pcb" >/dev/null
+"$KICAD_CLI" pcb export drill   ${drill_opts[@]+"${drill_opts[@]}"} --output "$outdir/" "$pcb" >/dev/null
 
 # ---- provenance record -----------------------------------------------------
 cat > "$outdir/README.txt" <<EOF
@@ -109,6 +121,7 @@ Git tag             : $tag_ver
 Git describe        : $describe
 Commit              : $commit
 Plotted             : $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+Coordinates from    : $origin
 Tool                : $("$KICAD_CLI" --version 2>/dev/null | head -1)
 $( [ -n "$dirty" ] && echo "
 WARNING: plotted from a DIRTY working tree. These files do not correspond
