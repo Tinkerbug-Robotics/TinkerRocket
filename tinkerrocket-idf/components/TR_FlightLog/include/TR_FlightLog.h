@@ -262,11 +262,65 @@ public:
     // enforced here — it exists to stop the scan holding up a caller, and a
     // deferred scan holds up nobody.
     Status        runDeferredRecovery();
+
+    // #1717: the newest orphaned flight's tail, found without the scan.
+    //
+    // A flight cut off by a reboot is an ALLOCATED range that no index entry
+    // covers. runDeferredRecovery() indexes it, but it reads every page of the
+    // run, which is minutes for a long flight, and an out computer resuming a
+    // flight has to hand the flight computer its last snapshot within seconds.
+    // This finds the same flight's end from far fewer reads:
+    //   - page 0 of every orphaned block (each block holds one flight, and its
+    //     page 0 is written first), for the newest flight id and its last
+    //     block (a flight's range is contiguous and written in block order).
+    //     begin() with defer_recovery has just read those pages for
+    //     orphanNextIdAtBoot, so its answer is used while nothing has changed
+    //     since, and the sweep is not repeated;
+    //   - that block's pages from the top down, for its last valid page
+    //     (a block's pages program in order);
+    //   - then the last `window_pages` pages, oldest first, into `sink`.
+    // The flight must be newer than every stored flight: an orphan older than
+    // a flight logged after it is history, not a flight in progress.
+    //
+    // Read-only: nothing is indexed, freed or persisted, and runDeferredRecovery
+    // later indexes the same flight as before. Each page read is one burst
+    // under the object lock, as the scan's are. The active flight is skipped.
+    struct OrphanTail {
+        uint32_t flight_id   = 0;
+        uint32_t start_block = 0;   // the flight's lowest orphaned block
+        uint32_t last_seq    = 0;   // its last valid page's seq_number (its identity
+                                    // with the id and start block; not a page count)
+        uint32_t pages_read  = 0;   // NAND page reads this call made
+        // The window reached the sink up to and including the last page. When
+        // false the stream's final word is unknown (that page read back bad
+        // the second time), so the caller must not trust what it found.
+        bool     end_fed     = false;
+        // Pages of the flight inside the window that were not fed: a page
+        // that read back bad, or a block of the flight whose page 0 did. Its
+        // frames are lost, and one of them could have been the FC's LANDED
+        // clear, so a caller restoring a flight should require none (#846's
+        // indexed path likewise refuses on any read error).
+        uint32_t gaps        = 0;
+    };
+    // One page's payload, oldest first. `gap` is true when a page before it
+    // in the window could not be read (a bad CRC, a read error, a block not
+    // found), so a frame spanning that gap is broken.
+    using TailSink = void (*)(void* ctx, const uint8_t* payload, size_t len, bool gap);
+    // NotFound when there is no orphan newer than every stored flight; Ok with
+    // `out` filled otherwise. `sink` may be null to locate the flight only.
+    // The window takes four blocks at most: the last block's pages and three
+    // before it.
+    Status        newestOrphanTail(uint32_t window_pages, TailSink sink, void* ctx,
+                                   OrphanTail& out);
+
     const Config& config() const        { return cfg_; }
 #ifndef ESP_PLATFORM
     // Host tests only: does the calling thread hold the object lock? Lets a
     // test check, from inside the NAND backend, that a read is made under it.
     bool lockHeldByThisThreadForTest() const { return mutex_.heldByThisThread(); }
+    // Host tests only: make newestOrphanTail sweep the blocks itself, as it
+    // does once begin()'s sweep is out of date.
+    void forgetBootOrphanForTest() { forgetBootOrphan(); }
 #endif
     // #671: runtime geometry captured from the backend at begin(). Valid only
     // after begin(); before it these return the legacy figures. The flush
@@ -407,6 +461,19 @@ private:
     // never shares an id with one (0 when there are none).
     uint32_t orphanNextIdAtBoot();
     uint32_t orphan_next_id_ = 0;
+    // #1717: what orphanNextIdAtBoot's sweep found, for newestOrphanTail to
+    // use instead of reading every orphaned block's page 0 again. Valid until
+    // anything changes the blocks or the index (a flight prepared, finalized
+    // or deleted, an eviction, a bad block, the deferred scan).
+    struct BootOrphan {
+        bool     valid     = false;   // the sweep ran and nothing has changed since
+        bool     found     = false;   // it saw an orphan
+        uint32_t id        = 0;
+        uint32_t first_blk = 0;
+        uint32_t last_blk  = 0;
+    };
+    BootOrphan boot_orphan_;
+    void forgetBootOrphan() { boot_orphan_.valid = false; }
 };
 
 }  // namespace tr_flightlog

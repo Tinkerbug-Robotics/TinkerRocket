@@ -71,6 +71,7 @@ static inline std::string itos(int v)
 #include "cam_draw_policy.h"      // CENJARS 11-01: is the camera running, from its rail current
 #include <atomic>
 #include <esp_attr.h>             // RTC_NOINIT_ATTR
+#include <esp_rtc_time.h>         // #1717: esp_rtc_get_time_us, the RTC copy's age
 #include <esp_system.h>           // esp_reset_reason
 #include <esp_random.h>           // esp_random: transmit-slot phase on a release
 #include <esp_adc/adc_oneshot.h>  // #850: camera/servo IMON reads
@@ -88,6 +89,8 @@ static inline std::string itos(int v)
 #include "arm_consent_policy.h"       // #1168: when the OC gives its half of the Beetle's pyro arm
 #include "pyro_fault_trip_policy.h"   // #1553: drop that consent on a shorted e-match mid-pulse
 #include "snapshot_answer_policy.h"   // when the OC may answer the FC's snapshot ask with "no flight"
+#include "snapshot_rtc_copy.h"        // #1717: the snapshot cache's copy in RTC memory
+#include "snapshot_reseed_policy.h"   // #1717: the cut-off flight found before the deferred scan
 #include "snapshot_replay_filter.h"   // #383/#846: which of the FC's snapshots the OC keeps
 #include "lora_slot_follow_policy.h"  // three rockets: the base station's transmit grid (uplink 82)
 #if TR_OC_ANTENNA_OFFSET
@@ -992,6 +995,17 @@ static_assert(kSnapFrameLen == flight_snapshot_answer::kFrameLen,
               "the FC reads exactly the frame the OC stages (#399)");
 static uint8_t  snapshot_cache[kSnapFrameLen];
 static bool     snapshot_cache_valid = false;
+// #1717: the cache's copy in RTC memory, which survives an OC panic, watchdog,
+// restart or brownout-detector reset, but not a power-on, and a sag deep
+// enough to reset the chip is one (snapshot_rtc_copy.h). Written by the I2S parser task with
+// every cache write, read by setup only, so it needs no lock. A boot resuming
+// a flight seeds the cache from it before the NAND log is looked at
+// (seedSnapshotCacheFromRtcCopy); every other boot retires it.
+RTC_NOINIT_ATTR static SnapshotRtcCopy::Copy<kSnapFrameLen> snapshot_rtc;
+static bool     snapshot_rtc_seeded = false;   // this boot seeded the cache from it
+// What the copy said on this boot. Over: intact on a boot resuming a flight,
+// but not servable, so the flight is over and no older store may serve one.
+static SnapshotRtcCopy::Verdict snapshot_rtc_verdict = SnapshotRtcCopy::Verdict::NotResuming;
 // True once this boot's NAND re-seed has run, or the V7/V8 MRAM slot is
 // readable: from then on, "nothing servable" means no flight even on a
 // recovery boot (snapshot_answer_policy.h). Set in initLoggingSubsystem().
@@ -1273,6 +1287,10 @@ static bool     snapshot_served = false;
 static bool     snapshot_seed_pending_mark = false;
 static uint32_t snapshot_seed_id = 0;
 static uint32_t snapshot_seed_bytes = 0;
+// #1717: the same for the cut-off flight found before the deferred scan
+// (snapshot_reseed_policy.h): its identity, marked once the FC is served.
+static bool     orphan_seed_pending_mark = false;
+static SnapshotReseed::OrphanId orphan_seed_id;
 // Serve-TTL: a snapshot older than the FC's MAX_FLIGHT_TIME is definitionally
 // unrestorable — the flight would have timed out to LANDED — so serving it
 // could only ever re-arm a grounded rocket (an FC WDT reset on the bench
@@ -1306,6 +1324,51 @@ static bool snapshotServable(const uint8_t* frame, uint32_t age_ms)
     if (snap.magic != FlightSnapshotData::MAGIC) return false;
     if (snap.rocket_state != (uint8_t)INFLIGHT) return false;   // a clear
     return snap.flight_elapsed_ms < kSnapshotServeTtlMs;
+}
+
+// #1717: on a boot that is resuming a flight (#825 rail restore, #1176 token),
+// seed the RAM cache from its RTC copy (snapshot_rtc_copy.h): the newest frame
+// the OC held before it reset, the pyro-start frame of #1760 included. Called
+// once from setup, after the rail decision and before the parser task runs or
+// the NAND log is looked at. Every other boot retires the copy, as the other
+// stores are retired, so after setup it is either in the cache or gone; the
+// parser task stores it afresh with each new frame.
+static void seedSnapshotCacheFromRtcCopy()
+{
+    const bool recovery_context = boot_rail_restored || boot_token_restore;
+    uint32_t   age_ms = 0;
+    const bool aged = SnapshotRtcCopy::ageMs(snapshot_rtc, esp_rtc_get_time_us(), age_ms);
+    const bool servable = aged && snapshotServable(snapshot_rtc.frame, age_ms);
+    snapshot_rtc_verdict = SnapshotRtcCopy::verdict(recovery_context, aged, age_ms,
+                                                    kSnapshotServeTtlMs, servable);
+    if (snapshot_rtc_verdict == SnapshotRtcCopy::Verdict::Seed)
+    {
+        portENTER_CRITICAL(&snapshot_cache_mux);
+        memcpy(snapshot_cache, snapshot_rtc.frame, kSnapFrameLen);
+        snapshot_cache_valid = true;
+        // the cache's serve TTL runs from when the frame was stored, not now
+        snapshot_cache_ms = millis() - age_ms;
+        portEXIT_CRITICAL(&snapshot_cache_mux);
+        snapshot_rtc_seeded = true;
+        ESP_LOGW("OC", "#1717: snapshot cache seeded from its RTC copy (%lu ms old) — "
+                       "in-flight reboot recovery armed for the FC's ask",
+                 (unsigned long)age_ms);
+        return;
+    }
+    if (snapshot_rtc_verdict == SnapshotRtcCopy::Verdict::Over)
+    {
+        // The newest frame this OC held says the flight is over: the FC's
+        // LANDED clear, or an in-flight frame past the serve TTL. The NAND
+        // stores are older, so they decline too (snapshot_reseed_policy.h).
+        ESP_LOGW("OC", "#1717: RTC snapshot copy (%lu ms old) is not a servable in-flight "
+                       "frame — the flight is over; no older store will be served",
+                 (unsigned long)age_ms);
+    }
+    else if (aged)
+    {
+        ESP_LOGI("OC", "#1717: RTC snapshot copy retired (this boot is not resuming a flight)");
+    }
+    SnapshotRtcCopy::retire(snapshot_rtc);
 }
 
 // The rocket state a snapshot wire frame carries.
@@ -6377,6 +6440,11 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
                     snapshot_cache_valid = true;
                     snapshot_cache_ms = now_cache;
                     portEXIT_CRITICAL(&snapshot_cache_mux);
+                    // #1717: and its RTC copy, for a reset of the OC itself.
+                    // This frame included: the one the FC sends as a pyro
+                    // channel starts (#1760), so a restore from it treats
+                    // that channel as spent.
+                    SnapshotRtcCopy::store(snapshot_rtc, frame, esp_rtc_get_time_us());
                 }
                 // Save the full ~224 B wire frame (SOF + type + len + payload + CRC)
                 // so the recovery path can hand the bytes straight back to FC.
@@ -6450,15 +6518,19 @@ static void processFrame(const uint8_t* frame, size_t frame_len,
             // running for a while there WOULD be pages to scan. A young flight
             // is the only one with no pages.
             //
-            // The residual: if the tail scan fails for an unrelated reason (a
-            // recovery entry the brownout scanner did not synthesise, an index
-            // that did not load) on a flight that is genuinely old, this serves
-            // a frame that restarts the flight clock. The consequences are
-            // bounded and fail toward inaction rather than toward firing — the
-            // restored frame carries no apogee, so neither trigger mode can
-            // evaluate, and RecoveryArmGate still requires live evidence before
-            // anything may arm. A late deployment is possible; a spurious one
-            // is not.
+            // The residual: if neither the RTC copy nor the NAND tail produced
+            // a frame on a flight that is genuinely old (a power-on reset, and
+            // a tail that could not be read or an index that did not load),
+            // this serves a frame that restarts the flight clock with no
+            // burnout, no apogee and every pyro channel unfired.
+            // RecoveryArmGate still requires live evidence before anything may
+            // arm, and the FC latches burnout from this boot's evidence of
+            // being past thrust (#1776), so the apogee call and the main come
+            // late. A charge that fired before the reset reads as unfired and
+            // fires again once apogee is called (#1717): harmless into a
+            // burned-open e-match, but a shorted one can reset the computers
+            // again. #1717's RTC copy and NAND tail are what make this branch
+            // the rare one.
             memcpy(snap_frame, boot_token.snap, kSnapFrameLen);
             have = true;
             ESP_LOGW("OC", "[RECOVERY] serving the snapshot carried in the "
@@ -10523,6 +10595,10 @@ static bool initLoggingSubsystem()
         // so prepareFlight/extend/bad-block saves never hit internal flash and can't
         // trigger the NVS-compaction cache-disable that stalled core 1.
         flightlog_backend = tr_flightlog::TR_NandBackend_esp(&logger);
+        // #1717: the deferred scan's task starts after the snapshot re-seed
+        // below, which reads the cut-off flight's pages and must see it
+        // un-indexed throughout.
+        bool start_recovery_task = false;
         {
             tr_flightlog::TR_FlightLog::Config fl_cfg{};
             // #671: geometry is runtime — logger.begin() resolved the chip from
@@ -10590,33 +10666,14 @@ static bool initLoggingSubsystem()
                          flightlog.index().size(),
                          flightlog.bitmap().countInState(tr_flightlog::BLOCK_BAD));
 
-                // One-shot, lowest useful priority, on the core that is not
-                // running the flight-critical loop. It takes the flight-log
-                // lock only in short bursts (never across the page reads), so
-                // writeFrame and the download path are not stalled behind it,
-                // and it exits as soon as the scan is done. Allocation is safe
-                // meanwhile without any gate: an orphaned run is ALLOCATED and
-                // findContiguousFree only hands out FREE blocks. A flight armed
-                // meanwhile (an OC reboot in flight re-arms one) is left alone:
-                // the scan skips the active flight's range, reads each page
-                // under the flight log's lock, and the flight gets an id above
-                // every orphan's. (The #846 snapshot re-seed below still runs
-                // before the scan has indexed anything: #1717.)
-                if (flightlog.recoveryDeferred())
-                {
-                    xTaskCreatePinnedToCore(
-                        [](void*) {
-                            ESP_LOGI("FLIGHTLOG", "deferred recovery: starting "
-                                     "(the board is already usable)");
-                            const auto rst = flightlog.runDeferredRecovery();
-                            if (rst != tr_flightlog::Status::Ok) {
-                                ESP_LOGE("FLIGHTLOG", "deferred recovery failed: %d",
-                                         (int)rst);
-                            }
-                            vTaskDelete(nullptr);
-                        },
-                        "fl_recovery", 4096, nullptr, 1, nullptr, 0);
-                }
+                // The deferred scan's task starts after the snapshot re-seed
+                // (#1717), which finds the cut-off flight's tail itself and
+                // must see it un-indexed. A flight armed while the scan runs
+                // (an OC reboot in flight re-arms one) is left alone: the scan
+                // skips the active flight's range, reads each page under the
+                // flight log's lock, and the flight gets an id above every
+                // orphan's.
+                start_recovery_task = flightlog.recoveryDeferred();
             }
             else
             {
@@ -10718,8 +10775,10 @@ static bool initLoggingSubsystem()
         // #846: re-seed the RAM snapshot cache from the NAND log stream — the
         // OC-also-reset half of in-flight reboot recovery on no-MRAM boards. The
         // snapshot frames rode the flight log (every received frame is enqueued
-        // byte-exact), and the brownout scanner inside flightlog.begin() has
-        // already recovered the un-finalized flight as flight_recovered_<id>.bin.
+        // byte-exact). Since #1307 the scan that recovers the un-finalized
+        // flight as flight_recovered_<id>.bin runs later, on its own task, so
+        // the cut-off flight is found here without it (#1717, below); the
+        // flight_recovered_* path serves one an earlier boot's scan indexed.
         //
         // The staleness defense is an NVS once-marker (id + final_bytes, since
         // ids are reused after deletes), and it is load-bearing: without it a
@@ -10745,6 +10804,141 @@ static bool initLoggingSubsystem()
             // other direction (the operator's own power-off produces ESP_RST_SW and
             // was therefore misclassified as a recovery context -- #1157).
             const bool cold_boot = !boot_rail_restored && !boot_token_restore;
+            // Window buffer sized for the MAX per-page payload so one page can
+            // always fill it at any chip geometry. Shared by both paths below.
+            static uint8_t scan_buf[(4096 - 16) + kSnapFrameLen];
+            constexpr uint32_t kTailWindow = 64u * 1024u;
+
+            // #1717: the flight a reboot cut off, found WITHOUT the deferred
+            // scan (snapshot_reseed_policy.h). The scan indexes it as
+            // flight_recovered_<id>.bin, but only after reading every page of
+            // it, and since #1307 it runs later on its own task, so the #846
+            // path below never found the entry and the FC got the token's
+            // launch-edge frame or nothing. newestOrphanTail uses the page-0
+            // reads begin() has just made, then reads the last block from the
+            // top and the last 64 KB: about a hundred page reads (timed in the
+            // log below; this all runs before the I2C slave answers). The
+            // cache already holding a frame (the RTC copy's, or the live
+            // link's on a logger retry) means a newer one is in hand: the tail
+            // is not read, and the flight is marked once the FC is served. An
+            // RTC copy that says the flight is over declines it.
+            const bool newer_in_cache = snapshot_rtc_seeded || snapshot_cache_valid;
+            const bool rtc_says_over =
+                snapshot_rtc_verdict == SnapshotRtcCopy::Verdict::Over;
+            bool orphan_newest = false;
+            SnapshotReseed::OrphanId orphan_mark;
+            {
+                uint8_t last_f[kSnapFrameLen] = {};
+                uint8_t best_f[kSnapFrameLen] = {};
+                tr_flightlog::OrphanTailFrameScan scan;
+                scan.fs.frame_type  = SNAPSHOT_MSG;
+                scan.fs.payload_len = (uint8_t)sizeof(FlightSnapshotData);
+                scan.fs.last_out    = last_f;
+                scan.fs.best_out    = best_f;
+                scan.fs.order_off   = offsetof(FlightSnapshotData, flight_elapsed_ms);
+                scan.scratch        = scan_buf;
+                scan.scratch_len    = sizeof(scan_buf);
+                const bool want_tail = !cold_boot && !newer_in_cache && !rtc_says_over;
+                const uint32_t ppp = flightlog.payloadPerPage();
+                const uint32_t window_pages = (kTailWindow + ppp - 1u) / ppp;
+                tr_flightlog::TR_FlightLog::OrphanTail ot;
+                const uint32_t t0_ms = millis();
+                const auto ost = flightlog.newestOrphanTail(
+                    want_tail ? window_pages : 0u,
+                    want_tail ? &tr_flightlog::OrphanTailFrameScan::sink : nullptr,
+                    &scan, ot);
+                const uint32_t took_ms = millis() - t0_ms;
+                // Before the I2C slave answers the FC's ask: worth timing on
+                // every boot, found or not.
+                ESP_LOGI("FLIGHTLOG", "#1717: cut-off flight search: %s, %lu page reads, "
+                         "%lu ms, %lu unread in the window",
+                         ost == tr_flightlog::Status::Ok ? "found" : "none",
+                         (unsigned long)ot.pages_read, (unsigned long)took_ms,
+                         (unsigned long)ot.gaps);
+                if (ost == tr_flightlog::Status::Ok)
+                {
+                    orphan_newest = true;
+                    const SnapshotReseed::OrphanId found{ot.flight_id, ot.start_block, ot.last_seq};
+                    Preferences rp;
+                    if (!rp.begin("snaprec", false))
+                    {
+                        ESP_LOGW("FLIGHTLOG", "#1717: snaprec NVS unavailable — not "
+                                 "re-seeding from cut-off flight %lu (cannot track "
+                                 "consumption)", (unsigned long)ot.flight_id);
+                    }
+                    else
+                    {
+                        orphan_mark.flight_id   = rp.getUInt("or_id", SnapshotReseed::kUnset);
+                        orphan_mark.start_block = rp.getUInt("or_blk", SnapshotReseed::kUnset);
+                        orphan_mark.last_seq    = rp.getUInt("or_seq", SnapshotReseed::kUnset);
+                        // The LAST frame decides whether the flight ended (a
+                        // LANDED clear means it did); the HIGHEST-elapsed one
+                        // is restored from (an I2S DMA replay can leave an
+                        // older snapshot after a newer one, #383). The tail
+                        // must have been read to its last page.
+                        // Any page of the window it could not read could have
+                        // held the LANDED clear: refuse, as the indexed path
+                        // refuses on a read error.
+                        const bool tail_servable = want_tail && scan.fs.found && ot.end_fed &&
+                                                   ot.gaps == 0 && !scan.overflow &&
+                                                   snapshotServable(last_f, 0) &&
+                                                   snapshotServable(best_f, 0);
+                        auto markNow = [&](const char* why) {
+                            rp.putUInt("or_id", found.flight_id);
+                            rp.putUInt("or_blk", found.start_block);
+                            rp.putUInt("or_seq", found.last_seq);
+                            ESP_LOGW("FLIGHTLOG", "#1717: cut-off flight %lu (block %lu, "
+                                     "page %lu) %s", (unsigned long)found.flight_id,
+                                     (unsigned long)found.start_block,
+                                     (unsigned long)found.last_seq, why);
+                        };
+                        switch (SnapshotReseed::orphanAction(
+                                    SnapshotReseed::sameOrphan(orphan_mark, found), cold_boot,
+                                    newer_in_cache, rtc_says_over, tail_servable))
+                        {
+                        case SnapshotReseed::OrphanAction::Nothing:
+                            break;
+                        case SnapshotReseed::OrphanAction::Retire:
+                            markNow("retired on a cold boot (not a recovery context)");
+                            break;
+                        case SnapshotReseed::OrphanAction::MarkOnServe:
+                            orphan_seed_pending_mark = true;
+                            orphan_seed_id = found;
+                            ESP_LOGW("FLIGHTLOG", "#1717: cut-off flight %lu not read: "
+                                     "the cache holds a newer frame", (unsigned long)found.flight_id);
+                            break;
+                        case SnapshotReseed::OrphanAction::Seed:
+                            portENTER_CRITICAL(&snapshot_cache_mux);
+                            memcpy(snapshot_cache, best_f, kSnapFrameLen);
+                            snapshot_cache_valid = true;
+                            snapshot_cache_ms = millis();
+                            portEXIT_CRITICAL(&snapshot_cache_mux);
+                            // and into the RTC copy, which setup retired, so a
+                            // second reset before a new frame still has it
+                            SnapshotRtcCopy::store(snapshot_rtc, best_f, esp_rtc_get_time_us());
+                            orphan_seed_pending_mark = true;
+                            orphan_seed_id = found;
+                            ESP_LOGW("FLIGHTLOG", "#1717: snapshot cache re-seeded from "
+                                     "cut-off flight %lu (%lu page reads, %lu ms) — "
+                                     "in-flight reboot recovery armed for the FC's ask",
+                                     (unsigned long)found.flight_id,
+                                     (unsigned long)ot.pages_read, (unsigned long)took_ms);
+                            break;
+                        case SnapshotReseed::OrphanAction::Decline:
+                            markNow(rtc_says_over
+                                        ? "declined: the RTC copy says the flight is over"
+                                        : "has no in-flight snapshot to serve in its tail, it "
+                                          "ended in LANDED, or a page of it was unreadable — "
+                                          "recovery not re-seeded");
+                            break;
+                        }
+                        rp.end();
+                    }
+                }
+            }
+
+            // #846: a flight the scan has already indexed, as before; only when
+            // no cut-off flight is newer than every stored one.
             uint32_t best_id = 0;
             int best_idx = -1;
             uint32_t newest_id = 0;
@@ -10759,7 +10953,7 @@ static bool initLoggingSubsystem()
                     best_idx = (int)i;
                 }
             }
-            if (best_idx >= 0 && best_id == newest_id)
+            if (!orphan_newest && best_idx >= 0 && best_id == newest_id)
             {
                 const auto& e = flightlog.index().at((size_t)best_idx);
                 Preferences rp;
@@ -10772,15 +10966,22 @@ static bool initLoggingSubsystem()
                 {
                     const uint32_t done_id = rp.getUInt("done_id", 0);
                     const uint32_t done_by = rp.getUInt("done_by", 0);
-                    const bool already = (done_id == e.flight_id &&
-                                          done_by == e.final_bytes);
-                    if (already)
+                    orphan_mark.flight_id   = rp.getUInt("or_id", SnapshotReseed::kUnset);
+                    orphan_mark.start_block = rp.getUInt("or_blk", SnapshotReseed::kUnset);
+                    orphan_mark.last_seq    = rp.getUInt("or_seq", SnapshotReseed::kUnset);
+                    // #1717: or the quick path above served, declined or
+                    // retired it before the scan indexed it.
+                    const bool already = SnapshotReseed::indexedAlreadyDone(
+                        done_id, done_by, orphan_mark, e.flight_id, e.final_bytes,
+                        e.start_block, e.n_blocks);
+                    switch (SnapshotReseed::indexedAction(already, cold_boot, newer_in_cache,
+                                                          rtc_says_over))
                     {
-                        // Nothing to do — this flight was seeded-and-served or
-                        // declined on an earlier boot.
-                    }
-                    else if (cold_boot)
-                    {
+                    case SnapshotReseed::IndexedAction::Nothing:
+                        // this flight was seeded-and-served or declined on an
+                        // earlier boot
+                        break;
+                    case SnapshotReseed::IndexedAction::Retire:
                         // Retire it without seeding: a cold start is not a
                         // recovery context, and leaving it unmarked would let a
                         // later fault reset seed from an arbitrarily old flight.
@@ -10788,13 +10989,25 @@ static bool initLoggingSubsystem()
                         rp.putUInt("done_by", e.final_bytes);
                         ESP_LOGI("FLIGHTLOG", "#846: %s retired on a cold boot "
                                  "(not a recovery context)", e.filename);
-                    }
-                    else
+                        break;
+                    case SnapshotReseed::IndexedAction::MarkOnServe:
+                        // #1717: the cache holds a newer frame (the RTC copy's,
+                        // or the live link's on a logger retry): leave the
+                        // cache alone and mark this flight once it is served.
+                        snapshot_seed_pending_mark = true;
+                        snapshot_seed_id = e.flight_id;
+                        snapshot_seed_bytes = e.final_bytes;
+                        break;
+                    case SnapshotReseed::IndexedAction::Decline:
+                        // #1717: the RTC copy, newer than this, says the flight
+                        // is over.
+                        rp.putUInt("done_id", e.flight_id);
+                        rp.putUInt("done_by", e.final_bytes);
+                        ESP_LOGW("FLIGHTLOG", "#846: %s declined: the RTC copy says the "
+                                 "flight is over", e.filename);
+                        break;
+                    case SnapshotReseed::IndexedAction::Scan:
                     {
-                        // Window buffer sized for the MAX per-page payload so one
-                        // readFlightPage can always fill it at any chip geometry.
-                        static uint8_t scan_buf[(4096 - 16) + kSnapFrameLen];
-                        constexpr uint32_t kTailWindow = 64u * 1024u;
                         uint8_t last_f[kSnapFrameLen] = {};
                         uint8_t best_f[kSnapFrameLen] = {};
                         const bool got = tr_flightlog::tailScanForFrame(
@@ -10815,6 +11028,7 @@ static bool initLoggingSubsystem()
                             snapshot_cache_valid = true;
                             snapshot_cache_ms = millis();
                             portEXIT_CRITICAL(&snapshot_cache_mux);
+                            SnapshotRtcCopy::store(snapshot_rtc, best_f, esp_rtc_get_time_us());   // #1717
                             snapshot_seed_pending_mark = true;
                             snapshot_seed_id = e.flight_id;
                             snapshot_seed_bytes = e.final_bytes;
@@ -10834,10 +11048,34 @@ static bool initLoggingSubsystem()
                                      "the tail of %s — recovery not re-seeded",
                                      e.filename);
                         }
+                        break;
+                    }
                     }
                     rp.end();
                 }
             }
+        }
+
+        // One-shot, lowest useful priority, on the core that is not running
+        // the flight-critical loop. It takes the flight-log lock only in short
+        // bursts (never across the page reads), so writeFrame and the download
+        // path are not stalled behind it, and it exits as soon as the scan is
+        // done. Allocation is safe meanwhile without any gate: an orphaned run
+        // is ALLOCATED and findContiguousFree only hands out FREE blocks.
+        if (start_recovery_task)
+        {
+            xTaskCreatePinnedToCore(
+                [](void*) {
+                    ESP_LOGI("FLIGHTLOG", "deferred recovery: starting "
+                             "(the board is already usable)");
+                    const auto rst = flightlog.runDeferredRecovery();
+                    if (rst != tr_flightlog::Status::Ok) {
+                        ESP_LOGE("FLIGHTLOG", "deferred recovery failed: %d",
+                                 (int)rst);
+                    }
+                    vTaskDelete(nullptr);
+                },
+                "fl_recovery", 4096, nullptr, 1, nullptr, 0);
         }
 
         // The stores this boot serves from have had their chance: the MRAM
@@ -11514,6 +11752,10 @@ static void setup_oc()
                        "#773 board revision reads as unprovisioned",
                  esp_err_to_name(nvs_err));
     }
+
+    // #1717: the RAM snapshot cache from its RTC copy, on a boot resuming a
+    // flight, now that the rail decision above is made; retired otherwise.
+    seedSnapshotCacheFromRtcCopy();
 
     // #773 step 2: what this BOARD says it is. Written once by BLE cmd 74 and
     // untouched by an OTA, so it survives a reflash — unlike the image's own
@@ -12306,6 +12548,23 @@ static void loop_oc()
             ESP_LOGI("FLIGHTLOG", "#846: re-seeded snapshot consumed by the FC "
                      "— flight %lu marked evaluated",
                      (unsigned long)snapshot_seed_id);
+        }
+    }
+    // #1717: the same for the cut-off flight found before the deferred scan,
+    // whether its tail or the newer RTC copy was the frame served.
+    if (orphan_seed_pending_mark && snapshot_served)
+    {
+        orphan_seed_pending_mark = false;
+        Preferences rp;
+        if (rp.begin("snaprec", false))
+        {
+            rp.putUInt("or_id", orphan_seed_id.flight_id);
+            rp.putUInt("or_blk", orphan_seed_id.start_block);
+            rp.putUInt("or_seq", orphan_seed_id.last_seq);
+            rp.end();
+            ESP_LOGI("FLIGHTLOG", "#1717: the FC was served — cut-off flight %lu "
+                     "marked evaluated",
+                     (unsigned long)orphan_seed_id.flight_id);
         }
     }
 

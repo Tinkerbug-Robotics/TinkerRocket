@@ -40,6 +40,65 @@
 
 namespace tr_flightlog {
 
+// The frame search both tail scans share. Every valid frame wholly inside
+// buf[0, avail) updates `last_out` (the stream's final word so far) and, when
+// the caller named an ordering field, `best_out`. Returns how far it got: the
+// remainder, under one frame, is the caller's carry into the next window.
+struct FrameTailSearch
+{
+    uint8_t  frame_type  = 0;
+    uint8_t  payload_len = 0;
+    uint8_t* last_out    = nullptr;
+    uint8_t* best_out    = nullptr;
+    uint16_t order_off   = 0;
+    bool     found       = false;
+    bool     have_best   = false;
+    uint32_t best_order  = 0;
+
+    size_t frameLen() const { return 4u + 1u + 1u + (size_t)payload_len + 2u; }
+
+    size_t search(const uint8_t* buf, size_t avail)
+    {
+        const size_t frame_len = frameLen();
+        size_t pos = 0;
+        while (pos + frame_len <= avail)
+        {
+            if (buf[pos] == 0xAA && buf[pos + 1] == 0x55 &&
+                buf[pos + 2] == 0xAA && buf[pos + 3] == 0x55 &&
+                buf[pos + 4] == frame_type &&
+                buf[pos + 5] == payload_len)
+            {
+                const uint16_t want =
+                    (uint16_t)((buf[pos + 6 + payload_len] << 8) |
+                               buf[pos + 7 + payload_len]);
+                const uint16_t got_crc =
+                    calcCRC16(buf + pos + 4, (int)(2u + payload_len));
+                if (want == got_crc)
+                {
+                    memcpy(last_out, buf + pos, frame_len);
+                    found = true;              // stream's final word so far
+                    if (best_out != nullptr &&
+                        (size_t)order_off + 4u <= (size_t)payload_len)
+                    {
+                        uint32_t ord = 0;
+                        memcpy(&ord, buf + pos + 6 + order_off, sizeof(ord));
+                        if (!have_best || ord > best_order)
+                        {
+                            best_order = ord;
+                            have_best  = true;
+                            memcpy(best_out, buf + pos, frame_len);
+                        }
+                    }
+                    pos += frame_len;
+                    continue;
+                }
+            }
+            ++pos;
+        }
+        return pos;
+    }
+};
+
 // Scan the last `window_bytes` of `filename` (logical length `final_bytes`)
 // for frames of `frame_type` whose payload is exactly `payload_len` bytes.
 // Returns true if any valid frame was found, copying the stream's LAST one
@@ -60,16 +119,19 @@ inline bool tailScanForFrame(TR_FlightLog& fl, const char* filename,
                              uint8_t* best_out = nullptr,
                              uint16_t order_off = 0)
 {
-    const size_t frame_len = 4u + 1u + 1u + (size_t)payload_len + 2u;
+    FrameTailSearch fs;
+    fs.frame_type  = frame_type;
+    fs.payload_len = payload_len;
+    fs.last_out    = last_out;
+    fs.best_out    = best_out;
+    fs.order_off   = order_off;
+    const size_t frame_len = fs.frameLen();
     if (scratch_len < frame_len) return false;
-    uint32_t best_order = 0;
-    bool     have_best  = false;
 
     const uint32_t scan_start =
         (final_bytes > window_bytes) ? final_bytes - window_bytes : 0u;
     uint32_t offset = scan_start;
     size_t   carry  = 0;
-    bool     found  = false;
 
     while (offset < final_bytes)
     {
@@ -91,46 +153,44 @@ inline bool tailScanForFrame(TR_FlightLog& fl, const char* filename,
         if (got == 0) break;   // clean end of stream
 
         const size_t avail = carry + got;
-        size_t pos = 0;
-        while (pos + frame_len <= avail)
-        {
-            if (scratch[pos] == 0xAA && scratch[pos + 1] == 0x55 &&
-                scratch[pos + 2] == 0xAA && scratch[pos + 3] == 0x55 &&
-                scratch[pos + 4] == frame_type &&
-                scratch[pos + 5] == payload_len)
-            {
-                const uint16_t want =
-                    (uint16_t)((scratch[pos + 6 + payload_len] << 8) |
-                               scratch[pos + 7 + payload_len]);
-                const uint16_t got_crc =
-                    calcCRC16(scratch + pos + 4, (int)(2u + payload_len));
-                if (want == got_crc)
-                {
-                    memcpy(last_out, scratch + pos, frame_len);
-                    found = true;              // stream's final word so far
-                    if (best_out != nullptr &&
-                        (size_t)order_off + 4u <= (size_t)payload_len)
-                    {
-                        uint32_t ord = 0;
-                        memcpy(&ord, scratch + pos + 6 + order_off, sizeof(ord));
-                        if (!have_best || ord > best_order)
-                        {
-                            best_order = ord;
-                            have_best  = true;
-                            memcpy(best_out, scratch + pos, frame_len);
-                        }
-                    }
-                    pos += frame_len;
-                    continue;
-                }
-            }
-            ++pos;
-        }
+        const size_t pos = fs.search(scratch, avail);
         carry = avail - pos;                   // < frame_len by construction
         if (carry > 0) memmove(scratch, scratch + pos, carry);
         offset += got;
     }
-    return found;
+    return fs.found;
 }
+
+// #1717: the same search over the pages TR_FlightLog::newestOrphanTail hands
+// its sink, oldest first, for a flight a reboot cut off before the deferred
+// scan has indexed it. Pass `OrphanTailFrameScan::sink` and the object as the
+// context. A gap (a page that could not be read) drops the carry, since a
+// frame spanning it is broken. `scratch` must hold one page payload plus one
+// frame, as tailScanForFrame's does; `overflow` says it did not.
+struct OrphanTailFrameScan
+{
+    FrameTailSearch fs;
+    uint8_t* scratch     = nullptr;
+    size_t   scratch_len = 0;
+    size_t   carry       = 0;
+    bool     overflow    = false;
+
+    static void sink(void* ctx, const uint8_t* payload, size_t len, bool gap)
+    {
+        OrphanTailFrameScan& s = *static_cast<OrphanTailFrameScan*>(ctx);
+        if (gap) s.carry = 0;
+        if (s.carry + len > s.scratch_len)
+        {
+            s.overflow = true;
+            s.carry    = 0;
+            return;
+        }
+        memcpy(s.scratch + s.carry, payload, len);
+        const size_t avail = s.carry + len;
+        const size_t pos   = s.fs.search(s.scratch, avail);
+        s.carry = avail - pos;
+        if (s.carry > 0) memmove(s.scratch, s.scratch + pos, s.carry);
+    }
+};
 
 }  // namespace tr_flightlog
