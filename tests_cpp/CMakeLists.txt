@@ -1378,6 +1378,37 @@ target_include_directories(test_snapshot_tail_scan PRIVATE
 target_link_libraries(test_snapshot_tail_scan GTest::gtest_main)
 gtest_discover_tests(test_snapshot_tail_scan)
 
+# ---------- test_orphan_tail (#1717) ----------
+# The OC's quick way to the last snapshot of a flight a reboot cut off, before
+# the deferred scan has indexed it: real TR_FlightLog over the fake NAND at
+# both page geometries, checked against the scan-then-tail-scan answer.
+add_executable(test_orphan_tail
+    test_orphan_tail.cpp
+    fakes/fake_nand_backend.cpp
+    ${LIB_DIR}/TR_FlightLog/TR_FlightLog.cpp
+    ${LIB_DIR}/TR_FlightLog/BlockStateBitmap.cpp
+    ${LIB_DIR}/TR_FlightLog/FlightIndex.cpp
+    ${LIB_DIR}/TR_FlightLog/TR_NandBackend_esp.cpp
+    ${LIB_DIR}/TR_FlightLog/NvsBitmapStore.cpp
+    ${LIB_DIR}/CRC/CRC.cpp
+    ${LIB_DIR}/CRC/CRC8.cpp
+    ${LIB_DIR}/CRC/CRC12.cpp
+    ${LIB_DIR}/CRC/CRC16.cpp
+    ${LIB_DIR}/CRC/CRC32.cpp
+    ${LIB_DIR}/CRC/CRC64.cpp
+    ${LIB_DIR}/CRC/CrcFastReverse.cpp
+    ${LIB_DIR}/CRC/FastCRC32.cpp
+)
+target_include_directories(test_orphan_tail PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${SHIM_DIR}
+    ${LIB_DIR}/TR_FlightLog/include
+    ${LIB_DIR}/TR_LogToFlash
+    ${LIB_DIR}/CRC
+)
+target_link_libraries(test_orphan_tail GTest::gtest_main)
+gtest_discover_tests(test_orphan_tail)
+
 # ---------- test_flight_snapshot_answer ----------
 # The OC's answer to the FC's boot-time GET_FLIGHT_SNAPSHOT: how the FC reads
 # it (flight_snapshot_answer.h, shared) and when the OC may say "no flight"
@@ -1402,6 +1433,29 @@ target_include_directories(test_flight_snapshot_answer PRIVATE
 )
 target_link_libraries(test_flight_snapshot_answer GTest::gtest_main)
 gtest_discover_tests(test_flight_snapshot_answer)
+
+# ---------- test_snapshot_reseed (#1717) ----------
+# The OC's boot re-seed after a reset of its own: the RTC copy of its snapshot
+# cache (snapshot_rtc_copy.h) and what it does with a flight a reboot cut off,
+# found on NAND before the deferred scan indexed it (snapshot_reseed_policy.h).
+add_executable(test_snapshot_reseed
+    test_snapshot_reseed.cpp
+    ${LIB_DIR}/CRC/CRC.cpp
+    ${LIB_DIR}/CRC/CRC8.cpp
+    ${LIB_DIR}/CRC/CRC12.cpp
+    ${LIB_DIR}/CRC/CRC16.cpp
+    ${LIB_DIR}/CRC/CRC32.cpp
+    ${LIB_DIR}/CRC/CRC64.cpp
+    ${LIB_DIR}/CRC/CrcFastReverse.cpp
+    ${LIB_DIR}/CRC/FastCRC32.cpp
+)
+target_include_directories(test_snapshot_reseed PRIVATE
+    ${SHIM_DIR}
+    ${LIB_DIR}/CRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tinkerrocket-idf/projects/out_computer/main
+)
+target_link_libraries(test_snapshot_reseed GTest::gtest_main)
+gtest_discover_tests(test_snapshot_reseed)
 
 # ---------- test_snapshot_replay_filter (#383, #846) ----------
 # Which of the FC's 10 Hz SNAPSHOT_MSG frames the OC keeps: DMA replays are

@@ -216,6 +216,10 @@ Status TR_FlightLog::begin(TR_NandBackend& nand, const Config& cfg,
 Status TR_FlightLog::runDeferredRecovery() {
     if (!initialized_)       return Status::NotInitialized;
     if (!recovery_deferred_) return Status::Ok;   // nothing was deferred
+    {
+        FlightLogLockGuard guard(mutex_);
+        forgetBootOrphan();   // #1717: the scan indexes and frees blocks
+    }
 
     // Budget OFF on purpose. The 90 s ceiling exists so the scan cannot hold
     // up the caller that is waiting on it; here nobody is waiting, and letting
@@ -233,6 +237,167 @@ Status TR_FlightLog::runDeferredRecovery() {
                 "(#1127); one already logging continues", (int)st);
     }
     return st;
+}
+
+Status TR_FlightLog::newestOrphanTail(uint32_t window_pages, TailSink sink, void* ctx,
+                                      OrphanTail& out) {
+    out = OrphanTail{};
+    if (!initialized_) return Status::NotInitialized;
+
+    uint8_t* const page = page_buf_;
+    uint32_t reads = 0;
+    auto is_active = [&](uint32_t block) {
+        return flight_active_ && block >= active_start_block_ &&
+               block < active_start_block_ + active_n_blocks_;
+    };
+    // One page, one burst under the object lock, as the scan reads: true with
+    // its header when it is a valid flight-log page (magic and CRC). With
+    // `orphan_only`, blocks that are not orphaned are skipped unread.
+    auto readHeader = [&](uint32_t block, uint32_t p, PageHeader& hdr, bool orphan_only) {
+        FlightLogLockGuard guard(mutex_);
+        if (orphan_only && (bitmap_.get(block) != BLOCK_ALLOCATED ||
+                            blockInIndexLocked(block) || is_active(block))) {
+            return false;
+        }
+        ++reads;
+        if (!nand_->readPage(block, p, page)) return false;
+        std::memcpy(&hdr, page, sizeof(hdr));
+        return hdr.magic == FPAG_MAGIC && hdr.crc32 == page_crc(page, g_page_);
+    };
+
+    // The newest stored flight: an orphan at or below it is history.
+    bool     any_stored    = false;
+    uint32_t newest_stored = 0;
+    {
+        FlightLogLockGuard guard(mutex_);
+        for (size_t i = 0; i < index_.size(); ++i) {
+            any_stored = true;
+            if (index_.at(i).flight_id > newest_stored) newest_stored = index_.at(i).flight_id;
+        }
+    }
+
+    // Page 0 of every orphaned block: the newest flight id, and its lowest and
+    // highest blocks. A flight's range is contiguous and written in block
+    // order, so its highest block with a written page 0 is its last. begin()'s
+    // sweep has the answer while nothing has changed since.
+    bool     have      = false;
+    uint32_t id        = 0;
+    uint32_t first_blk = 0;
+    uint32_t last_blk  = 0;
+    bool     swept     = false;
+    {
+        FlightLogLockGuard guard(mutex_);
+        if (boot_orphan_.valid) {
+            swept     = true;
+            have      = boot_orphan_.found;
+            id        = boot_orphan_.id;
+            first_blk = boot_orphan_.first_blk;
+            last_blk  = boot_orphan_.last_blk;
+        }
+    }
+    for (uint32_t b = cfg_.flight_region_start; !swept && b < cfg_.flight_region_end; ++b) {
+        PageHeader hdr;
+        if (!readHeader(b, 0, hdr, /*orphan_only=*/true)) continue;
+        if (!have || hdr.flight_id > id) {
+            have      = true;
+            id        = hdr.flight_id;
+            first_blk = b;
+            last_blk  = b;
+        } else if (hdr.flight_id == id) {
+            last_blk = b;   // b only grows
+        }
+    }
+    out.pages_read = reads;
+    if (!have || (any_stored && id <= newest_stored)) return Status::NotFound;
+
+    // The last block's last valid page, from the top. A block's pages program
+    // in order, so the first valid one from the top is the flight's end; a
+    // torn page above it (a cut mid-program) fails its CRC and is passed over.
+    // (Not by seq_number: a page that failed to program is retried in the next
+    // block with the header it was built with, so seq_number can jump within
+    // a block. Only page order is sure.)
+    int32_t  last_p   = -1;
+    uint32_t last_seq = 0;
+    for (int32_t p = static_cast<int32_t>(g_ppb_) - 1; p >= 0; --p) {
+        PageHeader hdr;
+        if (!readHeader(last_blk, static_cast<uint32_t>(p), hdr, /*orphan_only=*/false)) continue;
+        if (hdr.flight_id == id) {
+            last_p   = p;
+            last_seq = hdr.seq_number;
+            break;
+        }
+    }
+    out.pages_read = reads;
+    if (last_p < 0) return Status::NotFound;   // its page 0 read valid a moment ago
+
+    out.flight_id   = id;
+    out.start_block = first_blk;
+    out.last_seq    = last_seq;
+    if (sink == nullptr || window_pages == 0) return Status::Ok;
+
+    // The flight's blocks that hold the last `window_pages` pages, newest
+    // first: walk down from the last block to its first, four blocks at most,
+    // so a previous flight's blank prealloc below it is never read. A bad
+    // block between two of them is not orphaned and is passed over (its pages
+    // were moved on when it failed); a block of another flight, which cannot
+    // sit inside the range, would end it.
+    uint32_t blks[4];
+    size_t   n = 0;
+    blks[n++] = last_blk;
+    uint32_t have_pages = static_cast<uint32_t>(last_p) + 1u;
+    for (uint32_t b = last_blk; b > first_blk && n < 4 && have_pages < window_pages;) {
+        --b;
+        bool orphan = false;
+        {
+            FlightLogLockGuard guard(mutex_);
+            orphan = bitmap_.get(b) == BLOCK_ALLOCATED && !blockInIndexLocked(b) && !is_active(b);
+        }
+        if (!orphan) continue;   // a bad block: its pages were moved on when it failed
+        PageHeader hdr;
+        if (!readHeader(b, 0, hdr, /*orphan_only=*/false)) {
+            // A block of the flight whose page 0 reads back bad: its pages
+            // cannot be placed, so they are lost to the window.
+            out.gaps += g_ppb_;
+            have_pages += g_ppb_;
+            continue;
+        }
+        if (hdr.flight_id != id) break;
+        blks[n++] = b;
+        have_pages += g_ppb_;
+    }
+    // Where the window starts, in the oldest block taken.
+    uint32_t start_page = 0;
+    if (have_pages > window_pages) start_page = have_pages - window_pages;
+
+    // Oldest first into the sink, under the lock with the page in page_buf_:
+    // the sink must not call back into this object.
+    bool gap = false;
+    for (size_t k = n; k-- > 0;) {
+        const uint32_t blk   = blks[k];
+        const uint32_t first = (k == n - 1) ? start_page : 0u;
+        const uint32_t last  = (k == 0) ? static_cast<uint32_t>(last_p) : g_ppb_ - 1u;
+        for (uint32_t p = first; p <= last; ++p) {
+            FlightLogLockGuard guard(mutex_);
+            ++reads;
+            bool ok = nand_->readPage(blk, p, page);
+            if (ok) {
+                PageHeader hdr;
+                std::memcpy(&hdr, page, sizeof(hdr));
+                ok = hdr.magic == FPAG_MAGIC && hdr.crc32 == page_crc(page, g_page_) &&
+                     hdr.flight_id == id;
+            }
+            if (!ok) {
+                gap = true;
+                ++out.gaps;
+                continue;
+            }
+            sink(ctx, page + sizeof(PageHeader), payloadPerPage(), gap);
+            gap = false;
+            if (k == 0 && p == static_cast<uint32_t>(last_p)) out.end_fed = true;
+        }
+    }
+    out.pages_read = reads;
+    return Status::Ok;
 }
 
 bool TR_FlightLog::blockInIndexLocked(uint32_t block) const {
@@ -257,6 +422,7 @@ uint32_t TR_FlightLog::orphanNextIdAtBoot() {
     // else runs, so page_buf_ is free.
     uint32_t next = 0;
     uint8_t* const page = page_buf_;
+    BootOrphan bo;   // #1717: the newest orphan, as newestOrphanTail sweeps for it
     for (uint32_t b = cfg_.flight_region_start; b < cfg_.flight_region_end; ++b) {
         if (bitmap_.get(b) != BLOCK_ALLOCATED || blockInIndexLocked(b)) continue;
         if (!nand_->readPage(b, 0, page)) continue;
@@ -264,7 +430,17 @@ uint32_t TR_FlightLog::orphanNextIdAtBoot() {
         std::memcpy(&hdr, page, sizeof(hdr));
         if (hdr.magic != FPAG_MAGIC || hdr.crc32 != page_crc(page, g_page_)) continue;
         if (hdr.flight_id >= next) next = hdr.flight_id + 1;
+        if (!bo.found || hdr.flight_id > bo.id) {
+            bo.found = true;
+            bo.id = hdr.flight_id;
+            bo.first_blk = b;
+            bo.last_blk = b;
+        } else if (hdr.flight_id == bo.id) {
+            bo.last_blk = b;   // b only grows
+        }
     }
+    boot_orphan_ = bo;
+    boot_orphan_.valid = true;   // valid when it found none, too
     return next;
 }
 
@@ -568,6 +744,7 @@ Status TR_FlightLog::scanForBrownoutRecovery(bool enforce_budget) {
 Status TR_FlightLog::markBlockBad(uint32_t block) {
     FlightLogLockGuard guard(mutex_);
     if (!initialized_) return Status::NotInitialized;
+    forgetBootOrphan();   // #1717
     if (block >= g_blocks_) return Status::OutOfRange;
     bitmap_.set(block, BLOCK_BAD);
     if (nand_) nand_->markBlockBad(block);
@@ -617,6 +794,7 @@ bool TR_FlightLog::servicePendingPrepareFlight(uint32_t& id_out, Status& status_
 }
 
 bool TR_FlightLog::evictOldestLocked() {
+    forgetBootOrphan();   // #1717
     // Pick the smallest flight_id in the index — the oldest finalized flight.
     // Skip the active flight defensively: it is never appended to the index
     // until finalizeFlight, so in practice there is nothing to skip here, but
@@ -788,6 +966,7 @@ Status TR_FlightLog::prepareFlight(uint32_t& flight_id_out) {
 
 Status TR_FlightLog::prepareFlightLocked(uint32_t& flight_id_out) {
     if (!initialized_) return Status::NotInitialized;
+    forgetBootOrphan();   // #1717: blocks are allocated, an active flight begins
     if (recovery_failed_) return Status::RecoveryPending;   // #1127
     if (flight_active_)  return Status::Error;  // already flying — never evict an active flight
 
@@ -1039,6 +1218,7 @@ bool TR_FlightLog::retireBlockAndSalvage(uint32_t bad_block, uint32_t rel_block,
 Status TR_FlightLog::finalizeFlight(const char* filename, uint32_t final_bytes) {
     FlightLogLockGuard guard(mutex_);
     if (!initialized_)    return Status::NotInitialized;
+    forgetBootOrphan();   // #1717
     if (!flight_active_)  return Status::Error;
     if (filename == nullptr) return Status::OutOfRange;
 
@@ -1195,6 +1375,7 @@ Status TR_FlightLog::deleteFlight(const char* filename) {
 
 Status TR_FlightLog::deleteFlightLocked(const char* filename) {
     if (!initialized_)       return Status::NotInitialized;
+    forgetBootOrphan();   // #1717
     if (filename == nullptr) return Status::OutOfRange;
 
     const FlightIndexEntry* entry = index_.findByFilename(filename);

@@ -259,6 +259,41 @@ and a sim whose flag a missed link error cleared in the last nine frames before 
 The OC's other readers of the flag (the stray-Stop gate, the blind-window check,
 telemetry) still act on one frame, and none of them changes consent or a deployment.
 
+**After a reset of the OC in flight, the FC's snapshot comes back from RTC memory or the
+cut-off flight's NAND tail (#1717).** A booting FC asks the OC for its flight snapshot
+(`GET_FLIGHT_SNAPSHOT`), and the OC serves its RAM cache: the FC's newest frame, which
+survives an FC-only reset. When the OC resets too, the cache is gone. A boot resuming a
+flight (the #825 rail restore or the #1176 token) seeds it again, before the I2C slave
+answers, from the first of these stores that has a frame:
+- **The RTC copy** (`snapshot_rtc_copy.h`). The parser task copies every cache write
+  into RTC memory, with a CRC and the RTC counter as its stamp. It survives a panic, a
+  watchdog, a restart and the OC's brownout-detector reset, but not a power-on, and a
+  sag deep enough to reset the chip counts as one. It is the newest frame the OC held,
+  normally including the one the FC sends as a pyro channel starts (#1760; the FC holds
+  the pulse until that frame has left its I2S ring). The FC then treats that channel as
+  spent instead of firing it again. Setup seeds from it, under the cache's serve TTL
+  measured by the RTC counter, and retires it on every other boot. Being the newest, it
+  has the last word: an intact copy that is not servable (the FC's `LANDED` clear, or
+  past the TTL) declines the NAND stores below too.
+- **The cut-off flight's tail on NAND** (`TR_FlightLog::newestOrphanTail`,
+  `snapshot_reseed_policy.h`). The deferred scan indexes that flight, but only after
+  reading every page of it, minutes for a long flight. So #846's re-seed never found it,
+  and the FC got the token's launch-edge frame or nothing. The quick path uses the
+  page-0 reads `begin()` has just made, reads the last block from the top and the last
+  64 KB, and seeds from the highest-elapsed snapshot there. It declines when the
+  stream's final word is the FC's `LANDED` clear, or when any page of the window could
+  not be read. A seed also goes into the RTC copy. The scan's task starts after it, and
+  the boot log times the search.
+- **A flight an earlier boot's scan indexed** (#846, unchanged), only when no cut-off
+  flight is newer.
+- **The flight token's launch-edge frame** (#1176), the last resort.
+
+An NVS once-marker records the last cut-off flight the OC served, declined or retired,
+by its id, first block and last page, so it can never answer a fault reset weeks later.
+One slot is enough: only the newest cut-off flight is ever served. The marker is written
+once the FC has been served, on a decline, and without seeding on a cold boot. The #846
+indexed path honors it too, by the id and the entry's block range.
+
 **A NAND that fails to mount at power-on is retried, on the ground only (#1228).**
 `initPeripherals()` brings the radio and the FC link up around a dead logger (#1132),
 so the storage row goes red instead of the whole downlink going dark — and the loop
