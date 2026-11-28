@@ -1,0 +1,58 @@
+# px100-test-board — fabrication and assembly notes (DRAFT)
+
+**Draft, 2026-10-29.** The board is routed (DRC clean); the stencil apertures and the order checklist come with the
+owner's review. The rest carries over from the PX100 carrier's notes
+([`../gnss-px100-18mm-hv/FABRICATION-NOTES.md`](../gnss-px100-18mm-hv/FABRICATION-NOTES.md)). Stencil thickness, the
+area-ratio floor and the paste-coverage convention are repo-wide, in
+[`hardware/SOLDER-PASTE-CONVENTION.md`](../SOLDER-PASTE-CONVENTION.md).
+
+```
+TINKERROCKET PX100 TEST BOARD - FABRICATION AND ASSEMBLY NOTES (DRAFT)
+BOARD OUTLINE: 75.0 x 52.0 mm, 4 LAYER, 1.6 mm NOMINAL, FOUR M3 HOLES.
+
+1. STACKUP: JLCPCB JLC04161H-7628 (JLC'S DEFAULT 4-LAYER), 1.6 mm,
+   1 oz OUTER / 0.5 oz INNER. THE RF TRACE WIDTH IS DRAWN FOR IT.
+   LAYERS: L1 PARTS, RF AND SIGNALS; L2 SOLID GND; L3 SIGNALS AND
+   SUPPLIES; L4 SIGNALS. GND POURED ON ALL FOUR.
+   *** 1.6 mm: THE EDGE SMA (J1) IS RATED FOR 1.2-1.6 mm BOARDS. ***
+
+2. SURFACE FINISH: ENIG (0.4 mm PITCH PX100 AND ESP32-S3, 0.5 mm
+   CP2102N, 0.4 mm FSUSB63).
+
+3. VIAS: 623 VIAS, 608 AT 0.40 mm PAD / 0.30 mm DRILL AND 15 AT
+   0.60 / 0.30, EPOXY FILLED AND COPPER CAPPED (IPC-4761 TYPE VII), THEN
+   TENTED BOTH SIDES. ORDER THE PAID FILLED-AND-CAPPED OPTION; IT
+   APPLIES TO EVERY VIA. VIAS IN EXPOSED PADS: U1 5, U201 9, U301 5,
+   U104 6 (EACH CHIP'S ONLY GROUND).
+
+4. RF TRACES: 0.34 mm ON F.Cu, 0.20 mm GAP TO THE GROUND POUR, OVER
+   In1.Cu GROUND: 50 OHM ON JLC04161H-7628 (CHECK IN JLC'S CALCULATOR
+   BEFORE ORDERING). USB D+/D-: 0.2 mm PAIRS OVER In1.Cu, NOT
+   IMPEDANCE CONTROLLED (FULL-SPEED USB, 12 Mb/s).
+
+ASSEMBLY - REFLOW
+ONE PASS, TOP SIDE ONLY. THE SAW FILTERS SET THE CEILING: RUN PEAK
+240-245 C, 60-70 s ABOVE 220 C (CARRIER NOTES).
+
+ASSEMBLY - BY HAND, AFTER REFLOW
+- J1 (EDGE SMA), J201 (1x10) AND J301 (2x10) 2.54 mm HEADERS.
+- SH1 (LAIRD BMI-S-202-F FRAME): AFTER INSPECTION AND THE FIRST RF
+  CHECKS; SH2 (COVER) SNAPS ON.
+
+ASSEMBLY - NOT FITTED
+- R3 (0 OHM, ANTENNA BIAS FROM THE PX100'S ANT_BIAS): FIT INSTEAD OF
+  R2 TO USE THE PX100'S 45 mA-LIMITED BIAS OUTPUT.
+- R330 (0 OHM AT U1 PIN 36): FIT TO PROBE THE RESERVED PIN 36.
+- L13 (FL7 OUTPUT SHUNT, CARRIER V2 CHANGE).
+```
+
+## Sourcing
+
+The receiver, the shield, J1 and U104 reuse the gnss-px100-18mm-hv V1 parts already on hand: see that board's
+"Sourcing for the two V1 builds". The same notes apply:
+- **Y1:** fit the TG2016SMN 26 MHz MCGNNM (LCSC C7527385). Y1 pin 1 is open here, so the TG-5006CG-12H fits too.
+- **Substitutions:** the in-stock alternates listed there carry over.
+
+Everything else is in JLC's library; `gen/lcsc.json` has the codes. Thin stock on 2026-10-28:
+- FSUSB63UMX (C895430): 175;
+- RC0402FR-0747K5L (C137974): 3,749.
