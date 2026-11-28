@@ -134,7 +134,12 @@ def test_landed_relaxes_by_the_policy_whatever_servo_en_says():
     src = code(read())
     assert src.count(LANDED) == 1
     i = src.index(LANDED)
-    assert src[:i].rstrip().endswith("clearFlightSnapshot();"), "not under `if (servo_enabled)`"
+    # at the top of the one-shot LANDED actions, not under `if (servo_enabled)`
+    start = src.index("if (!landed_actions_done) {", src.index("case LANDED:"))
+    depth = 0
+    for c in src[start:i]:
+        depth += (c == "{") - (c == "}")
+    assert depth == 1, "not under `if (servo_enabled)`"
 
 
 STOW_RULE = "ServoPadPolicy::stowOnCancel(servo_enabled, servo_test_active, servo_replay_active);"

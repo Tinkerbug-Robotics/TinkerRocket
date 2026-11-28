@@ -294,6 +294,24 @@ One slot is enough: only the newest cut-off flight is ever served. The marker is
 once the FC has been served, on a decline, and without seeding on a cold boot. The #846
 indexed path honors it too, by the id and the entry's block range.
 
+**After landing, the FC's `LANDED` clear retires the cache, and END_FLIGHT backs it up
+(#1779).** Left alone, the cache would keep the flight's last in-flight frame and serve it
+to an FC that resets in the next 30 min, which would then restore `INFLIGHT` on the
+ground. So the FC's LANDED case sends a snapshot marked `LANDED` in its place. It goes
+into the I2S queue with no wait, and the queue can be full at LANDED entry (#141); before
+#1779 it was sent once. Now the FC tries it every 20 ms until it is queued, queues
+END_FLIGHT only behind it, and then sends it again every second for as long as it stays
+in LANDED (`landed_sends_policy.h`). Neither frame is acknowledged, so the repeat is what
+reaches an OC that missed both, from a receive overrun or a reset of its own across the
+landing. Until the next repeat, END_FLIGHT covers a clear lost on the link. The FC sends
+END_FLIGHT only from LANDED, so END_FLIGHT arriving while the cache still reads `INFLIGHT`
+marks that frame `LANDED` in place, in the cache and in the RTC copy
+(`snapshot_end_flight_policy.h`). The cache is then not servable, and the RTC copy keeps
+its last word. Only the state byte changes, so the marked frame no longer passes its
+CRCs; it is never sent, since every serve path needs an `INFLIGHT` frame. A clear that
+did arrive is left as it is. The V7/V8 MRAM slot is not marked; the next repeated clear
+writes it.
+
 **A NAND that fails to mount at power-on is retried, on the ground only (#1228).**
 `initPeripherals()` brings the radio and the FC link up around a dead logger (#1132),
 so the storage row goes red instead of the whole downlink going dark — and the loop

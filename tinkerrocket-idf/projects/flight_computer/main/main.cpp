@@ -72,6 +72,7 @@
 #include "pyro_restore_policy.h"    // #1760: a fire that had started is not repeated after a reset
 #include "restore_control_policy.h" // #1769: roll control after a restore waits for a trusted velocity
 #include "restore_clock_policy.h"   // #1777: the restored flight clock counts this boot from its start
+#include "landed_sends_policy.h"    // #1779: the LANDED clear, retried and repeated, and END_FLIGHT
 #include "mount_health_policy.h"    // #1755: the apps' "Mounting" dot: an AUTO frame confirmed on the pad lately
 #include "oc_cmd_dedup.h"        // #1112: dispatch only on the poll pass; bounded config retry
 #include "servo_pin_policy.h"    // servoPinsValid(): a Beetle int -1 pin is unmapped, not GPIO 0xFFFFFFFF
@@ -585,7 +586,9 @@ static OcCmdDedup oc_cmd_dedup;
 // observed THIS boot; one already being served when the FC came up belongs
 // to the previous session and is refused (see oc_cmd_session_gate.h).
 static OcCmdSessionGate oc_cmd_gate;
-static bool end_flight_sent = false;
+// #1779: the LANDED snapshot clear, retried until queued and then repeated, and
+// END_FLIGHT behind it (landed_sends_policy.h).
+static LandedSends::State landed_sends;
 static OutStatusQueryData out_status_query_data = {};
 
 // Active board→rocket mounting orientation.  Phase 1: static from
@@ -1347,17 +1350,19 @@ static bool saveFlightSnapshot(uint32_t now_ms)
                         sizeof(snap));
 }
 
-static void clearFlightSnapshot()
+// Whether the clear went into the I2S queue: LANDED retries it until it has
+// (#1779, landed_sends_policy.h).
+static bool clearFlightSnapshot()
 {
-    // Send a snapshot with rocket_state=LANDED so the OC's MRAM holds an
+    // Send a snapshot with rocket_state=LANDED so the OC's stores hold an
     // "invalid for recovery" state.  The recovery path on next boot only
     // restores when state==INFLIGHT, so a LANDED snapshot effectively
     // clears the recovery slot via the same I2S path as normal saves.
     FlightSnapshotData snap = {};
     buildFlightSnapshot(snap, time_ms(), /* override_state = */ (uint8_t)LANDED);
-    (void)enqueueI2STx(SNAPSHOT_MSG,
-                       reinterpret_cast<const uint8_t*>(&snap),
-                       sizeof(snap));
+    return enqueueI2STx(SNAPSHOT_MSG,
+                        reinterpret_cast<const uint8_t*>(&snap),
+                        sizeof(snap));
 }
 
 // ==========================================================================
@@ -9620,7 +9625,7 @@ static void setup_fc()
             if (fin_cut_restored)
                 ESP_LOGW(TAG, "[RECOVERY] past the eject: the fins' pulses and rail stay cut (#1768)");
             landed_actions_done = false;
-            end_flight_sent = false;
+            landed_sends = LandedSends::State{};
 
             // Restore EKF state.  The wire snapshot stores only the
             // diagonal of P (cross-correlations get rebuilt over the
@@ -9943,7 +9948,7 @@ static void resetFlightStateForSim(const char* edge)
     ground_pressure_found = false;
     GroundRefFreeze::reset(ground_ref_freeze);   // #1108
     out_ready = false;
-    end_flight_sent = false;
+    landed_sends = LandedSends::State{};
     landed_actions_done = false;
     landed_debounce = landing_transition::State{};   // #297, #1137
     kinematics.reset();
@@ -10273,6 +10278,7 @@ static void enterInflight(uint32_t now_ms, const char* from_state)
     max_alt_m = 0.0f;
     max_speed_mps = 0.0f;
     landed_actions_done = false;
+    landed_sends = LandedSends::State{};             // #1779: with the latch above
     landed_debounce = landing_transition::State{};   // #297, #1137
     // Clear apogee/landing flags so they start clean at launch.
     // launch_flag is intentionally preserved (it got us here).
@@ -16894,7 +16900,6 @@ static void loop_fc()
                                  (unsigned long)out_ready_last_ms,
                                  (unsigned long)answer_from_ms);
                     }
-                    clearFlightSnapshot();  // prevent stale recovery on next boot
                     // Relax post-flight to stop the idle holding current (the
                     // MOSFET-less interim of the pad relax); otherwise hold
                     // center as before.  #1768: never re-drive fins whose rail
@@ -16916,17 +16921,18 @@ static void loop_fc()
                     reboot_recovery_telem = false;
                     cameraStop(now_ms, (uint32_t)config::CAMERA_STOP_DELAY_MS);
                 }
-                // Retry END_FLIGHT until enqueue succeeds.  The one-shot
-                // cleanup above is latched, but i2s_tx_queue can transiently
-                // saturate around LANDED entry and a single failed enqueue
-                // would otherwise lose END_FLIGHT forever (#141).
-                if (!end_flight_sent)
-                {
-                    if (enqueueI2STx(END_FLIGHT, nullptr, 0))
-                    {
-                        end_flight_sent = true;
-                    }
-                }
+                // The LANDED snapshot clear, which keeps the OC from serving
+                // this flight to the next boot, then END_FLIGHT behind it. The
+                // one-shot cleanup above is latched, but i2s_tx_queue can
+                // transiently saturate around LANDED entry and a single failed
+                // enqueue would otherwise lose either forever (#141, #1779).
+                // The clear is retried every 20 ms until it is queued, and
+                // then sent again every second for as long as LANDED lasts
+                // (landed_sends_policy.h).
+                LandedSends::service(
+                    landed_sends, now_ms,
+                    [] { return clearFlightSnapshot(); },
+                    [] { return enqueueI2STx(END_FLIGHT, nullptr, 0); });
                 break;
             }
             case MAG_CALIBRATION:
